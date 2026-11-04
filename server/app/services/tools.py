@@ -1,7 +1,9 @@
-"""内置工具注册表。
+"""工具注册表。
 
 每个工具 = 名称/描述/OpenAI function schema/可调用体。
-生产扩展点：MCP Server 的工具经同步后以同样结构注册进来，上层无感。
+来源分三层：内置工具、知识库派生（kb_search，随挂载自动出现）、
+MCP 外部工具（ID 形如 mcp:{server_id}:{tool_name}，经 MCP 服务
+同步后以同样结构注册进来，上层无感）。
 """
 
 import ast
@@ -10,10 +12,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
+import app.services.mcp as mcp_service
 from app.services.rag import search
 from app.services.store import get_store
+
+MCP_TOOL_PREFIX = "mcp:"
 
 # ---------- 工具实现 ----------
 
@@ -88,6 +93,47 @@ def _make_kb_search(kb_ids: list[str]):
     )
 
 
+# ---------- MCP 工具适配 ----------
+
+_JSON_TYPE_MAP = {
+    "string": str,
+    "number": float,
+    "integer": int,
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+}
+
+
+def _schema_to_args_model(tool_name: str, schema: dict) -> type[BaseModel]:
+    """把 MCP 工具的 JSON Schema 转成 Pydantic 模型（LangChain 需要）。"""
+    props = (schema or {}).get("properties") or {}
+    required = set((schema or {}).get("required") or [])
+    fields: dict[str, Any] = {}
+    for key, spec in props.items():
+        spec = spec if isinstance(spec, dict) else {}
+        py_type = _JSON_TYPE_MAP.get(spec.get("type"), str)
+        desc = spec.get("description", "")
+        if key in required:
+            fields[key] = (py_type, Field(description=desc))
+        else:
+            fields[key] = (py_type | None, Field(default=None, description=desc))
+    safe_name = f"Mcp_{tool_name}_Args".replace("-", "_").replace(".", "_")
+    return create_model(safe_name, **fields)
+
+
+def _make_mcp_tool(server_id: str, server_name: str, tool: "mcp_service.McpToolDef") -> StructuredTool:
+    async def _call(**kwargs) -> str:
+        return await mcp_service.call_tool(server_id, tool.name, kwargs)
+
+    return StructuredTool.from_function(
+        coroutine=_call,
+        name=tool.name,
+        description=f"[MCP:{server_name}] {tool.description or tool.name}",
+        args_schema=_schema_to_args_model(tool.name, tool.schema_),
+    )
+
+
 # ---------- 注册表 ----------
 
 def _tool_def(name: str, description: str, schema: dict) -> dict:
@@ -95,7 +141,7 @@ def _tool_def(name: str, description: str, schema: dict) -> dict:
 
 
 def list_tools() -> list[dict]:
-    """返回可展示的工具清单。"""
+    """返回可展示的工具清单（内置 + 已同步的 MCP 工具）。"""
     tools = [
         {
             "id": "calculator",
@@ -118,6 +164,17 @@ def list_tools() -> list[dict]:
             "description": "在挂载的知识库中检索资料（选择了知识库时可用）",
         },
     ]
+    for server in mcp_service.list_servers():
+        if not server.enabled:
+            continue
+        for t in server.tools:
+            tools.append(
+                {
+                    "id": f"{MCP_TOOL_PREFIX}{server.id}:{t.name}",
+                    "name": t.name,
+                    "description": f"[MCP · {server.name}] {t.description or t.name}",
+                }
+            )
     return tools
 
 
@@ -128,15 +185,31 @@ def build_lc_tools(tool_ids: list[str], kb_ids: list[str]) -> list[StructuredToo
     由资源挂载决定，不是工具开关。
     """
     lc_tools: list[StructuredTool] = []
-    if "calculator" in tool_ids:
+    mcp_ids = [tid for tid in tool_ids if tid.startswith(MCP_TOOL_PREFIX)]
+    builtin_ids = [tid for tid in tool_ids if not tid.startswith(MCP_TOOL_PREFIX)]
+
+    if "calculator" in builtin_ids:
         lc_tools.append(StructuredTool.from_function(calculator, name="calculator",
                         description="计算四则运算表达式", args_schema=CalcArgs))
-    if "current_time" in tool_ids:
+    if "current_time" in builtin_ids:
         lc_tools.append(StructuredTool.from_function(current_time, name="current_time",
                         description="查询当前 UTC 时间"))
-    if "text_stats" in tool_ids:
+    if "text_stats" in builtin_ids:
         lc_tools.append(StructuredTool.from_function(text_stats, name="text_stats",
                         description="统计文本字符/词数", args_schema=TextStatsArgs))
     if kb_ids:
         lc_tools.append(_make_kb_search(kb_ids))
+
+    if mcp_ids:
+        wanted: dict[str, list[str]] = {}
+        for tid in mcp_ids:
+            _, server_id, tool_name = tid.split(":", 2)
+            wanted.setdefault(server_id, []).append(tool_name)
+        for server_id, tool_names in wanted.items():
+            server = mcp_service.get_server(server_id)
+            if server is None or not server.enabled:
+                continue
+            for tool in server.tools:
+                if tool.name in tool_names:
+                    lc_tools.append(_make_mcp_tool(server_id, server.name, tool))
     return lc_tools

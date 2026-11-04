@@ -6,6 +6,7 @@ import { KbPage } from "@/features/kb/KbPage";
 import { SkillsPage } from "@/features/skills/SkillsPage";
 import { ExpertsPage } from "@/features/experts/ExpertsPage";
 import { AgentsPage } from "@/features/agents/AgentsPage";
+import { McpPage } from "@/features/mcp/McpPage";
 
 export const router = createBrowserRouter([
   {
@@ -18,7 +19,7 @@ export const router = createBrowserRouter([
       { path: "experts", element: <ExpertsPage /> },
       { path: "skills", element: <SkillsPage /> },
       { path: "agents", element: <AgentsPage /> },
-      { path: "mcp", element: <PlaceholderPage title="MCP" desc="Server 注册、工具发现与审核" /> },
+      { path: "mcp", element: <McpPage /> },
       { path: "admin", element: <PlaceholderPage title="系统管理" desc="用户权限 · 模型接入 · 观测 · 审计" /> },
     ],
   },
