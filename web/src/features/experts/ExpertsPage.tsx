@@ -1,0 +1,322 @@
+import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+
+interface Expert {
+  id: string;
+  name: string;
+  description: string;
+  emoji: string;
+  persona: string;
+  skill_ids: string[];
+  kb_ids: string[];
+  tool_ids: string[];
+  temperature: number;
+  enabled: boolean;
+}
+
+interface Skill {
+  id: string;
+  name: string;
+  enabled: boolean;
+}
+
+interface KbInfo {
+  id: string;
+  name: string;
+  document_count: number;
+}
+
+const TOOL_OPTIONS = [
+  { id: "calculator", name: "计算器" },
+  { id: "current_time", name: "当前时间" },
+  { id: "text_stats", name: "文本统计" },
+];
+
+const EMPTY_FORM = {
+  name: "",
+  description: "",
+  emoji: "🤖",
+  persona: "",
+  skill_ids: [] as string[],
+  kb_ids: [] as string[],
+  tool_ids: [] as string[],
+  temperature: 0.7,
+};
+
+function MultiSelect({
+  label,
+  options,
+  selected,
+  onToggle,
+  emptyHint,
+}: {
+  label: string;
+  options: { id: string; name: string; hint?: string }[];
+  selected: string[];
+  onToggle: (id: string) => void;
+  emptyHint?: string;
+}) {
+  return (
+    <div>
+      <div className="mb-1.5 flex items-baseline gap-2">
+        <span className="text-xs text-tertiary">{label}</span>
+        {emptyHint && options.length === 0 && (
+          <span className="text-xs text-tertiary">{emptyHint}</span>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => onToggle(o.id)}
+            className={cn(
+              "rounded-md border px-2.5 py-1.5 text-xs transition-colors duration-150",
+              selected.includes(o.id)
+                ? "border-brand bg-brand-soft text-brand"
+                : "border-line text-secondary hover:border-line-strong",
+            )}
+          >
+            {o.name}
+            {o.hint && <span className="ml-1 text-tertiary">{o.hint}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function ExpertsPage() {
+  const [experts, setExperts] = useState<Expert[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [kbs, setKbs] = useState<KbInfo[]>([]);
+  const [editing, setEditing] = useState<string | "new" | null>(null);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const [e, s, k] = await Promise.all([
+      fetch("/api/experts").then((r) => r.json()),
+      fetch("/api/skills").then((r) => r.json()),
+      fetch("/api/kb").then((r) => r.json()),
+    ]);
+    setExperts(e);
+    setSkills(s);
+    setKbs(k);
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const startEdit = (e: Expert) => {
+    setEditing(e.id);
+    setForm({
+      name: e.name,
+      description: e.description,
+      emoji: e.emoji,
+      persona: e.persona,
+      skill_ids: [...e.skill_ids],
+      kb_ids: [...e.kb_ids],
+      tool_ids: [...e.tool_ids],
+      temperature: e.temperature,
+    });
+    setError(null);
+  };
+
+  const startNew = () => {
+    setEditing("new");
+    setForm(EMPTY_FORM);
+    setError(null);
+  };
+
+  const save = async () => {
+    if (!form.name.trim()) {
+      setError("名称不能为空");
+      return;
+    }
+    const url = editing === "new" ? "/api/experts" : `/api/experts/${editing}`;
+    const res = await fetch(url, {
+      method: editing === "new" ? "POST" : "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    if (!res.ok) {
+      setError(`保存失败：HTTP ${res.status}`);
+      return;
+    }
+    setEditing(null);
+    await load();
+  };
+
+  const remove = async (e: Expert) => {
+    if (!window.confirm(`删除专家「${e.name}」？`)) return;
+    await fetch(`/api/experts/${e.id}`, { method: "DELETE" });
+    await load();
+  };
+
+  const toggle = (key: "skill_ids" | "kb_ids" | "tool_ids", id: string) => {
+    setForm((f) => ({
+      ...f,
+      [key]: f[key].includes(id) ? f[key].filter((x) => x !== id) : [...f[key], id],
+    }));
+  };
+
+  const skillName = (id: string) => skills.find((s) => s.id === id)?.name ?? id;
+  const kbName = (id: string) => kbs.find((k) => k.id === id)?.name ?? id;
+
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto max-w-[860px] space-y-6 px-8 py-8">
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-lg font-medium">专家</h1>
+            <p className="mt-1 text-[13px] text-secondary">
+              专家 = 人设 + 挂载技能 + 挂载知识库 + 模型参数。对话页选择专家即生效。
+            </p>
+          </div>
+          <Button onClick={startNew}>新建专家</Button>
+        </div>
+
+        {/* 编辑表单 */}
+        {editing && (
+          <Card className="space-y-4 p-5">
+            <h3 className="text-[13px] font-medium">
+              {editing === "new" ? "新建专家" : "编辑专家"}
+            </h3>
+            <div className="grid grid-cols-[80px_1fr_1fr] gap-3">
+              <input
+                value={form.emoji}
+                onChange={(e) => setForm({ ...form, emoji: e.target.value })}
+                placeholder="图标"
+                className="rounded-lg border border-line bg-surface-1 px-3 py-2 text-center text-sm outline-none focus:border-brand"
+              />
+              <input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="专家名称"
+                className="rounded-lg border border-line bg-surface-1 px-3 py-2 text-sm outline-none focus:border-brand"
+              />
+              <input
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                placeholder="一句话简介"
+                className="rounded-lg border border-line bg-surface-1 px-3 py-2 text-sm outline-none focus:border-brand"
+              />
+            </div>
+            <textarea
+              value={form.persona}
+              onChange={(e) => setForm({ ...form, persona: e.target.value })}
+              placeholder="人设：这个专家是谁、以什么风格和方式回答（核心系统提示）"
+              rows={4}
+              className="w-full resize-y rounded-lg border border-line bg-surface-1 px-3 py-2 text-sm outline-none focus:border-brand"
+            />
+            <MultiSelect
+              label="挂载技能"
+              options={skills
+                .filter((s) => s.enabled)
+                .map((s) => ({ id: s.id, name: s.name }))}
+              selected={form.skill_ids}
+              onToggle={(id) => toggle("skill_ids", id)}
+            />
+            <MultiSelect
+              label="挂载知识库"
+              options={kbs.map((k) => ({
+                id: k.id,
+                name: k.name,
+                hint: `(${k.document_count})`,
+              }))}
+              selected={form.kb_ids}
+              onToggle={(id) => toggle("kb_ids", id)}
+              emptyHint="还没有知识库，可先到「知识库」页创建"
+            />
+            <MultiSelect
+              label="附加工具"
+              options={TOOL_OPTIONS}
+              selected={form.tool_ids}
+              onToggle={(id) => toggle("tool_ids", id)}
+            />
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-tertiary">温度</span>
+              <input
+                type="range"
+                min={0}
+                max={1.5}
+                step={0.1}
+                value={form.temperature}
+                onChange={(e) => setForm({ ...form, temperature: Number(e.target.value) })}
+                className="w-48 accent-[var(--brand)]"
+              />
+              <span className="text-xs text-secondary">{form.temperature.toFixed(1)}</span>
+            </div>
+            {error && <p className="text-xs text-danger">{error}</p>}
+            <div className="flex gap-2">
+              <Button onClick={() => void save()}>保存</Button>
+              <Button variant="ghost" onClick={() => setEditing(null)}>
+                取消
+              </Button>
+            </div>
+          </Card>
+        )}
+
+        {/* 专家列表 */}
+        <div className="grid grid-cols-2 gap-3">
+          {experts.map((e) => (
+            <Card key={e.id} className="p-4">
+              <div className="flex items-start justify-between">
+                <div className="flex items-start gap-3">
+                  <span className="text-2xl">{e.emoji}</span>
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-medium text-primary">{e.name}</div>
+                    <p className="mt-0.5 text-xs text-secondary">{e.description}</p>
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {e.skill_ids.map((id) => (
+                        <span
+                          key={id}
+                          className="rounded bg-brand-soft px-1.5 py-0.5 text-xs text-brand"
+                        >
+                          {skillName(id)}
+                        </span>
+                      ))}
+                      {e.kb_ids.map((id) => (
+                        <span
+                          key={id}
+                          className="rounded bg-surface-3 px-1.5 py-0.5 text-xs text-secondary"
+                        >
+                          📚 {kbName(id)}
+                        </span>
+                      ))}
+                      {e.tool_ids.map((t) => (
+                        <span
+                          key={t}
+                          className="rounded bg-surface-3 px-1.5 py-0.5 text-xs text-secondary"
+                        >
+                          🔧 {TOOL_OPTIONS.find((o) => o.id === t)?.name ?? t}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <Button variant="ghost" onClick={() => startEdit(e)}>
+                    编辑
+                  </Button>
+                  <Button variant="ghost" onClick={() => void remove(e)}>
+                    删除
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          ))}
+          {experts.length === 0 && (
+            <Card className="col-span-2 p-8 text-center text-sm text-tertiary">
+              还没有专家。点击右上角「新建专家」创建第一个。
+            </Card>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -31,7 +31,7 @@ export function useChatStream() {
   }, [isStreaming]);
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, expertId?: string | null) => {
       const trimmed = text.trim();
       if (!trimmed || isStreaming) return;
 
@@ -61,6 +61,7 @@ export function useChatStream() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             conversation_id: conversationId,
+            expert_id: expertId ?? undefined,
             messages: history.map((m) => ({ role: m.role, content: m.content })),
           }),
           signal: controller.signal,

@@ -7,7 +7,7 @@ for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY"
 
 from fastapi import FastAPI
 
-from app.api.routes import agent, chat, conversations, health, kb
+from app.api.routes import agent, chat, conversations, experts, health, kb, skills
 from app.core.config import get_settings
 
 
@@ -20,6 +20,8 @@ def create_app() -> FastAPI:
     app.include_router(kb.router, prefix="/api")
     app.include_router(agent.router, prefix="/api")
     app.include_router(conversations.router, prefix="/api")
+    app.include_router(skills.router, prefix="/api")
+    app.include_router(experts.router, prefix="/api")
     return app
 
 

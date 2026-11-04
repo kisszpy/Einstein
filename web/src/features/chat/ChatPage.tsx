@@ -5,6 +5,14 @@ import { useChatStream } from "./use-chat-stream";
 import { MessageBubble } from "./components/message-bubble";
 import { cn } from "@/lib/utils";
 
+interface ExpertItem {
+  id: string;
+  name: string;
+  emoji: string;
+  description: string;
+  kb_ids: string[];
+}
+
 interface ConversationItem {
   id: string;
   title: string;
@@ -17,6 +25,8 @@ export function ChatPage() {
     useChatStream();
   const [input, setInput] = useState("");
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [experts, setExperts] = useState<ExpertItem[]>([]);
+  const [expertId, setExpertId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const loadList = useCallback(async () => {
@@ -26,6 +36,9 @@ export function ChatPage() {
 
   useEffect(() => {
     void loadList();
+    void fetch("/api/experts")
+      .then((r) => r.json())
+      .then(setExperts);
   }, [loadList]);
 
   useEffect(() => {
@@ -41,8 +54,10 @@ export function ChatPage() {
     const text = input;
     if (!text.trim() || isStreaming) return;
     setInput("");
-    void send(text);
+    void send(text, expertId);
   };
+
+  const activeExpert = experts.find((e) => e.id === expertId);
 
   const removeConversation = async (id: string) => {
     await fetch(`/api/conversations/${id}`, { method: "DELETE" });
@@ -106,7 +121,7 @@ export function ChatPage() {
               <div className="flex h-full min-h-[60vh] flex-col items-center justify-center text-center">
                 <h1 className="text-xl font-medium">有什么可以帮你？</h1>
                 <p className="mt-2 text-[13px] text-secondary">
-                  直接提问即可。专家选择与知识库引用将在后续里程碑接入。
+                  直接提问，或在下方选择专家获得专业视角。回答将带知识库引用与思考过程。
                 </p>
               </div>
             ) : (
@@ -122,6 +137,42 @@ export function ChatPage() {
 
         {/* 输入区 */}
         <div className="mx-auto w-full max-w-[760px] shrink-0 px-6 pb-6">
+          {/* 专家选择行 */}
+          {experts.length > 0 && (
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => setExpertId(null)}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs transition-colors duration-150",
+                  expertId === null
+                    ? "border-brand bg-brand-soft text-brand"
+                    : "border-line text-secondary hover:border-line-strong",
+                )}
+              >
+                默认助手
+              </button>
+              {experts.map((e) => (
+                <button
+                  key={e.id}
+                  onClick={() => setExpertId(e.id)}
+                  title={e.description}
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-xs transition-colors duration-150",
+                    expertId === e.id
+                      ? "border-brand bg-brand-soft text-brand"
+                      : "border-line text-secondary hover:border-line-strong",
+                  )}
+                >
+                  {e.emoji} {e.name}
+                </button>
+              ))}
+              {activeExpert && activeExpert.kb_ids.length > 0 && (
+                <span className="text-xs text-tertiary">
+                  已挂载 {activeExpert.kb_ids.length} 个知识库
+                </span>
+              )}
+            </div>
+          )}
           <Card className="flex items-end gap-2 p-3">
             <textarea
               value={input}

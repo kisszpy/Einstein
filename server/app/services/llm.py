@@ -36,7 +36,9 @@ def _lc_to_openai_messages(messages: list[BaseMessage]) -> list[dict]:
     return out
 
 
-async def stream_chat(messages: list[BaseMessage]) -> AsyncIterator[tuple[str, str]]:
+async def stream_chat(
+    messages: list[BaseMessage], temperature: float = 0.7
+) -> AsyncIterator[tuple[str, str]]:
     """流式产出 (kind, text)：kind 为 "reasoning"（思考）或 "delta"（正文）。
 
     Qwen3 等思考模型把推理放在 reasoning_content，需要单独下发，
@@ -54,6 +56,7 @@ async def stream_chat(messages: list[BaseMessage]) -> AsyncIterator[tuple[str, s
             model=settings.llm_model,
             messages=_lc_to_openai_messages(messages),
             stream=True,
+            temperature=temperature,
         )
         async for chunk in stream:
             if not chunk.choices:

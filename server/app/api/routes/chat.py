@@ -7,9 +7,11 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
+from app.services.experts import get_expert_store
 from app.services.history import get_history_store
 from app.services.llm import stream_chat
 from app.services.rag import build_context_block, search
+from app.services.skills import get_skill_store
 from app.services.store import get_store
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -50,16 +52,60 @@ def _to_lc_messages(messages: list[ChatMessage], system_text: str) -> list:
     return lc
 
 
+def _compose_system(
+    expert_id: str | None, kb_hit: bool
+) -> tuple[str, float, list[str], list[str]]:
+    """合成系统提示，返回 (system, temperature, kb_ids, tool_ids)。
+
+    专家 = 人设 + 挂载技能的提示词叠加；未指定专家用默认提示。
+    """
+    temperature = 0.7
+    kb_ids: list[str] = []
+    tool_ids: list[str] = []
+    parts: list[str] = []
+
+    if expert_id:
+        expert = get_expert_store().get(expert_id)
+        if expert and expert.enabled:
+            temperature = expert.temperature
+            kb_ids = list(expert.kb_ids)
+            tool_ids = list(expert.tool_ids)
+            if expert.persona:
+                parts.append(expert.persona)
+            skill_store = get_skill_store()
+            for sid in expert.skill_ids:
+                skill = skill_store.get(sid)
+                if skill and skill.enabled and skill.system_prompt:
+                    parts.append(f"【{skill.name}】\n{skill.system_prompt}")
+
+    if not parts:
+        parts = ["你是一个乐于助人的中文问答助手，回答简洁准确。"]
+
+    if kb_hit:
+        parts.append(
+            "回答时优先依据提供的参考资料，引用到某条资料时在句末标注 [编号]。"
+            "若资料不足以回答，请明确说明。"
+        )
+    return "\n\n".join(parts), temperature, kb_ids, tool_ids
+
+
 async def _event_stream(req: ChatRequest) -> AsyncIterator[str]:
     conversation_id = req.conversation_id or uuid.uuid4().hex
 
+    expert_id = req.expert_id
+    req_kb_ids = req.kb_ids or []
+    system_text, temperature, expert_kb_ids, _tool_ids = _compose_system(
+        expert_id, kb_hit=bool(req_kb_ids)
+    )
+    # 显式传的 kb_ids 优先于专家挂载
+    effective_kb_ids = req_kb_ids or expert_kb_ids
+
     # RAG：挂了知识库就先检索，命中才注入上下文
     citations: list[dict] = []
-    system_text = SYSTEM_PLAIN
-    if req.kb_ids:
+    if effective_kb_ids:
         store = get_store()
         query = req.messages[-1].content
-        hits = await search(store, req.kb_ids, query, top_k=4)
+        hits = await search(store, effective_kb_ids, query, top_k=4)
         if hits:
             citations = [
                 {
@@ -71,7 +117,10 @@ async def _event_stream(req: ChatRequest) -> AsyncIterator[str]:
                 }
                 for i, h in enumerate(hits)
             ]
-            system_text = SYSTEM_WITH_KB.format(context=build_context_block(hits))
+            system_text = (
+                f"{system_text}\n\n=== 参考资料 ===\n{build_context_block(hits)}\n"
+                "=== 参考资料 end ==="
+            )
 
     yield _sse("meta", {"conversation_id": conversation_id})
     answer_parts: list[str] = []
@@ -79,7 +128,9 @@ async def _event_stream(req: ChatRequest) -> AsyncIterator[str]:
         if citations:
             yield _sse("citations", {"citations": citations})
 
-        async for kind, text in stream_chat(_to_lc_messages(req.messages, system_text)):
+        async for kind, text in stream_chat(
+            _to_lc_messages(req.messages, system_text), temperature=temperature
+        ):
             if kind == "reasoning":
                 yield _sse("reasoning", {"text": text})
             else:
