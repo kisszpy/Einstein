@@ -6,11 +6,13 @@ mock 用 hashing trick（词袋哈希到定长向量），相似文本有一定�
 
 import hashlib
 import math
+import time
 from collections.abc import Sequence
 
 import httpx
 
 from app.core.config import get_settings
+from app.services import metrics
 
 MOCK_DIM = 256
 
@@ -43,6 +45,7 @@ async def _remote_embed(texts: list[str]) -> list[list[float]] | None:
     """
     settings = get_settings()
     for attempt in range(2):
+        t0 = time.perf_counter()
         try:
             async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
                 resp = await client.post(
@@ -51,9 +54,22 @@ async def _remote_embed(texts: list[str]) -> list[list[float]] | None:
                 )
                 resp.raise_for_status()
                 data = resp.json()["data"]
+                usage = resp.json().get("usage") or {}
+                metrics.record_llm(
+                    kind="embedding",
+                    model=settings.embedding_model,
+                    duration_ms=(time.perf_counter() - t0) * 1000,
+                    prompt_tokens=usage.get("prompt_tokens"),
+                )
                 return [item["embedding"] for item in data]
         except Exception:  # noqa: BLE001 — 由 embed_texts 决定是否降级
             if attempt == 1:
+                metrics.record_llm(
+                    kind="embedding",
+                    model=settings.embedding_model,
+                    duration_ms=(time.perf_counter() - t0) * 1000,
+                    status="error",
+                )
                 return None
 
 

@@ -131,6 +131,8 @@ async def _event_stream(req: ChatRequest) -> AsyncIterator[str]:
         async for kind, text in stream_chat(
             _to_lc_messages(req.messages, system_text), temperature=temperature
         ):
+            if kind == "usage":
+                continue  # token 用量已在 llm 层落指标，不进对话流
             if kind == "reasoning":
                 yield _sse("reasoning", {"text": text})
             else:

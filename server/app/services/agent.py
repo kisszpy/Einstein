@@ -6,6 +6,7 @@
 """
 
 import json
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -14,6 +15,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.prebuilt import create_react_agent
 
 from app.core.config import get_settings
+from app.services import metrics
 from app.services.tools import build_lc_tools
 
 
@@ -59,7 +61,16 @@ async def run_agent(
     )
     final_text = ""
     tool_call_count = 0
+    t0 = time.perf_counter()
+    usage_total: dict[str, int] = {}
 
+    def _acc_usage(msg: Any) -> None:
+        token_usage = (getattr(msg, "response_metadata", None) or {}).get("token_usage")
+        if token_usage:
+            usage_total["prompt"] = usage_total.get("prompt", 0) + (token_usage.get("prompt_tokens") or 0)
+            usage_total["completion"] = usage_total.get("completion", 0) + (token_usage.get("completion_tokens") or 0)
+
+    status = "ok"
     try:
         async for update in agent.astream(
             {"messages": [("user", task)]},
@@ -71,6 +82,7 @@ async def run_agent(
                 for msg in messages:
                     tool_calls = getattr(msg, "tool_calls", None)
                     if node == "agent" and tool_calls:
+                        _acc_usage(msg)
                         for tc in tool_calls:
                             tool_call_count += 1
                             yield {
@@ -86,6 +98,7 @@ async def run_agent(
                             "content": _short(msg.content),
                         }
                     elif node == "agent" and getattr(msg, "content", None):
+                        _acc_usage(msg)
                         final_text = str(msg.content)
     except GraphRecursionError:
         # 达到步数上限：把手头已有的信息作为回答收尾，而不是报错中断
@@ -93,6 +106,18 @@ async def run_agent(
             final_text
             or f"（已执行 {tool_call_count} 次工具调用后达到步数上限，"
             "任务未能在预算内完成。建议把任务拆小或减少挂载的知识库后重试。）"
+        )
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        metrics.record_llm(
+            kind="agent",
+            model=get_settings().llm_model,
+            duration_ms=(time.perf_counter() - t0) * 1000,
+            prompt_tokens=usage_total.get("prompt"),
+            completion_tokens=usage_total.get("completion"),
+            status=status,
         )
 
     yield {"kind": "final", "text": final_text}

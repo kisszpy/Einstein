@@ -11,7 +11,10 @@ const NAV = [
   { to: "/mcp", label: "MCP" },
 ];
 
-const NAV_ADMIN = [{ to: "/admin", label: "系统管理" }];
+const NAV_ADMIN = [
+  { to: "/eval", label: "评测" },
+  { to: "/admin", label: "系统管理" },
+];
 
 function NavItem({ to, label }: { to: string; label: string }) {
   return (
@@ -48,7 +51,7 @@ export function AppLayout() {
             <NavItem key={item.to} {...item} />
           ))}
         </nav>
-        <div className="px-3 pb-4 text-xs text-tertiary">v0.1.0 · M0</div>
+        <div className="px-3 pb-4 text-xs text-tertiary">v0.1.0 · M4</div>
       </aside>
 
       {/* 主区域 */}
