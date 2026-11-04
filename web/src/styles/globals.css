@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------- 语义 token（运行时变量，亮暗两套） ---------- */
+:root {
+  --bg-page: #f7f7f5;          /* 页面底 */
+  --bg-surface-1: #ffffff;     /* 卡片 */
+  --bg-surface-2: #f1f0ed;     /* 侧栏/次级面板 */
+  --bg-surface-3: #e8e7e3;     /* 浮层内嵌块 */
+  --text-primary: #1f1f1d;
+  --text-secondary: #6f6e6a;
+  --text-tertiary: #a3a29d;
+  --line-subtle: rgba(0, 0, 0, 0.08);
+  --line-strong: rgba(0, 0, 0, 0.16);
+  --brand: #2f6bdc;
+  --brand-fg: #ffffff;
+  --brand-soft: rgba(47, 107, 220, 0.08);
+  --success: #2e8a4f;
+  --warning: #b97a12;
+  --danger: #c23b3b;
+}
+
+.dark {
+  --bg-page: #161719;
+  --bg-surface-1: #1e2023;
+  --bg-surface-2: #18191c;
+  --bg-surface-3: #26282c;
+  --text-primary: #e8e7e4;
+  --text-secondary: #9b9a96;
+  --text-tertiary: #6b6a67;
+  --line-subtle: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.18);
+  --brand: #5b8ae8;
+  --brand-fg: #10141c;
+  --brand-soft: rgba(91, 138, 232, 0.14);
+  --success: #55a877;
+  --warning: #d29a45;
+  --danger: #d95f5f;
+}
+
+/* ---------- 映射为 Tailwind 类 ---------- */
+@theme inline {
+  --color-page: var(--bg-page);
+  --color-surface-1: var(--bg-surface-1);
+  --color-surface-2: var(--bg-surface-2);
+  --color-surface-3: var(--bg-surface-3);
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-tertiary: var(--text-tertiary);
+  --color-line: var(--line-subtle);
+  --color-line-strong: var(--line-strong);
+  --color-brand: var(--brand);
+  --color-brand-fg: var(--brand-fg);
+  --color-brand-soft: var(--brand-soft);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --radius-card: 12px;
+  --shadow-card: 0 1px 3px rgb(0 0 0 / 0.05);
+  --shadow-float: 0 8px 24px rgb(0 0 0 / 0.12);
+}
+
+body {
+  @apply bg-page text-primary antialiased;
+  font-family:
+    "PingFang SC", "HarmonyOS Sans SC", "Segoe UI", "Microsoft YaHei",
+    system-ui, sans-serif;
+}

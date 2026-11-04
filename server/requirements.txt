@@ -1,0 +1,24 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.10
+pydantic-settings>=2.6
+
+# LangChain 体系
+langchain>=0.3
+langchain-core>=0.3
+langchain-milvus>=0.2
+langgraph>=0.2
+
+# 存储
+psycopg[binary]>=3.2        # PostgreSQL（SQLAlchemy 2.x 在 M0 后期引入）
+pymilvus>=2.5               # Milvus SDK（内含 milvus-lite）
+redis>=5.2
+
+# 模型接入（llama.cpp OpenAI 兼容端点 / 云端模型同接口）
+openai>=1.57
+
+# 工具
+python-multipart>=0.0.18    # 文件上传
+python-dotenv>=1.0
+pypdf>=6.0
+python-docx>=1.1
