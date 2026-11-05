@@ -6,8 +6,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.api.deps import current_workspace
-from app.services import apikeys, audit, workspaces
+from app.api.deps import allowed_workspaces, current_admin, current_user, current_workspace
+from app.services import apikeys, audit, users, workspaces
 from app.services.eval import list_sets
 from app.services.experts import get_expert_store
 from app.services.mcp import list_servers
@@ -46,7 +46,9 @@ def _usage_of(ws_id: str) -> dict:
 
 
 @router.get("/workspaces")
-async def list_workspaces() -> list[dict]:
+async def list_workspaces(user: users.User = Depends(current_user)) -> list[dict]:
+    """工作区列表按账号可见范围过滤：管理员看全部，成员只看归属。"""
+    visible = set(allowed_workspaces(user))
     return [
         {
             "id": w.id,
@@ -56,11 +58,14 @@ async def list_workspaces() -> list[dict]:
             "usage": _usage_of(w.id),
         }
         for w in workspaces.get_workspace_store().list()
+        if w.id in visible
     ]
 
 
 @router.post("/workspaces")
-async def create_workspace(req: WorkspaceCreate) -> dict:
+async def create_workspace(
+    req: WorkspaceCreate, admin: users.User = Depends(current_admin)
+) -> dict:
     if not req.name.strip():
         raise HTTPException(400, "工作区名称不能为空")
     store = workspaces.get_workspace_store()
@@ -71,7 +76,9 @@ async def create_workspace(req: WorkspaceCreate) -> dict:
 
 
 @router.patch("/workspaces/{ws_id}")
-async def patch_workspace(ws_id: str, req: WorkspacePatch) -> dict:
+async def patch_workspace(
+    ws_id: str, req: WorkspacePatch, admin: users.User = Depends(current_admin)
+) -> dict:
     store = workspaces.get_workspace_store()
     ws = store.rename(ws_id, req.name.strip(), req.description)
     if ws is None:
@@ -81,7 +88,9 @@ async def patch_workspace(ws_id: str, req: WorkspacePatch) -> dict:
 
 
 @router.delete("/workspaces/{ws_id}")
-async def delete_workspace(ws_id: str) -> dict:
+async def delete_workspace(
+    ws_id: str, admin: users.User = Depends(current_admin)
+) -> dict:
     """只允许删除空工作区，避免误删带走数据。"""
     usage = _usage_of(ws_id)
     if sum(usage.values()) > 0:
@@ -103,11 +112,15 @@ async def list_api_keys(ws: str = Depends(current_workspace)) -> list[dict]:
 
 @router.post("/apikeys")
 async def issue_api_key(
-    req: ApiKeyCreate, ws: str = Depends(current_workspace)
+    req: ApiKeyCreate,
+    ws: str = Depends(current_workspace),
+    user: users.User = Depends(current_user),
 ) -> dict:
     target = req.workspace_id or ws
     if workspaces.get_workspace_store().get(target) is None:
         raise HTTPException(404, "工作区不存在")
+    if not user.can_access(target):
+        raise HTTPException(403, "无权为该工作区签发密钥")
     store = apikeys.get_api_key_store()
     key, token = store.issue(req.name.strip() or "未命名密钥", target, req.scopes)
     store.save()

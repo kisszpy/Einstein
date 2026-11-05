@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { getWorkspace, setWorkspace, subscribeWorkspace } from "@/lib/workspace";
 
@@ -18,6 +19,8 @@ async function fetchWorkspaces(): Promise<Workspace[]> {
 
 export function WorkspaceSwitcher() {
   const qc = useQueryClient();
+  const { user } = useAuth();
+  const canCreate = user?.role === "owner" || user?.role === "admin";
   const [active, setActive] = useState(getWorkspace());
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -101,20 +104,28 @@ export function WorkspaceSwitcher() {
           </div>
 
           <div className="mt-2 flex gap-2 border-t border-line pt-2">
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && void create()}
-              placeholder="新建工作区…"
-              className="h-8 min-w-0 flex-1 rounded-lg border border-line bg-surface-2 px-2 text-[13px] outline-none focus:border-line-strong"
-            />
-            <button
-              disabled={busy || !name.trim()}
-              onClick={() => void create()}
-              className="h-8 shrink-0 rounded-lg bg-brand px-3 text-[13px] text-white transition-opacity duration-150 disabled:opacity-40"
-            >
-              创建
-            </button>
+            {canCreate ? (
+              <>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && void create()}
+                  placeholder="新建工作区…"
+                  className="h-8 min-w-0 flex-1 rounded-lg border border-line bg-surface-2 px-2 text-[13px] outline-none focus:border-line-strong"
+                />
+                <button
+                  disabled={busy || !name.trim()}
+                  onClick={() => void create()}
+                  className="h-8 shrink-0 rounded-lg bg-brand px-3 text-[13px] text-white transition-opacity duration-150 disabled:opacity-40"
+                >
+                  创建
+                </button>
+              </>
+            ) : (
+              <p className="px-2 py-1 text-[11.5px] text-tertiary">
+                工作区由管理员分配，如需新增请联系管理员。
+              </p>
+            )}
           </div>
         </div>
       )}

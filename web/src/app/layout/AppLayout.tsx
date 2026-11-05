@@ -1,6 +1,8 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { ThemeToggle } from "./ThemeToggle";
+import { UserMenu } from "./UserMenu";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -37,6 +39,11 @@ function NavItem({ to, label }: { to: string; label: string }) {
 }
 
 export function AppLayout() {
+  const { user } = useAuth();
+  const adminNav = user?.role === "owner" || user?.role === "admin"
+    ? NAV_ADMIN
+    : NAV_ADMIN.filter((item) => item.to !== "/admin");
+
   return (
     <div className="flex h-screen overflow-hidden">
       {/* 侧导航 */}
@@ -49,7 +56,7 @@ export function AppLayout() {
             <NavItem key={item.to} {...item} />
           ))}
           <div className="my-3 border-t border-line" />
-          {NAV_ADMIN.map((item) => (
+          {adminNav.map((item) => (
             <NavItem key={item.to} {...item} />
           ))}
         </nav>
@@ -60,7 +67,11 @@ export function AppLayout() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line px-6">
           <WorkspaceSwitcher />
-          <ThemeToggle />
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <span className="h-4 w-px bg-line-strong" />
+            <UserMenu />
+          </div>
         </header>
         <main className="min-h-0 flex-1 overflow-y-auto">
           <Outlet />

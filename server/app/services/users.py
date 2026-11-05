@@ -1,0 +1,214 @@
+"""控制台账号：用户、口令摘要、角色与工作区归属。
+
+口令用 PBKDF2-HMAC-SHA256（12 万轮 + 每用户随机盐）存摘要，不落明文；
+比对走 `hmac.compare_digest`，避免时序侧信道。首次启动若库为空，种一个
+`admin / admin123` 的所有者账号，登录后应立刻改口令。
+
+生产替换点：PostgreSQL `users` 表，口令迁移到 Argon2id，角色接入 RBAC 策略。
+"""
+
+import hashlib
+import hmac
+import json
+import secrets
+import threading
+import uuid
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+from app.services.workspaces import DEFAULT_ID
+
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+STORE_PATH = DATA_DIR / "users.json"
+
+ITERATIONS = 120_000
+ROLES = ("owner", "admin", "member")
+ROLE_LABEL = {"owner": "所有者", "admin": "管理员", "member": "成员"}
+
+SEED_USERNAME = "admin"
+SEED_PASSWORD = "admin123"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), bytes.fromhex(salt), ITERATIONS
+    )
+    return digest.hex(), salt
+
+
+def verify_password(password: str, password_hash: str, salt: str) -> bool:
+    if not password_hash or not salt:
+        return False
+    try:
+        candidate, _ = hash_password(password, salt)
+    except ValueError:  # 盐损坏
+        return False
+    return hmac.compare_digest(candidate, password_hash)
+
+
+@dataclass
+class User:
+    id: str
+    username: str
+    display_name: str
+    role: str = "member"
+    password_hash: str = ""
+    salt: str = ""
+    workspaces: list[str] = field(default_factory=lambda: [DEFAULT_ID])
+    created_at: str = ""
+    last_login_at: str | None = None
+    disabled: bool = False
+
+    def to_public(self) -> dict:
+        """对外视图：绝不带口令摘要与盐。"""
+        return {
+            "id": self.id,
+            "username": self.username,
+            "display_name": self.display_name,
+            "role": self.role,
+            "role_label": ROLE_LABEL.get(self.role, self.role),
+            "workspaces": self.workspaces,
+            "created_at": self.created_at,
+            "last_login_at": self.last_login_at,
+            "disabled": self.disabled,
+        }
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role in ("owner", "admin")
+
+    def can_access(self, workspace_id: str) -> bool:
+        """管理员跨工作区；成员只看归属列表。"""
+        return self.is_admin or workspace_id in self.workspaces
+
+
+class UserStore:
+    def __init__(self) -> None:
+        self.items: dict[str, User] = {}
+
+    # ---------- 查询 ----------
+
+    def list_all(self) -> list[User]:
+        order = {r: i for i, r in enumerate(ROLES)}
+        return sorted(
+            self.items.values(),
+            key=lambda u: (order.get(u.role, 9), u.created_at),
+        )
+
+    def get(self, user_id: str) -> User | None:
+        return self.items.get(user_id)
+
+    def by_username(self, username: str) -> User | None:
+        key = username.strip().lower()
+        for u in self.items.values():
+            if u.username.lower() == key:
+                return u
+        return None
+
+    def admins(self) -> list[User]:
+        return [u for u in self.items.values() if u.is_admin and not u.disabled]
+
+    # ---------- 写入 ----------
+
+    def create(
+        self,
+        username: str,
+        password: str,
+        display_name: str = "",
+        role: str = "member",
+        workspaces: list[str] | None = None,
+    ) -> User:
+        username = username.strip()
+        if not username:
+            raise ValueError("用户名不能为空")
+        if self.by_username(username) is not None:
+            raise ValueError("用户名已存在")
+        if len(password) < 6:
+            raise ValueError("口令至少 6 位")
+        if role not in ROLES:
+            raise ValueError(f"角色只能是 {ROLES}")
+        pw_hash, salt = hash_password(password)
+        user = User(
+            id=uuid.uuid4().hex[:12],
+            username=username,
+            display_name=display_name.strip() or username,
+            role=role,
+            password_hash=pw_hash,
+            salt=salt,
+            workspaces=[w for w in (workspaces or [DEFAULT_ID]) if w] or [DEFAULT_ID],
+            created_at=_now(),
+        )
+        self.items[user.id] = user
+        return user
+
+    def set_password(self, user: User, password: str) -> None:
+        if len(password) < 6:
+            raise ValueError("口令至少 6 位")
+        user.password_hash, user.salt = hash_password(password)
+
+    def update(self, user: User, **fields) -> User:
+        for key in ("display_name", "role", "workspaces", "disabled"):
+            if key in fields and fields[key] is not None:
+                if key == "role" and fields[key] not in ROLES:
+                    raise ValueError(f"角色只能是 {ROLES}")
+                setattr(user, key, fields[key])
+        return user
+
+    def delete(self, user_id: str) -> bool:
+        return self.items.pop(user_id, None) is not None
+
+    # ---------- 认证 ----------
+
+    def authenticate(self, username: str, password: str) -> User | None:
+        user = self.by_username(username)
+        if user is None or user.disabled:
+            return None
+        if not verify_password(password, user.password_hash, user.salt):
+            return None
+        user.last_login_at = _now()
+        return user
+
+    # ---------- 持久化 ----------
+
+    def save(self) -> None:
+        DATA_DIR.mkdir(exist_ok=True)
+        payload = {k: asdict(v) for k, v in self.items.items()}
+        STORE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @classmethod
+    def load(cls) -> "UserStore":
+        store = cls()
+        if STORE_PATH.exists():
+            try:
+                payload = json.loads(STORE_PATH.read_text(encoding="utf-8"))
+                store.items = {k: User(**v) for k, v in payload.items()}
+            except Exception:  # noqa: BLE001 — 损坏则重建
+                store.items = {}
+        if not store.items:
+            store.create(
+                SEED_USERNAME,
+                SEED_PASSWORD,
+                display_name="平台管理员",
+                role="owner",
+                workspaces=[DEFAULT_ID],
+            )
+            store.save()
+        return store
+
+
+_store: UserStore | None = None
+_lock = threading.Lock()
+
+
+def get_user_store() -> UserStore:
+    global _store
+    with _lock:
+        if _store is None:
+            _store = UserStore.load()
+        return _store

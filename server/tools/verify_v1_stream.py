@@ -6,6 +6,16 @@ import urllib.request
 BASE = "http://127.0.0.1:8000"
 op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
+# 先登录拿控制台令牌，再用它签发开放 API 密钥
+login = urllib.request.Request(
+    BASE + "/api/auth/login",
+    data=json.dumps({"username": "admin", "password": "admin123"}).encode(),
+    method="POST",
+)
+login.add_header("Content-Type", "application/json")
+with op.open(login, timeout=30) as resp:
+    SESSION = json.loads(resp.read())["token"]
+
 
 def call(path: str, body: dict, headers: dict | None = None):
     req = urllib.request.Request(BASE + path, data=json.dumps(body, ensure_ascii=False).encode(), method="POST")
@@ -15,7 +25,7 @@ def call(path: str, body: dict, headers: dict | None = None):
     return op.open(req, timeout=300)
 
 
-with call("/api/apikeys", {"name": "流式测试"}) as resp:
+with call("/api/apikeys", {"name": "流式测试"}, {"Authorization": f"Bearer {SESSION}"}) as resp:
     token = json.loads(resp.read())["token"]
 
 req = urllib.request.Request(

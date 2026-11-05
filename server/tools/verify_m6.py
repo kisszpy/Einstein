@@ -12,11 +12,15 @@ import urllib.request
 BASE = "http://127.0.0.1:8000"
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
+TOKEN = ""  # 控制台会话令牌，登录后由 call() 自动带上
+
 
 def call(method: str, path: str, body: dict | None = None, headers: dict | None = None):
     data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
     req = urllib.request.Request(BASE + path, data=data, method=method)
     req.add_header("Content-Type", "application/json")
+    if TOKEN:
+        req.add_header("Authorization", f"Bearer {TOKEN}")
     for k, v in (headers or {}).items():
         req.add_header(k, v)
     try:
@@ -26,7 +30,16 @@ def call(method: str, path: str, body: dict | None = None, headers: dict | None 
         return exc.code, json.loads(exc.read() or b"{}")
 
 
+def login() -> None:
+    """控制台接口需要登录；用种子管理员换一个会话令牌。"""
+    global TOKEN
+    code, data = call("POST", "/api/auth/login", {"username": "admin", "password": "admin123"})
+    assert code == 200, (code, data)
+    TOKEN = data["token"]
+
+
 def main() -> None:
+    login()
     print("== 1. 工作区隔离")
     code, ws = call("POST", "/api/workspaces", {"name": "市场部", "description": "冒烟测试用"})
     assert code == 200, (code, ws)

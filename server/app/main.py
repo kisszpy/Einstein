@@ -9,16 +9,43 @@ for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY"
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api.routes import agent, chat, conversations, experts, health, kb, mcp, skills
+from app.api import deps
+from app.api.routes import agent, auth, chat, conversations, experts, health, kb, mcp, skills
 from app.api.routes import eval as eval_routes
 from app.api.routes import observability, openapi, platform
 from app.core.config import get_settings
 from app.services import audit, metrics
 
+# 控制台无需登录即可访问的端点：登录本身与健康探针
+PUBLIC_API_PATHS = {"/api/auth/login", "/api/health"}
+
 
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, debug=settings.debug)
+
+    @app.middleware("http")
+    async def _auth_middleware(request: Request, call_next):
+        """控制台全站鉴权：除白名单外，/api/* 一律要求有效会话。
+
+        /v1 走 API Key（各路由自带依赖），不放行到这里。
+        """
+        path = request.url.path
+        if (
+            path.startswith("/api/")
+            and path not in PUBLIC_API_PATHS
+            and request.method != "OPTIONS"
+        ):
+            token = deps._extract_bearer(request.headers.get("authorization"))
+            user = deps.user_from_token(token)
+            if user is None:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "未登录或登录已过期，请重新登录"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            request.state.user = user
+        return await call_next(request)
 
     @app.middleware("http")
     async def _metrics_middleware(request: Request, call_next):
@@ -54,6 +81,7 @@ def create_app() -> FastAPI:
         return response
 
     app.include_router(health.router, prefix="/api")
+    app.include_router(auth.router, prefix="/api")
     app.include_router(chat.router, prefix="/api")
     app.include_router(kb.router, prefix="/api")
     app.include_router(agent.router, prefix="/api")

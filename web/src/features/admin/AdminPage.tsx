@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { MembersCard } from "./MembersCard";
 
 interface Summary {
   requests: {
@@ -107,6 +108,8 @@ export function AdminPage() {
             清空指标
           </Button>
         </div>
+
+        <MembersCard />
 
         {summary && (
           <>

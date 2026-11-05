@@ -1,5 +1,7 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppLayout } from "./layout/AppLayout";
+import { RequireAuth } from "./RequireAuth";
+import { LoginPage } from "@/features/auth/LoginPage";
 import { ChatPage } from "@/features/chat/ChatPage";
 import { KbPage } from "@/features/kb/KbPage";
 import { SkillsPage } from "@/features/skills/SkillsPage";
@@ -11,9 +13,14 @@ import { EvalPage } from "@/features/eval/EvalPage";
 import { PlatformPage } from "@/features/platform/PlatformPage";
 
 export const router = createBrowserRouter([
+  { path: "/login", element: <LoginPage /> },
   {
     path: "/",
-    element: <AppLayout />,
+    element: (
+      <RequireAuth>
+        <AppLayout />
+      </RequireAuth>
+    ),
     children: [
       { index: true, element: <Navigate to="/chat" replace /> },
       { path: "chat", element: <ChatPage /> },
