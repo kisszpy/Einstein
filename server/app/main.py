@@ -11,9 +11,9 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import agent, chat, conversations, experts, health, kb, mcp, skills
 from app.api.routes import eval as eval_routes
-from app.api.routes import observability
+from app.api.routes import observability, openapi, platform
 from app.core.config import get_settings
-from app.services import metrics
+from app.services import audit, metrics
 
 
 def create_app() -> FastAPI:
@@ -35,6 +35,22 @@ def create_app() -> FastAPI:
         # 观测端点自身不记录，避免自激励
         if path.startswith("/api/") and not path.startswith("/api/obs"):
             metrics.record_request(request.method, path, response.status_code, duration)
+        # 开放 API 全量审计：谁（哪个密钥/工作区）在何时调了什么、花了多少 token
+        if path.startswith("/v1/") and not getattr(request.state, "audit_self", False):
+            key = getattr(request.state, "api_key", None)
+            tokens_in, tokens_out = getattr(request.state, "audit_tokens", (0, 0))
+            audit.record(
+                workspace_id=getattr(key, "workspace_id", "-"),
+                key_id=getattr(key, "id", None),
+                key_name=getattr(key, "name", None),
+                method=request.method,
+                path=path,
+                status=response.status_code,
+                duration_ms=duration,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                detail=getattr(request.state, "audit_detail", ""),
+            )
         return response
 
     app.include_router(health.router, prefix="/api")
@@ -47,6 +63,9 @@ def create_app() -> FastAPI:
     app.include_router(mcp.router, prefix="/api")
     app.include_router(observability.router, prefix="/api")
     app.include_router(eval_routes.router, prefix="/api")
+    app.include_router(platform.router, prefix="/api")
+    # 对外开放 API：/v1/...（Bearer 鉴权，与 /api 控制台面分开）
+    app.include_router(openapi.router)
     return app
 
 

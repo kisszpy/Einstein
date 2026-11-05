@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { ThemeToggle } from "./ThemeToggle";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { cn } from "@/lib/utils";
 
 const NAV = [
@@ -13,6 +14,7 @@ const NAV = [
 
 const NAV_ADMIN = [
   { to: "/eval", label: "评测" },
+  { to: "/platform", label: "开放平台" },
   { to: "/admin", label: "系统管理" },
 ];
 
@@ -51,12 +53,13 @@ export function AppLayout() {
             <NavItem key={item.to} {...item} />
           ))}
         </nav>
-        <div className="px-3 pb-4 text-xs text-tertiary">v0.1.0 · M4</div>
+        <div className="px-3 pb-4 text-xs text-tertiary">v0.1.0 · M6</div>
       </aside>
 
       {/* 主区域 */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-end gap-3 border-b border-line px-6">
+        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line px-6">
+          <WorkspaceSwitcher />
           <ThemeToggle />
         </header>
         <main className="min-h-0 flex-1 overflow-y-auto">

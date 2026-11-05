@@ -8,6 +8,7 @@ import { AgentsPage } from "@/features/agents/AgentsPage";
 import { McpPage } from "@/features/mcp/McpPage";
 import { AdminPage } from "@/features/admin/AdminPage";
 import { EvalPage } from "@/features/eval/EvalPage";
+import { PlatformPage } from "@/features/platform/PlatformPage";
 
 export const router = createBrowserRouter([
   {
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
       { path: "agents", element: <AgentsPage /> },
       { path: "mcp", element: <McpPage /> },
       { path: "eval", element: <EvalPage /> },
+      { path: "platform", element: <PlatformPage /> },
       { path: "admin", element: <AdminPage /> },
     ],
   },

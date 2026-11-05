@@ -140,7 +140,7 @@ def _tool_def(name: str, description: str, schema: dict) -> dict:
     return {"type": "function", "function": {"name": name, "description": description, "parameters": schema}}
 
 
-def list_tools() -> list[dict]:
+def list_tools(workspace_id: str | None = None) -> list[dict]:
     """返回可展示的工具清单（内置 + 已同步的 MCP 工具）。"""
     tools = [
         {
@@ -164,7 +164,7 @@ def list_tools() -> list[dict]:
             "description": "在挂载的知识库中检索资料（选择了知识库时可用）",
         },
     ]
-    for server in mcp_service.list_servers():
+    for server in mcp_service.list_servers(workspace_id):
         if not server.enabled:
             continue
         for t in server.tools:
@@ -178,11 +178,14 @@ def list_tools() -> list[dict]:
     return tools
 
 
-def build_lc_tools(tool_ids: list[str], kb_ids: list[str]) -> list[StructuredTool]:
+def build_lc_tools(
+    tool_ids: list[str], kb_ids: list[str], workspace_id: str | None = None
+) -> list[StructuredTool]:
     """按选中的工具 ID 构建 LangChain 工具实例。
 
     挂载了知识库即自动注册 kb_search，无需显式勾选——检索的可用性
-    由资源挂载决定，不是工具开关。
+    由资源挂载决定，不是工具开关。workspace_id 用于把 MCP 工具限制在
+    当前工作区自己的服务器上。
     """
     lc_tools: list[StructuredTool] = []
     mcp_ids = [tid for tid in tool_ids if tid.startswith(MCP_TOOL_PREFIX)]
@@ -208,6 +211,8 @@ def build_lc_tools(tool_ids: list[str], kb_ids: list[str]) -> list[StructuredToo
         for server_id, tool_names in wanted.items():
             server = mcp_service.get_server(server_id)
             if server is None or not server.enabled:
+                continue
+            if workspace_id and server.workspace_id != workspace_id:
                 continue
             for tool in server.tools:
                 if tool.name in tool_names:

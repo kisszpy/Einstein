@@ -77,6 +77,7 @@ class Skill:
     tools: list[str] = field(default_factory=list)
     builtin: bool = False
     enabled: bool = True
+    workspace_id: str = "default"
 
 
 class SkillStore:
@@ -90,20 +91,25 @@ class SkillStore:
             if s["id"] not in self.skills:
                 self.skills[s["id"]] = Skill(**s)
 
-    def list_skills(self) -> list[Skill]:
-        return list(self.skills.values())
+    def list_skills(self, workspace_id: str | None = None) -> list[Skill]:
+        """内置技能全局可见，自定义技能只在所属工作区内可见。"""
+        rows = list(self.skills.values())
+        if workspace_id:
+            rows = [s for s in rows if s.builtin or s.workspace_id == workspace_id]
+        return rows
 
     def get(self, skill_id: str) -> Skill | None:
         return self.skills.get(skill_id)
 
     def add(self, name: str, description: str, system_prompt: str,
-            tools: list[str]) -> Skill:
+            tools: list[str], workspace_id: str = "default") -> Skill:
         skill = Skill(
             id=uuid.uuid4().hex[:12],
             name=name,
             description=description,
             system_prompt=system_prompt,
             tools=tools,
+            workspace_id=workspace_id,
         )
         self.skills[skill.id] = skill
         return skill

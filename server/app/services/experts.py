@@ -26,6 +26,7 @@ class Expert:
     tool_ids: list[str] = field(default_factory=list)
     temperature: float = 0.7
     enabled: bool = True
+    workspace_id: str = "default"
 
 
 class ExpertStore:
@@ -34,8 +35,11 @@ class ExpertStore:
     def __init__(self) -> None:
         self.experts = {}
 
-    def list_experts(self) -> list[Expert]:
-        return list(self.experts.values())
+    def list_experts(self, workspace_id: str | None = None) -> list[Expert]:
+        rows = list(self.experts.values())
+        if workspace_id:
+            rows = [e for e in rows if e.workspace_id == workspace_id]
+        return rows
 
     def get(self, expert_id: str) -> Expert | None:
         return self.experts.get(expert_id)
@@ -51,6 +55,7 @@ class ExpertStore:
             kb_ids=kwargs.get("kb_ids", []),  # type: ignore[arg-type]
             tool_ids=kwargs.get("tool_ids", []),  # type: ignore[arg-type]
             temperature=kwargs.get("temperature", 0.7),  # type: ignore[arg-type]
+            workspace_id=kwargs.get("workspace_id", "default"),  # type: ignore[arg-type]
         )
         self.experts[expert.id] = expert
         return expert

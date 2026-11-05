@@ -12,6 +12,8 @@ from pathlib import Path
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 STORE_PATH = DATA_DIR / "kb_store.json"
 
+DEFAULT_WS = "default"
+
 
 @dataclass
 class Chunk:
@@ -37,6 +39,7 @@ class KnowledgeBase:
     id: str
     name: str
     created_at: str = ""
+    workspace_id: str = DEFAULT_WS
 
 
 @dataclass
@@ -45,10 +48,18 @@ class KBStore:
     documents: dict[str, Document] = field(default_factory=dict)
     chunks: list[Chunk] = field(default_factory=list)
 
-    def add_kb(self, name: str) -> KnowledgeBase:
-        kb = KnowledgeBase(id=uuid.uuid4().hex[:12], name=name)
+    def add_kb(self, name: str, workspace_id: str = DEFAULT_WS) -> KnowledgeBase:
+        kb = KnowledgeBase(id=uuid.uuid4().hex[:12], name=name, workspace_id=workspace_id)
         self.kbs[kb.id] = kb
         return kb
+
+    def owns(self, kb_id: str, workspace_id: str) -> bool:
+        kb = self.kbs.get(kb_id)
+        return kb is not None and kb.workspace_id == workspace_id
+
+    def owned_kb_ids(self, workspace_id: str, kb_ids: list[str]) -> list[str]:
+        """把外部传入的 kb_ids 收敛到当前工作区实际拥有的集合，防止跨租户越权检索。"""
+        return [i for i in kb_ids if self.owns(i, workspace_id)]
 
     def add_document(self, kb_id: str, name: str, content: str, chunk_count: int) -> Document:
         doc = Document(id=uuid.uuid4().hex[:12], kb_id=kb_id, name=name,
@@ -62,8 +73,11 @@ class KBStore:
     def chunks_of_kb(self, kb_id: str) -> list[Chunk]:
         return [c for c in self.chunks if c.kb_id == kb_id]
 
-    def list_kbs(self) -> list[KnowledgeBase]:
-        return list(self.kbs.values())
+    def list_kbs(self, workspace_id: str | None = None) -> list[KnowledgeBase]:
+        kbs = list(self.kbs.values())
+        if workspace_id:
+            kbs = [k for k in kbs if k.workspace_id == workspace_id]
+        return kbs
 
     def documents_of_kb(self, kb_id: str) -> list[Document]:
         return [d for d in self.documents.values() if d.kb_id == kb_id]

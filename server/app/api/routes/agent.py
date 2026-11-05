@@ -2,12 +2,14 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.api.deps import current_workspace
 from app.services.agent import chunk_text, run_agent
 from app.services.history import get_history_store
+from app.services.store import get_store
 from app.services.tools import list_tools
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -24,8 +26,8 @@ def _sse(event: str, data: dict) -> str:
 
 
 @router.get("/tools")
-async def get_tools() -> list[dict]:
-    return list_tools()
+async def get_tools(ws: str = Depends(current_workspace)) -> list[dict]:
+    return list_tools(ws)
 
 
 @router.get("/runs")
@@ -45,13 +47,15 @@ async def list_runs() -> list[dict]:
     ]
 
 
-async def _event_stream(req: AgentRunRequest) -> AsyncIterator[str]:
+async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
     run_id = uuid.uuid4().hex
     yield _sse("meta", {"run_id": run_id})
+    # 只允许检索当前工作区的知识库
+    kb_ids = get_store().owned_kb_ids(ws, req.kb_ids)
     try:
         final_text = ""
         steps: list[dict] = []
-        async for step in run_agent(req.task, req.tool_ids, req.kb_ids):
+        async for step in run_agent(req.task, req.tool_ids, kb_ids, ws):
             if step["kind"] == "final":
                 final_text = step["text"]
             else:
@@ -78,10 +82,10 @@ async def _event_stream(req: AgentRunRequest) -> AsyncIterator[str]:
 
 
 @router.post("/run")
-async def run(req: AgentRunRequest) -> StreamingResponse:
+async def run(req: AgentRunRequest, ws: str = Depends(current_workspace)) -> StreamingResponse:
     """SSE 运行智能体。事件：meta -> step* -> answer_start -> delta* -> done | error。"""
     return StreamingResponse(
-        _event_stream(req),
+        _event_stream(req, ws),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

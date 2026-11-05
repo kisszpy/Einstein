@@ -1,9 +1,10 @@
 """专家管理路由。"""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.services.experts import get_expert_store
+from app.api.deps import current_workspace
+from app.services.experts import Expert, get_expert_store
 
 router = APIRouter(prefix="/experts", tags=["experts"])
 
@@ -43,24 +44,28 @@ def _dump(expert) -> dict:  # noqa: ANN001 — dataclass，内部使用
         "tool_ids": expert.tool_ids,
         "temperature": expert.temperature,
         "enabled": expert.enabled,
+        "workspace_id": expert.workspace_id,
     }
 
 
+def _require_own(expert: Expert | None, ws: str) -> Expert:
+    if expert is None or expert.workspace_id != ws:
+        raise HTTPException(404, "专家不存在")
+    return expert
+
+
 @router.get("")
-async def list_experts() -> list[dict]:
-    return [_dump(e) for e in get_expert_store().list_experts()]
+async def list_experts(ws: str = Depends(current_workspace)) -> list[dict]:
+    return [_dump(e) for e in get_expert_store().list_experts(ws)]
 
 
 @router.get("/{expert_id}")
-async def get_expert(expert_id: str) -> dict:
-    expert = get_expert_store().get(expert_id)
-    if expert is None:
-        raise HTTPException(404, "专家不存在")
-    return _dump(expert)
+async def get_expert(expert_id: str, ws: str = Depends(current_workspace)) -> dict:
+    return _dump(_require_own(get_expert_store().get(expert_id), ws))
 
 
 @router.post("")
-async def create_expert(req: ExpertCreate) -> dict:
+async def create_expert(req: ExpertCreate, ws: str = Depends(current_workspace)) -> dict:
     if not req.name.strip():
         raise HTTPException(400, "专家名称不能为空")
     store = get_expert_store()
@@ -73,14 +78,18 @@ async def create_expert(req: ExpertCreate) -> dict:
         kb_ids=req.kb_ids,
         tool_ids=req.tool_ids,
         temperature=req.temperature,
+        workspace_id=ws,
     )
     store.save()
     return _dump(expert)
 
 
 @router.put("/{expert_id}")
-async def update_expert(expert_id: str, req: ExpertUpdate) -> dict:
+async def update_expert(
+    expert_id: str, req: ExpertUpdate, ws: str = Depends(current_workspace)
+) -> dict:
     store = get_expert_store()
+    _require_own(store.get(expert_id), ws)
     expert = store.update(
         expert_id,
         name=req.name.strip() if req.name else None,
@@ -100,8 +109,9 @@ async def update_expert(expert_id: str, req: ExpertUpdate) -> dict:
 
 
 @router.delete("/{expert_id}")
-async def delete_expert(expert_id: str) -> dict:
-    if not get_expert_store().delete(expert_id):
-        raise HTTPException(404, "专家不存在")
-    get_expert_store().save()
+async def delete_expert(expert_id: str, ws: str = Depends(current_workspace)) -> dict:
+    store = get_expert_store()
+    _require_own(store.get(expert_id), ws)
+    store.delete(expert_id)
+    store.save()
     return {"ok": True}

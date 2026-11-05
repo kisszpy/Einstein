@@ -53,6 +53,7 @@ class McpServer(BaseModel):
     tools: list[McpToolDef] = Field(default_factory=list)
     last_error: str = ""
     refreshed_at: str = ""
+    workspace_id: str = "default"
 
     def connection_summary(self) -> str:
         if self.transport == "stdio":
@@ -92,8 +93,11 @@ def _registry() -> dict[str, McpServer]:
 
 # ---------- CRUD ----------
 
-def list_servers() -> list[McpServer]:
-    return list(_registry().values())
+def list_servers(workspace_id: str | None = None) -> list[McpServer]:
+    rows = list(_registry().values())
+    if workspace_id:
+        rows = [s for s in rows if s.workspace_id == workspace_id]
+    return rows
 
 
 def get_server(server_id: str) -> McpServer | None:
@@ -107,6 +111,7 @@ def add_server(
     args: list[str] | None = None,
     env: dict[str, str] | None = None,
     url: str = "",
+    workspace_id: str = "default",
 ) -> McpServer:
     server = McpServer(
         id=uuid.uuid4().hex[:12],
@@ -116,6 +121,7 @@ def add_server(
         args=args or [],
         env=env or {},
         url=url,
+        workspace_id=workspace_id,
     )
     registry = _registry()
     with _lock:

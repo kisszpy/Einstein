@@ -44,7 +44,7 @@ AGENT_SYSTEM_PROMPT = """你是一个能调用工具完成任务的智能体。�
 
 
 async def run_agent(
-    task: str, tool_ids: list[str], kb_ids: list[str]
+    task: str, tool_ids: list[str], kb_ids: list[str], workspace_id: str | None = None
 ) -> AsyncIterator[dict]:
     """运行 ReAct 智能体，产出步骤事件流。
 
@@ -53,7 +53,7 @@ async def run_agent(
       {kind: "tool_result", name, content}
       {kind: "final", text}  — 最后一个事件，携带完整最终回答
     """
-    lc_tools = build_lc_tools(tool_ids, kb_ids)
+    lc_tools = build_lc_tools(tool_ids, kb_ids, workspace_id)
     agent = create_react_agent(
         _get_model(),
         lc_tools,

@@ -2,11 +2,12 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
+from app.api.deps import current_workspace
 from app.services.experts import get_expert_store
 from app.services.history import get_history_store
 from app.services.llm import stream_chat
@@ -53,22 +54,24 @@ def _to_lc_messages(messages: list[ChatMessage], system_text: str) -> list:
 
 
 def _compose_system(
-    expert_id: str | None, kb_hit: bool
+    expert_id: str | None, kb_hit: bool, ws: str
 ) -> tuple[str, float, list[str], list[str]]:
     """合成系统提示，返回 (system, temperature, kb_ids, tool_ids)。
 
     专家 = 人设 + 挂载技能的提示词叠加；未指定专家用默认提示。
+    跨工作区的专家与知识库一律忽略，不做任何提示（避免越权探测）。
     """
     temperature = 0.7
     kb_ids: list[str] = []
     tool_ids: list[str] = []
     parts: list[str] = []
+    store = get_store()
 
     if expert_id:
         expert = get_expert_store().get(expert_id)
-        if expert and expert.enabled:
+        if expert and expert.enabled and expert.workspace_id == ws:
             temperature = expert.temperature
-            kb_ids = list(expert.kb_ids)
+            kb_ids = store.owned_kb_ids(ws, list(expert.kb_ids))
             tool_ids = list(expert.tool_ids)
             if expert.persona:
                 parts.append(expert.persona)
@@ -89,13 +92,14 @@ def _compose_system(
     return "\n\n".join(parts), temperature, kb_ids, tool_ids
 
 
-async def _event_stream(req: ChatRequest) -> AsyncIterator[str]:
+async def _event_stream(req: ChatRequest, ws: str) -> AsyncIterator[str]:
     conversation_id = req.conversation_id or uuid.uuid4().hex
 
     expert_id = req.expert_id
-    req_kb_ids = req.kb_ids or []
+    store = get_store()
+    req_kb_ids = store.owned_kb_ids(ws, req.kb_ids or [])
     system_text, temperature, expert_kb_ids, _tool_ids = _compose_system(
-        expert_id, kb_hit=bool(req_kb_ids)
+        expert_id, kb_hit=bool(req_kb_ids), ws=ws
     )
     # 显式传的 kb_ids 优先于专家挂载
     effective_kb_ids = req_kb_ids or expert_kb_ids
@@ -103,7 +107,6 @@ async def _event_stream(req: ChatRequest) -> AsyncIterator[str]:
     # RAG：挂了知识库就先检索，命中才注入上下文
     citations: list[dict] = []
     if effective_kb_ids:
-        store = get_store()
         query = req.messages[-1].content
         hits = await search(store, effective_kb_ids, query, top_k=4)
         if hits:
@@ -156,10 +159,10 @@ async def _event_stream(req: ChatRequest) -> AsyncIterator[str]:
 
 
 @router.post("")
-async def chat(req: ChatRequest) -> StreamingResponse:
+async def chat(req: ChatRequest, ws: str = Depends(current_workspace)) -> StreamingResponse:
     """SSE 流式对话。事件：meta -> [citations] -> delta* -> done | error。"""
     return StreamingResponse(
-        _event_stream(req),
+        _event_stream(req, ws),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
