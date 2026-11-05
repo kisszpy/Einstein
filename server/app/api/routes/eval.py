@@ -12,6 +12,7 @@ class EvalItemIn(BaseModel):
     query: str
     expected_doc: str = ""
     expected_contains: list[str] = Field(default_factory=list)
+    expected_text: str = ""
 
 
 class EvalSetIn(BaseModel):
@@ -45,9 +46,10 @@ async def delete_set(set_id: str) -> dict:
 
 
 @router.post("/sets/{set_id}/run")
-async def run(set_id: str) -> dict:
+async def run(set_id: str, mode: str | None = None) -> dict:
+    """mode 可选：vector / lexical / hybrid，用于对比不同检索策略。"""
     try:
-        report = await eval_service.run_eval(set_id)
+        report = await eval_service.run_eval(set_id, mode=mode)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"{type(exc).__name__}: {exc}")
     if report is None:

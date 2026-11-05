@@ -7,6 +7,7 @@ interface EvalItem {
   query: string;
   expected_doc: string;
   expected_contains: string[];
+  expected_text: string;
 }
 
 interface EvalSet {
@@ -25,6 +26,7 @@ interface KB {
 interface Report {
   set_id: string;
   name: string;
+  mode: string;
   ran_at: string;
   duration_ms: number;
   total: number;
@@ -35,6 +37,7 @@ interface Report {
   items: {
     query: string;
     expected_doc: string;
+    expected_text: string;
     expected_contains: string[];
     rank: number | null;
     hit: boolean;
@@ -44,7 +47,7 @@ interface Report {
   }[];
 }
 
-const EMPTY_ITEM = { query: "", expected_doc: "", expected_contains: "" };
+const EMPTY_ITEM = { query: "", expected_doc: "", expected_text: "", expected_contains: "" };
 
 export function EvalPage() {
   const [kbs, setKbs] = useState<KB[]>([]);
@@ -55,6 +58,7 @@ export function EvalPage() {
   const [newName, setNewName] = useState("");
   const [newItems, setNewItems] = useState([{ ...EMPTY_ITEM }]);
   const [report, setReport] = useState<Report | null>(null);
+  const [runMode, setRunMode] = useState<"hybrid" | "vector" | "lexical">("hybrid");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -95,6 +99,7 @@ export function EvalPage() {
       .map((it) => ({
         query: it.query.trim(),
         expected_doc: it.expected_doc.trim(),
+        expected_text: it.expected_text.trim(),
         expected_contains: it.expected_contains
           .split(/[，,]/)
           .map((s) => s.trim())
@@ -126,7 +131,7 @@ export function EvalPage() {
     setReport(null);
     setError(null);
     try {
-      const res = await fetch(`/api/eval/sets/${setId}/run`, { method: "POST" });
+      const res = await fetch(`/api/eval/sets/${setId}/run?mode=${runMode}`, { method: "POST" });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         setError(data?.detail ?? `评测失败：HTTP ${res.status}`);
@@ -158,8 +163,8 @@ export function EvalPage() {
           <Button onClick={() => { setCreating(true); setError(null); }}>新建评测集</Button>
         </div>
 
-        {/* 知识库选择 */}
-        <div className="flex items-center gap-2">
+        {/* 知识库选择 + 检索模式 */}
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-tertiary">知识库：</span>
           {kbs.length === 0 && <span className="text-xs text-tertiary">暂无知识库</span>}
           {kbs.map((kb) => (
@@ -176,6 +181,21 @@ export function EvalPage() {
               {kb.name}
             </button>
           ))}
+          <span className="ml-4 text-xs text-tertiary">检索模式：</span>
+          {(["hybrid", "vector", "lexical"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setRunMode(m)}
+              className={cn(
+                "rounded-md border px-2.5 py-1 text-xs transition-colors duration-150",
+                runMode === m
+                  ? "border-brand bg-brand-soft text-brand"
+                  : "border-line text-secondary hover:border-line-strong",
+              )}
+            >
+              {m === "hybrid" ? "混合" : m === "vector" ? "向量" : "词法"}
+            </button>
+          ))}
         </div>
 
         {/* 新建表单 */}
@@ -190,7 +210,7 @@ export function EvalPage() {
             />
             <div className="space-y-2">
               {newItems.map((it, idx) => (
-                <div key={idx} className="grid grid-cols-[1.4fr_1fr_1fr] gap-2">
+                <div key={idx} className="grid grid-cols-[1.3fr_1fr_1.1fr_1fr] gap-2">
                   <input
                     value={it.query}
                     onChange={(e) => updateItem(idx, { query: e.target.value })}
@@ -200,13 +220,19 @@ export function EvalPage() {
                   <input
                     value={it.expected_doc}
                     onChange={(e) => updateItem(idx, { expected_doc: e.target.value })}
-                    placeholder="期望命中文档名（子串）"
+                    placeholder="期望文档名（子串）"
+                    className="rounded-lg border border-line bg-surface-1 px-3 py-2 text-sm outline-none focus:border-brand"
+                  />
+                  <input
+                    value={it.expected_text}
+                    onChange={(e) => updateItem(idx, { expected_text: e.target.value })}
+                    placeholder="命中切片须含原文（更精确）"
                     className="rounded-lg border border-line bg-surface-1 px-3 py-2 text-sm outline-none focus:border-brand"
                   />
                   <input
                     value={it.expected_contains}
                     onChange={(e) => updateItem(idx, { expected_contains: e.target.value })}
-                    placeholder="回答须含关键词（逗号分隔）"
+                    placeholder="回答关键词（逗号分隔）"
                     className="rounded-lg border border-line bg-surface-1 px-3 py-2 text-sm outline-none focus:border-brand"
                   />
                 </div>
@@ -277,7 +303,7 @@ export function EvalPage() {
               <h3 className="text-[13px] font-medium">
                 报告 · {report.name}
                 <span className="ml-2 text-xs font-normal text-tertiary">
-                  {report.ran_at} UTC · {report.duration_ms} ms
+                  {report.ran_at} UTC · {report.duration_ms} ms · 检索模式 {report.mode}
                 </span>
               </h3>
             </div>
@@ -317,7 +343,9 @@ export function EvalPage() {
                     </div>
                   </div>
                   <p className="mt-1 text-xs text-tertiary">
-                    期望文档：{it.expected_doc || "—"} · 实际来源：{it.sources.join("、") || "—"}
+                    期望文档：{it.expected_doc || "—"}
+                    {it.expected_text && ` · 期望原文：${it.expected_text}`}
+                    {" · "}实际来源：{it.sources.join("、") || "—"}
                   </p>
                   {it.expected_contains.length > 0 && (
                     <p className="mt-0.5 text-xs text-tertiary">

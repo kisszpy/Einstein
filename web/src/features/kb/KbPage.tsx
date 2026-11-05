@@ -20,7 +20,17 @@ interface SearchHit {
   document_name: string;
   text: string;
   score: number;
+  vector_score: number | null;
+  lexical_score: number | null;
 }
+
+type SearchMode = "hybrid" | "vector" | "lexical";
+
+const MODE_LABEL: Record<SearchMode, string> = {
+  hybrid: "混合",
+  vector: "向量",
+  lexical: "词法",
+};
 
 export function KbPage() {
   const [kbs, setKbs] = useState<KBItem[]>([]);
@@ -31,6 +41,7 @@ export function KbPage() {
   const [docContent, setDocContent] = useState("");
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [mode, setMode] = useState<SearchMode>("hybrid");
   const [busy, setBusy] = useState(false);
 
   const loadKbs = useCallback(async () => {
@@ -103,10 +114,29 @@ export function KbPage() {
     const res = await fetch("/api/kb/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kb_ids: [selected], query: query.trim(), top_k: 4 }),
+      body: JSON.stringify({ kb_ids: [selected], query: query.trim(), top_k: 4, mode }),
     });
     setHits(await res.json());
     setBusy(false);
+  };
+
+  const removeKb = async (kb: KBItem) => {
+    if (
+      !window.confirm(
+        `删除知识库「${kb.name}」？其 ${kb.document_count} 篇文档与全部切片将一并删除，不可恢复。`,
+      )
+    )
+      return;
+    setBusy(true);
+    const res = await fetch(`/api/kb/${kb.id}`, { method: "DELETE" });
+    setBusy(false);
+    if (!res.ok) {
+      window.alert("删除失败");
+      return;
+    }
+    setSelected(null);
+    setHits(null);
+    await loadKbs();
   };
 
   return (
@@ -116,19 +146,29 @@ export function KbPage() {
         <h2 className="mb-3 text-[13px] font-medium">知识库</h2>
         <div className="space-y-1">
           {kbs.map((kb) => (
-            <button
-              key={kb.id}
-              onClick={() => setSelected(kb.id)}
-              className={cn(
-                "block w-full rounded-lg px-3 py-2 text-left transition-colors duration-150",
-                selected === kb.id
-                  ? "bg-brand-soft text-brand"
-                  : "text-secondary hover:bg-surface-3 hover:text-primary",
+            <div key={kb.id} className="flex items-center gap-1">
+              <button
+                onClick={() => setSelected(kb.id)}
+                className={cn(
+                  "min-w-0 flex-1 rounded-lg px-3 py-2 text-left transition-colors duration-150",
+                  selected === kb.id
+                    ? "bg-brand-soft text-brand"
+                    : "text-secondary hover:bg-surface-3 hover:text-primary",
+                )}
+              >
+                <div className="truncate text-[13px]">{kb.name}</div>
+                <div className="text-xs opacity-70">{kb.document_count} 篇文档</div>
+              </button>
+              {selected === kb.id && (
+                <button
+                  title="删除知识库"
+                  onClick={() => void removeKb(kb)}
+                  className="shrink-0 rounded-md px-1.5 py-1 text-xs text-tertiary transition-colors duration-150 hover:bg-danger/10 hover:text-danger"
+                >
+                  删除
+                </button>
               )}
-            >
-              <div className="text-[13px]">{kb.name}</div>
-              <div className="text-xs opacity-70">{kb.document_count} 篇文档</div>
-            </button>
+            </div>
           ))}
         </div>
         <div className="mt-4 flex gap-2">
@@ -216,7 +256,25 @@ export function KbPage() {
 
             {/* 检索测试台 */}
             <Card className="p-5">
-              <h3 className="text-[13px] font-medium">检索测试台</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-[13px] font-medium">检索测试台</h3>
+                <div className="flex gap-1">
+                  {(Object.keys(MODE_LABEL) as SearchMode[]).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setMode(m)}
+                      className={cn(
+                        "rounded-md border px-2 py-0.5 text-xs transition-colors duration-150",
+                        mode === m
+                          ? "border-brand bg-brand-soft text-brand"
+                          : "border-line text-secondary hover:border-line-strong",
+                      )}
+                    >
+                      {MODE_LABEL[m]}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="mt-3 flex gap-2">
                 <input
                   value={query}
@@ -236,9 +294,14 @@ export function KbPage() {
                   ) : (
                     hits.map((h) => (
                       <div key={h.chunk_id} className="rounded-lg bg-surface-3 p-3">
-                        <div className="flex items-center justify-between text-xs text-secondary">
-                          <span>{h.document_name}</span>
-                          <span>score {h.score.toFixed(4)}</span>
+                        <div className="flex items-center justify-between gap-3 text-xs text-secondary">
+                          <span className="truncate">{h.document_name}</span>
+                          <span className="shrink-0 text-tertiary">
+                            {h.vector_score != null && `vec ${h.vector_score.toFixed(3)}`}
+                            {h.vector_score != null && h.lexical_score != null && " · "}
+                            {h.lexical_score != null && `bm25 ${h.lexical_score.toFixed(2)}`}
+                            {mode === "hybrid" && ` · rrf ${h.score.toFixed(4)}`}
+                          </span>
                         </div>
                         <p className="mt-1 line-clamp-3 text-[13px] text-primary">{h.text}</p>
                       </div>

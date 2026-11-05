@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     embedding_base_url: str = "http://localhost:8081/v1"
     embedding_model: str = "qwen3-embedding-8b"
 
+    # 检索
+    retrieval_mode: str = "hybrid"  # vector | lexical | hybrid
+    rrf_k: int = 60                 # RRF 融合平滑常数
+
     # 存储
     postgres_dsn: str = "postgresql+psycopg://postgres:postgres@localhost:5432/aiplatform"
     milvus_uri: str = "http://localhost:19530"  # 开发期可改为 milvus-lite 本地文件路径

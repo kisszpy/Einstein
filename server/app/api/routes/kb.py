@@ -21,6 +21,7 @@ class SearchRequest(BaseModel):
     kb_ids: list[str]
     query: str
     top_k: int = 4
+    mode: str | None = None  # vector / lexical / hybrid，空则用服务端默认
 
 
 @router.get("")
@@ -88,14 +89,31 @@ async def upload_document(kb_id: str, file: UploadFile) -> dict:
 
 @router.post("/search")
 async def search_kb(req: SearchRequest) -> list[dict]:
-    """检索测试台：直接看召回效果。"""
-    hits = await search(get_store(), req.kb_ids, req.query, req.top_k)
+    """检索测试台：直接看召回效果，可切换检索模式对比。"""
+    hits = await search(get_store(), req.kb_ids, req.query, req.top_k, mode=req.mode)  # type: ignore[arg-type]
     return [
         {
             "chunk_id": h.chunk_id,
             "document_name": h.document_name,
             "text": h.text,
             "score": h.score,
+            "vector_score": h.vector_score,
+            "lexical_score": h.lexical_score,
         }
         for h in hits
     ]
+
+
+@router.delete("/{kb_id}")
+async def delete_kb(kb_id: str) -> dict:
+    """删除知识库，连同其文档与切片一并清理。"""
+    store = get_store()
+    if kb_id not in store.kbs:
+        raise HTTPException(404, "知识库不存在")
+    doc_ids = {d.id for d in store.documents_of_kb(kb_id)}
+    store.kbs.pop(kb_id)
+    for doc_id in doc_ids:
+        store.documents.pop(doc_id, None)
+    store.chunks = [c for c in store.chunks if c.kb_id != kb_id]
+    store.save()
+    return {"ok": True, "removed_documents": len(doc_ids)}

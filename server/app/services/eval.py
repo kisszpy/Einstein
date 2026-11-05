@@ -39,6 +39,7 @@ class EvalItem:
     query: str
     expected_doc: str = ""
     expected_contains: list[str] = field(default_factory=list)
+    expected_text: str = ""  # 命中切片须包含的原文片段（比文档名更细，单文档库也能区分）
 
 
 @dataclass
@@ -147,18 +148,25 @@ def remove_set(set_id: str) -> bool:
 
 # ---------- 运行评测 ----------
 
-def _judge_rank(expected_doc: str, hits: list) -> int | None:
-    """返回期望文档首次命中的排名（1 起），未命中 None。"""
-    if not expected_doc:
+def _judge_rank(expected_doc: str, expected_text: str, hits: list) -> int | None:
+    """返回首个命中期望的切片排名（1 起），未命中 None。
+
+    优先用 expected_text（切片原文片段）判定——同一份文档内部也能区分；
+    未配置时退回 expected_doc（文档名子串）。
+    """
+    needle_text = expected_text.lower().strip()
+    needle_doc = expected_doc.lower().strip()
+    if not needle_text and not needle_doc:
         return None
-    needle = expected_doc.lower()
     for i, h in enumerate(hits):
-        if needle in h.document_name.lower():
+        if needle_text and needle_text in h.text.lower():
+            return i + 1
+        if not needle_text and needle_doc and needle_doc in h.document_name.lower():
             return i + 1
     return None
 
 
-async def run_eval(set_id: str) -> dict | None:
+async def run_eval(set_id: str, mode: str | None = None) -> dict | None:
     es = _registry().get(set_id)
     if es is None:
         return None
@@ -168,22 +176,26 @@ async def run_eval(set_id: str) -> dict | None:
     t0 = time.perf_counter()
 
     for item in es.items:
-        hits = await search(store, [es.kb_id], item.query, top_k=EVAL_TOP_K)
-        rank = _judge_rank(item.expected_doc, hits)
+        hits = await search(store, [es.kb_id], item.query, top_k=EVAL_TOP_K, mode=mode)  # type: ignore[arg-type]
+        rank = _judge_rank(item.expected_doc, item.expected_text, hits)
 
         answer = ""
         answer_pass: bool | None = None
         if hits:
             context = build_context_block(hits)
             prompt = f"=== 参考资料 ===\n{context}\n=== 参考资料 end ===\n\n问题：{item.query}"
-            answer, _usage = await complete(
-                [SystemMessage(EVAL_SYSTEM), HumanMessage(prompt)],
-                temperature=0.2,
-            )
-            if item.expected_contains:
-                answer_pass = all(
-                    k.lower() in answer.lower() for k in item.expected_contains
+            try:
+                answer, _usage = await complete(
+                    [SystemMessage(EVAL_SYSTEM), HumanMessage(prompt)],
+                    temperature=0.2,
                 )
+                if item.expected_contains:
+                    answer_pass = all(
+                        k.lower() in answer.lower() for k in item.expected_contains
+                    )
+            except Exception as exc:  # noqa: BLE001 — 模型不可用不应作废整轮检索指标
+                answer = f"（回答生成失败：{type(exc).__name__}）"
+                answer_pass = None
         else:
             answer = "（检索无命中，跳过回答）"
 
@@ -191,6 +203,7 @@ async def run_eval(set_id: str) -> dict | None:
             {
                 "query": item.query,
                 "expected_doc": item.expected_doc,
+                "expected_text": item.expected_text,
                 "expected_contains": item.expected_contains,
                 "rank": rank,
                 "hit": rank is not None,
@@ -209,6 +222,7 @@ async def run_eval(set_id: str) -> dict | None:
         "set_id": es.id,
         "name": es.name,
         "kb_id": es.kb_id,
+        "mode": mode or "default",
         "ran_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "duration_ms": round(duration_ms),
         "total": n,
