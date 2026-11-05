@@ -31,7 +31,7 @@ async def get_tools(ws: str = Depends(current_workspace)) -> list[dict]:
 
 
 @router.get("/runs")
-async def list_runs() -> list[dict]:
+async def list_runs(ws: str = Depends(current_workspace)) -> list[dict]:
     history = get_history_store()
     return [
         {
@@ -43,7 +43,7 @@ async def list_runs() -> list[dict]:
             "status": r.status,
             "created_at": r.created_at,
         }
-        for r in history.list_agent_runs()
+        for r in history.list_agent_runs(ws)
     ]
 
 
@@ -75,6 +75,7 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
             steps=steps,
             answer=final_text,
             status="ok",
+            workspace_id=ws,
         )
         history.save()
     except Exception as exc:  # noqa: BLE001 — 统一转 SSE error 事件

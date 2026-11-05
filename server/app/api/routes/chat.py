@@ -152,6 +152,7 @@ async def _event_stream(req: ChatRequest, ws: str) -> AsyncIterator[str]:
                 user_text=user_text,
                 assistant_text="".join(answer_parts),
                 title=user_text[:20] or "新会话",
+                workspace_id=ws,
             )
             history.save()
     except Exception as exc:  # noqa: BLE001 — 统一转 SSE error 事件

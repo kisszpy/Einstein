@@ -32,6 +32,7 @@ class Conversation:
     created_at: str
     updated_at: str
     messages: list[StoredMessage] = field(default_factory=list)
+    workspace_id: str = "default"
 
 
 @dataclass
@@ -43,6 +44,7 @@ class AgentRun:
     answer: str
     status: str  # ok | error
     created_at: str
+    workspace_id: str = "default"
 
 
 @dataclass
@@ -52,13 +54,15 @@ class HistoryStore:
 
     # ---- 会话 ----
     def upsert_conversation(
-        self, conversation_id: str, user_text: str, assistant_text: str, title: str
+        self, conversation_id: str, user_text: str, assistant_text: str, title: str,
+        workspace_id: str = "default",
     ) -> Conversation:
         now = _now()
         conv = self.conversations.get(conversation_id)
         if conv is None:
             conv = Conversation(
-                id=conversation_id, title=title, created_at=now, updated_at=now
+                id=conversation_id, title=title, created_at=now, updated_at=now,
+                workspace_id=workspace_id,
             )
             self.conversations[conversation_id] = conv
         conv.messages.append(StoredMessage("user", user_text, now))
@@ -66,10 +70,11 @@ class HistoryStore:
         conv.updated_at = now
         return conv
 
-    def list_conversations(self) -> list[Conversation]:
-        return sorted(
-            self.conversations.values(), key=lambda c: c.updated_at, reverse=True
-        )
+    def list_conversations(self, workspace_id: str | None = None) -> list[Conversation]:
+        rows = list(self.conversations.values())
+        if workspace_id:
+            rows = [c for c in rows if c.workspace_id == workspace_id]
+        return sorted(rows, key=lambda c: c.updated_at, reverse=True)
 
     def get_conversation(self, conversation_id: str) -> Conversation | None:
         return self.conversations.get(conversation_id)
@@ -79,7 +84,8 @@ class HistoryStore:
 
     # ---- 智能体运行 ----
     def add_agent_run(
-        self, task: str, tool_ids: list[str], steps: list[dict], answer: str, status: str
+        self, task: str, tool_ids: list[str], steps: list[dict], answer: str, status: str,
+        workspace_id: str = "default",
     ) -> AgentRun:
         run = AgentRun(
             id=uuid.uuid4().hex[:12],
@@ -89,12 +95,16 @@ class HistoryStore:
             answer=answer,
             status=status,
             created_at=_now(),
+            workspace_id=workspace_id,
         )
         self.agent_runs[run.id] = run
         return run
 
-    def list_agent_runs(self) -> list[AgentRun]:
-        return sorted(self.agent_runs.values(), key=lambda r: r.created_at, reverse=True)
+    def list_agent_runs(self, workspace_id: str | None = None) -> list[AgentRun]:
+        rows = list(self.agent_runs.values())
+        if workspace_id:
+            rows = [r for r in rows if r.workspace_id == workspace_id]
+        return sorted(rows, key=lambda r: r.created_at, reverse=True)
 
     # ---- 持久化 ----
     def save(self) -> None:
