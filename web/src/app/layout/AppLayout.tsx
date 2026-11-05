@@ -97,9 +97,9 @@ export function AppLayout() {
       <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-surface-2">
         <div className="flex h-14 items-center gap-2.5 px-4">
           <span className="flex h-6 w-6 items-center justify-center rounded-[7px] bg-brand text-[11px] font-semibold tracking-tight text-brand-fg">
-            AI
+            E
           </span>
-          <span className="text-[15px] font-medium tracking-wide">AI 平台</span>
+          <span className="text-[15px] font-medium tracking-wide">Einstein</span>
         </div>
 
         <nav className="flex-1 space-y-4 overflow-y-auto px-2.5 pb-4">

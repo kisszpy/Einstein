@@ -80,9 +80,9 @@ export function LoginPage() {
 
         <div className="relative flex items-center gap-2.5">
           <span className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-brand text-[13px] font-semibold text-brand-fg">
-            AI
+            E
           </span>
-          <span className="text-[15px] font-medium tracking-wide">AI 平台</span>
+          <span className="text-[15px] font-medium tracking-wide">Einstein</span>
         </div>
 
         <div className="relative max-w-[420px]">
@@ -133,7 +133,7 @@ export function LoginPage() {
         <form onSubmit={submit} className="w-full max-w-[352px]">
           <div className="mb-8 lg:hidden">
             <span className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-brand text-[13px] font-semibold text-brand-fg">
-              AI
+              E
             </span>
           </div>
 

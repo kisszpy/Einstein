@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="APP_")
 
     # 应用
-    app_name: str = "AI Platform API"
+    app_name: str = "Einstein API"
     debug: bool = True
 
     # 模型接入（llama.cpp OpenAI 兼容端点）
