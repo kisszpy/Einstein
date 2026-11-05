@@ -1,6 +1,8 @@
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -8,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from app.api.deps import current_workspace
+from app.services import web_augment
 from app.services.experts import get_expert_store
 from app.services.history import get_history_store
 from app.services.llm import stream_chat
@@ -37,6 +40,8 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     expert_id: str | None = None
     kb_ids: list[str] = []
+    # 联网：auto 按需判断（默认）/ on 本轮必查 / off 本轮不查
+    web_mode: str = web_augment.MODE_AUTO
 
 
 def _sse(event: str, data: dict) -> str:
@@ -101,74 +106,165 @@ def _compose_system(
 
 async def _event_stream(req: ChatRequest, ws: str) -> AsyncIterator[str]:
     conversation_id = req.conversation_id or uuid.uuid4().hex
-
-    expert_id = req.expert_id
-    store = get_store()
-    req_kb_ids = store.owned_kb_ids(ws, req.kb_ids or [])
-    system_text, temperature, expert_kb_ids, _tool_ids = _compose_system(
-        expert_id, kb_hit=bool(req_kb_ids), ws=ws
-    )
-    # 显式传的 kb_ids 优先于专家挂载
-    effective_kb_ids = req_kb_ids or expert_kb_ids
-
-    # RAG：挂了知识库就先检索，命中才注入上下文
-    citations: list[dict] = []
-    if effective_kb_ids:
-        query = req.messages[-1].content
-        hits = await search(store, effective_kb_ids, query, top_k=4)
-        if hits:
-            citations = [
-                {
-                    "index": i + 1,
-                    "document_name": h.document_name,
-                    "chunk_id": h.chunk_id,
-                    "text": h.text,
-                    "score": h.score,
-                }
-                for i, h in enumerate(hits)
-            ]
-            system_text = (
-                f"{system_text}\n\n=== 参考资料 ===\n{build_context_block(hits)}\n"
-                "=== 参考资料 end ==="
-            )
-
     yield _sse("meta", {"conversation_id": conversation_id})
+
+    # 所有耗时环节（判定联网、检索、RAG、生成）都在生产者任务里跑，
+    # 消费端 15 秒拿不到事件就发一帧注释心跳——否则首字延迟长时
+    # 连接会被空闲超时掐断，客户端只收到 meta 就 EOF。
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    stop = object()
     answer_parts: list[str] = []
-    try:
-        if citations:
-            yield _sse("citations", {"citations": citations})
 
-        async for kind, text in stream_chat(
-            _to_lc_messages(req.messages, system_text), temperature=temperature
-        ):
-            if kind == "usage":
-                continue  # token 用量已在 llm 层落指标，不进对话流
-            if kind == "reasoning":
-                yield _sse("reasoning", {"text": text})
-            else:
-                answer_parts.append(text)
-                yield _sse("delta", {"text": text})
-        yield _sse("done", {"conversation_id": conversation_id})
-
-        # 持久化会话（错误时不写入）
-        if answer_parts:
+    async def _pump() -> None:
+        try:
+            store = get_store()
             user_text = req.messages[-1].content
-            history = get_history_store()
-            history.upsert_conversation(
-                conversation_id=conversation_id,
-                user_text=user_text,
-                assistant_text="".join(answer_parts),
-                title=user_text[:20] or "新会话",
-                workspace_id=ws,
+            req_kb_ids = store.owned_kb_ids(ws, req.kb_ids or [])
+            system_text, temperature, expert_kb_ids, expert_tool_ids = _compose_system(
+                req.expert_id, kb_hit=bool(req_kb_ids), ws=ws
             )
-            history.save()
-    except Exception as exc:  # noqa: BLE001 — 统一转 SSE error 事件
-        yield _sse("error", {"message": f"{type(exc).__name__}: {exc}"})
+            # 显式传的 kb_ids 优先于专家挂载
+            effective_kb_ids = req_kb_ids or expert_kb_ids
+
+            # ---- 按需联网 ----
+            mode = req.web_mode if req.web_mode in web_augment.MODES else web_augment.MODE_AUTO
+            if "web_search" in expert_tool_ids and mode != web_augment.MODE_OFF:
+                # 专家显式挂了联网工具，就默认这轮要查
+                mode = web_augment.MODE_ON
+            if mode == web_augment.MODE_AUTO:
+                await queue.put(("web", {"status": "checking", "mode": mode}))
+
+            history = [(m.role, m.content) for m in req.messages[:-1]]
+            decision = await web_augment.decide(user_text, history, mode)
+            note = ""
+            if not decision.search:
+                await queue.put(
+                    ("web", {"status": "skipped", "mode": mode, "reason": decision.reason})
+                )
+            else:
+                await queue.put(
+                    (
+                        "web",
+                        {
+                            "status": "searching",
+                            "mode": mode,
+                            "query": decision.query,
+                            "reason": decision.reason,
+                        },
+                    )
+                )
+                wctx = await web_augment.collect(decision)
+                body = web_augment.payload(wctx)
+                if wctx.block:
+                    note = wctx.note()
+                    await queue.put(("web", {"status": "done", "mode": mode, **body}))
+                else:
+                    await queue.put(
+                        (
+                            "web",
+                            {
+                                "status": "failed",
+                                "mode": mode,
+                                **body,
+                                "message": wctx.error or "没有检索到可用资料",
+                            },
+                        )
+                    )
+
+            # ---- 知识库检索 ----
+            citations: list[dict] = []
+            if effective_kb_ids:
+                hits = await search(store, effective_kb_ids, user_text, top_k=4)
+                if hits:
+                    citations = [
+                        {
+                            "index": i + 1,
+                            "document_name": h.document_name,
+                            "chunk_id": h.chunk_id,
+                            "text": h.text,
+                            "score": h.score,
+                        }
+                        for i, h in enumerate(hits)
+                    ]
+                    system_text = (
+                        f"{system_text}\n\n=== 参考资料 ===\n{build_context_block(hits)}\n"
+                        "=== 参考资料 end ==="
+                    )
+
+            if note:
+                system_text = f"{system_text}\n\n{note}"
+            if citations:
+                await queue.put(("citations", {"citations": citations}))
+
+            # ---- 生成 ----
+            buf = ""
+            async for kind, text in stream_chat(
+                _to_lc_messages(req.messages, system_text), temperature=temperature
+            ):
+                if kind == "usage":
+                    continue  # token 用量已在 llm 层落指标，不进对话流
+                if kind == "reasoning":
+                    await queue.put(("reasoning", {"text": text}))
+                else:
+                    answer_parts.append(text)
+                    # 攒十几字符再发一帧，减少长连接上的帧数
+                    buf += text
+                    if len(buf) >= 12:
+                        await queue.put(("delta", {"text": buf}))
+                        buf = ""
+            if buf:
+                await queue.put(("delta", {"text": buf}))
+
+            # 先落库再发 done：写失败也不影响这一轮回答
+            if answer_parts:
+                try:
+                    history_store = get_history_store()
+                    history_store.upsert_conversation(
+                        conversation_id=conversation_id,
+                        user_text=user_text,
+                        assistant_text="".join(answer_parts),
+                        title=user_text[:20] or "新会话",
+                        workspace_id=ws,
+                    )
+                    history_store.save()
+                except Exception as exc:  # noqa: BLE001 — 持久化失败不回滚回答
+                    print(f"[chat] save failed: {type(exc).__name__}: {exc}", flush=True)
+            await queue.put(("done", {"conversation_id": conversation_id}))
+        except Exception as exc:  # noqa: BLE001 — 异常也走队列，保持事件顺序
+            await queue.put(exc)
+        finally:
+            await queue.put(stop)
+
+    pump = asyncio.create_task(_pump())
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=15.0)
+            except asyncio.TimeoutError:
+                yield ": ping\n\n"
+                continue
+            if item is stop:
+                break
+            if isinstance(item, Exception):
+                yield _sse("error", {"message": f"{type(item).__name__}: {item}"})
+                break
+            event, data = item
+            yield _sse(event, data)
+    finally:
+        pump.cancel()
+        try:
+            await pump
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
 
 
 @router.post("")
 async def chat(req: ChatRequest, ws: str = Depends(current_workspace)) -> StreamingResponse:
-    """SSE 流式对话。事件：meta -> [citations] -> delta* -> done | error。"""
+    """SSE 流式对话。
+
+    事件：meta -> web(状态) -> [citations] -> (reasoning|delta)* -> done | error
+    web 的 status 依次为 checking / searching / done / skipped / failed。
+    """
     return StreamingResponse(
         _event_stream(req, ws),
         media_type="text/event-stream",

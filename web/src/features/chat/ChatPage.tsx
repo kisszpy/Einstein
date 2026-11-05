@@ -1,9 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useChatStream } from "./use-chat-stream";
 import { MessageBubble } from "./components/message-bubble";
+import type { WebMode } from "./chat-types";
 import { cn } from "@/lib/utils";
+
+const WEB_KEY = "einstein.chat.webMode";
+const WEB_LABEL: Record<WebMode, string> = { auto: "自动", on: "始终", off: "关闭" };
+const WEB_HINT: Record<WebMode, string> = {
+  auto: "需要最新信息时才联网",
+  on: "本轮强制联网检索",
+  off: "本轮只用已有知识",
+};
+const WEB_NEXT: Record<WebMode, WebMode> = { auto: "on", on: "off", off: "auto" };
+
+function readWebMode(): WebMode {
+  const saved = localStorage.getItem(WEB_KEY);
+  return saved === "on" || saved === "off" ? saved : "auto";
+}
 
 interface ExpertItem {
   id: string;
@@ -27,7 +43,12 @@ export function ChatPage() {
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [experts, setExperts] = useState<ExpertItem[]>([]);
   const [expertId, setExpertId] = useState<string | null>(null);
+  const [webMode, setWebMode] = useState<WebMode>(readWebMode);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    localStorage.setItem(WEB_KEY, webMode);
+  }, [webMode]);
 
   const loadList = useCallback(async () => {
     const res = await fetch("/api/conversations");
@@ -54,7 +75,7 @@ export function ChatPage() {
     const text = input;
     if (!text.trim() || isStreaming) return;
     setInput("");
-    void send(text, expertId);
+    void send(text, expertId, webMode);
   };
 
   const activeExpert = experts.find((e) => e.id === expertId);
@@ -173,7 +194,7 @@ export function ChatPage() {
               )}
             </div>
           )}
-          <Card className="flex items-end gap-2 p-3">
+          <Card className="p-3">
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -185,17 +206,38 @@ export function ChatPage() {
               }}
               placeholder="输入消息，Enter 发送，Shift+Enter 换行"
               rows={2}
-              className="max-h-40 flex-1 resize-none bg-transparent px-2 text-sm outline-none placeholder:text-tertiary"
+              className="max-h-40 w-full resize-none bg-transparent px-2 text-sm outline-none placeholder:text-tertiary"
             />
-            {isStreaming ? (
-              <Button variant="outline" onClick={stop}>
-                停止
-              </Button>
-            ) : (
-              <Button disabled={!input.trim()} onClick={submit}>
-                发送
-              </Button>
-            )}
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setWebMode(WEB_NEXT[webMode])}
+                  title="联网模式：自动 → 始终 → 关闭"
+                  className={cn(
+                    "flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors duration-150",
+                    webMode === "off"
+                      ? "border-line text-tertiary hover:border-line-strong"
+                      : "border-brand bg-brand-soft text-brand",
+                  )}
+                >
+                  <Globe size={12} />
+                  联网 · {WEB_LABEL[webMode]}
+                </button>
+                <span className="hidden truncate text-xs text-tertiary sm:inline">
+                  {WEB_HINT[webMode]}
+                </span>
+              </div>
+              {isStreaming ? (
+                <Button variant="outline" onClick={stop}>
+                  停止
+                </Button>
+              ) : (
+                <Button disabled={!input.trim()} onClick={submit}>
+                  发送
+                </Button>
+              )}
+            </div>
           </Card>
           <p className="mt-2 text-center text-xs text-tertiary">
             内容由 AI 生成，请自行核实重要信息

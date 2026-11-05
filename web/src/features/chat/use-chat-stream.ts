@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { readSseStream } from "./sse-parser";
-import type { ChatMessage, Citation } from "./chat-types";
+import type { ChatMessage, Citation, WebMode, WebState } from "./chat-types";
 
 let seq = 0;
 const nextId = () => `msg-${Date.now()}-${seq++}`;
@@ -31,7 +31,7 @@ export function useChatStream() {
   }, [isStreaming]);
 
   const send = useCallback(
-    async (text: string, expertId?: string | null) => {
+    async (text: string, expertId?: string | null, webMode: WebMode = "auto") => {
       const trimmed = text.trim();
       if (!trimmed || isStreaming) return;
 
@@ -62,6 +62,7 @@ export function useChatStream() {
           body: JSON.stringify({
             conversation_id: conversationId,
             expert_id: expertId ?? undefined,
+            web_mode: webMode,
             messages: history.map((m) => ({ role: m.role, content: m.content })),
           }),
           signal: controller.signal,
@@ -93,6 +94,10 @@ export function useChatStream() {
               );
               break;
             }
+            case "web":
+              // 同一轮会依次收到 checking / searching / done，直接覆盖
+              patchAssistant({ web: raw as WebState });
+              break;
             case "citations":
               patchAssistant({
                 citations: (raw as { citations: Citation[] }).citations,

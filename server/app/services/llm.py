@@ -107,17 +107,27 @@ async def stream_chat(
 
 
 async def complete(
-    messages: list[BaseMessage], temperature: float = 0.7
+    messages: list[BaseMessage],
+    temperature: float = 0.7,
+    max_tokens: int | None = None,
+    kind: str = "eval",
 ) -> tuple[str, dict | None]:
-    """非流式补全：返回 (正文, usage)。评测等后台任务使用。"""
+    """非流式补全：返回 (正文, usage)。
+
+    评测等后台任务默认 kind=eval；轻量判定传更小的 max_tokens 以压低延迟。
+    """
     settings = get_settings()
     client = _client()
     t0 = time.perf_counter()
+    kwargs: dict = {}
+    if max_tokens:
+        kwargs["max_tokens"] = max_tokens
     try:
         resp = await client.chat.completions.create(
             model=settings.llm_model,
             messages=_lc_to_openai_messages(messages),
             temperature=temperature,
+            **kwargs,
         )
         usage = None
         if getattr(resp, "usage", None):
@@ -126,7 +136,7 @@ async def complete(
                 "completion_tokens": resp.usage.completion_tokens,
             }
         metrics.record_llm(
-            kind="eval",
+            kind=kind,
             model=settings.llm_model,
             duration_ms=(time.perf_counter() - t0) * 1000,
             prompt_tokens=usage["prompt_tokens"] if usage else None,
@@ -136,7 +146,7 @@ async def complete(
         return text, usage
     except Exception:
         metrics.record_llm(
-            kind="eval",
+            kind=kind,
             model=settings.llm_model,
             duration_ms=(time.perf_counter() - t0) * 1000,
             status="error",
