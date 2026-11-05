@@ -78,6 +78,18 @@ class Skill:
     builtin: bool = False
     enabled: bool = True
     workspace_id: str = "default"
+    # ---- 外部安装来源（source="local" 时为空） ----
+    source: str = "local"          # local | github
+    source_url: str = ""           # 可回跳的原始地址
+    repo: str = ""                 # owner/repo
+    ref: str = ""                  # 安装时选择的分支/标签
+    commit: str = ""               # 解析出的 commit sha（版本）
+    subpath: str = ""              # 技能在仓库内的目录
+    author: str = ""
+    license: str = ""
+    files: list[dict] = field(default_factory=list)  # [{path, size}]
+    installed_at: str = ""
+    updated_at: str = ""
 
 
 class SkillStore:
@@ -122,6 +134,20 @@ class SkillStore:
             if value is not None and hasattr(skill, key):
                 setattr(skill, key, value)
         return skill
+
+    def upsert(self, skill: Skill) -> bool:
+        """按 id 幂等写入安装结果，返回是否新建。
+
+        覆盖已有的同名安装时，保留用户的启用开关与首次安装时间。
+        """
+        existing = self.skills.get(skill.id)
+        if existing is None:
+            self.skills[skill.id] = skill
+            return True
+        skill.enabled = existing.enabled
+        skill.installed_at = existing.installed_at or skill.installed_at
+        self.skills[skill.id] = skill
+        return False
 
     def delete(self, skill_id: str) -> bool:
         skill = self.skills.get(skill_id)

@@ -12,6 +12,7 @@ from app.services.experts import get_expert_store
 from app.services.history import get_history_store
 from app.services.llm import stream_chat
 from app.services.rag import build_context_block, search
+from app.services.skill_installer import inline_resources
 from app.services.skills import get_skill_store
 from app.services.store import get_store
 
@@ -79,7 +80,13 @@ def _compose_system(
             for sid in expert.skill_ids:
                 skill = skill_store.get(sid)
                 if skill and skill.enabled and skill.system_prompt:
-                    parts.append(f"【{skill.name}】\n{skill.system_prompt}")
+                    block = f"【{skill.name}】\n{skill.system_prompt}"
+                    # 安装的技能包可能带参考资料：短文本内联，长资源只提示存在
+                    if skill.source == "github" and skill.files:
+                        extra = inline_resources(skill.id, skill.files)
+                        if extra:
+                            block = f"{block}\n\n{extra}"
+                    parts.append(block)
 
     if not parts:
         parts = ["你是一个乐于助人的中文问答助手，回答简洁准确。"]

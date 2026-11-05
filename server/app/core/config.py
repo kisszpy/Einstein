@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     retrieval_mode: str = "hybrid"  # vector | lexical | hybrid
     rrf_k: int = 60                 # RRF 融合平滑常数
 
+    # 技能市场与动态安装
+    github_token: str = ""                     # 可选：提升 GitHub 接口额度（60/h → 5000/h）
+    skill_market_topics: str = "agent-skills"  # 逗号分隔的 GitHub topic，用于市场浏览
+    skill_market_registry_urls: str = ""       # 逗号分隔的自建市场索引（JSON）
+
     # 存储
     postgres_dsn: str = "postgresql+psycopg://postgres:postgres@localhost:5432/aiplatform"
     milvus_uri: str = "http://localhost:19530"  # 开发期可改为 milvus-lite 本地文件路径
