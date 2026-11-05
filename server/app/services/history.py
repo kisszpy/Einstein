@@ -45,6 +45,8 @@ class AgentRun:
     status: str  # ok | error
     created_at: str
     workspace_id: str = "default"
+    project: str = ""
+    artifacts: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -85,7 +87,7 @@ class HistoryStore:
     # ---- 智能体运行 ----
     def add_agent_run(
         self, task: str, tool_ids: list[str], steps: list[dict], answer: str, status: str,
-        workspace_id: str = "default",
+        workspace_id: str = "default", project: str = "", artifacts: list[dict] | None = None,
     ) -> AgentRun:
         run = AgentRun(
             id=uuid.uuid4().hex[:12],
@@ -96,6 +98,8 @@ class HistoryStore:
             status=status,
             created_at=_now(),
             workspace_id=workspace_id,
+            project=project,
+            artifacts=artifacts or [],
         )
         self.agent_runs[run.id] = run
         return run

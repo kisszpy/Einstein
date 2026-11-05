@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     embedding_base_url: str = "http://localhost:8081/v1"
     embedding_model: str = "qwen3-embedding-8b"
 
+    # 智能体能力
+    agent_code_exec: bool = True   # 关闭后智能体不可执行代码（code_run 工具不注册）
+
     # 检索
     retrieval_mode: str = "hybrid"  # vector | lexical | hybrid
     rrf_k: int = 60                 # RRF 融合平滑常数

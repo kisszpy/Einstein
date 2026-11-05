@@ -15,6 +15,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
 import app.services.mcp as mcp_service
+from app.services.capabilities import CAPABILITIES, CAPABILITY_TOOL_IDS, AgentContext, make_tools
 from app.services.rag import search
 from app.services.store import get_store
 
@@ -140,30 +141,39 @@ def _tool_def(name: str, description: str, schema: dict) -> dict:
     return {"type": "function", "function": {"name": name, "description": description, "parameters": schema}}
 
 
-def list_tools(workspace_id: str | None = None) -> list[dict]:
-    """返回可展示的工具清单（内置 + 已同步的 MCP 工具）。"""
+def list_tools(workspace_id: str | None = None) -> dict:
+    """返回可展示的工具清单：基础工具 + 能力分组 + 已同步的 MCP 工具。"""
     tools = [
         {
             "id": "calculator",
             "name": "计算器",
             "description": "安全的四则运算（AST 白名单，非 eval）",
+            "group": "basic",
         },
         {
             "id": "current_time",
             "name": "当前时间",
             "description": "查询当前 UTC 时间",
+            "group": "basic",
         },
         {
             "id": "text_stats",
             "name": "文本统计",
             "description": "统计文本的字符数、词数、中文字符数",
-        },
-        {
-            "id": "kb_search",
-            "name": "知识库检索",
-            "description": "在挂载的知识库中检索资料（选择了知识库时可用）",
+            "group": "basic",
         },
     ]
+    for cap in CAPABILITIES:
+        tools.append(
+            {
+                "id": cap["id"],
+                "name": cap["name"],
+                "description": cap["description"],
+                "group": "capability",
+                "tools": cap["tools"],
+                "default": cap["default"],
+            }
+        )
     for server in mcp_service.list_servers(workspace_id):
         if not server.enabled:
             continue
@@ -173,19 +183,24 @@ def list_tools(workspace_id: str | None = None) -> list[dict]:
                     "id": f"{MCP_TOOL_PREFIX}{server.id}:{t.name}",
                     "name": t.name,
                     "description": f"[MCP · {server.name}] {t.description or t.name}",
+                    "group": "mcp",
                 }
             )
-    return tools
+    return {"tools": tools, "capabilities": CAPABILITIES}
 
 
 def build_lc_tools(
-    tool_ids: list[str], kb_ids: list[str], workspace_id: str | None = None
+    tool_ids: list[str],
+    kb_ids: list[str],
+    workspace_id: str | None = None,
+    ctx: AgentContext | None = None,
 ) -> list[StructuredTool]:
     """按选中的工具 ID 构建 LangChain 工具实例。
 
     挂载了知识库即自动注册 kb_search，无需显式勾选——检索的可用性
     由资源挂载决定，不是工具开关。workspace_id 用于把 MCP 工具限制在
-    当前工作区自己的服务器上。
+    当前工作区自己的服务器上；ctx 存在时按勾选构建工作能力工具
+    （联网/项目文件/代码/PPT），产物都收进 ctx.artifacts。
     """
     lc_tools: list[StructuredTool] = []
     mcp_ids = [tid for tid in tool_ids if tid.startswith(MCP_TOOL_PREFIX)]
@@ -202,6 +217,9 @@ def build_lc_tools(
                         description="统计文本字符/词数", args_schema=TextStatsArgs))
     if kb_ids:
         lc_tools.append(_make_kb_search(kb_ids))
+
+    if ctx is not None:
+        lc_tools.extend(make_tools(ctx, builtin_ids))
 
     if mcp_ids:
         wanted: dict[str, list[str]] = {}

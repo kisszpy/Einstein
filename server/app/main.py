@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from app.api import deps
 from app.api.routes import agent, auth, chat, conversations, experts, health, kb, mcp, skills
 from app.api.routes import eval as eval_routes
-from app.api.routes import observability, openapi, platform
+from app.api.routes import observability, openapi, platform, projects
 from app.core.config import get_settings
 from app.services import audit, metrics
 
@@ -81,6 +81,7 @@ def create_app() -> FastAPI:
         return response
 
     app.include_router(health.router, prefix="/api")
+    app.include_router(projects.router, prefix="/api")
     app.include_router(auth.router, prefix="/api")
     app.include_router(chat.router, prefix="/api")
     app.include_router(kb.router, prefix="/api")
