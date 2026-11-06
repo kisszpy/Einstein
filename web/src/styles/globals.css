@@ -2,41 +2,53 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* ---------- 语义 token（运行时变量，亮暗两套） ---------- */
+/* ---------- 语义 token（对齐 WorkBuddy 设计系统，亮暗两套） ---------- */
 :root {
-  --bg-page: #f7f7f5;          /* 页面底 */
-  --bg-surface-1: #ffffff;     /* 卡片 */
-  --bg-surface-2: #f1f0ed;     /* 侧栏/次级面板 */
-  --bg-surface-3: #e8e7e3;     /* 浮层内嵌块 */
-  --text-primary: #1f1f1d;
-  --text-secondary: #6f6e6a;
-  --text-tertiary: #a3a29d;
+  --bg-page: #f2f2f2;          /* 页面底 */
+  --bg-surface-1: #ffffff;     /* 卡片 / 输入器 */
+  --bg-surface-2: #f7f7f7;     /* 侧栏 / 次级面板 */
+  --bg-surface-3: #f2f2f2;     /* 浮层内嵌块 / 用户消息 */
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --text-primary: #1a1a1a;
+  --text-secondary: rgba(0, 0, 0, 0.66);
+  --text-tertiary: rgba(0, 0, 0, 0.45);
+  --text-placeholder: #8a9099;
   --line-subtle: rgba(0, 0, 0, 0.08);
   --line-strong: rgba(0, 0, 0, 0.16);
-  --brand: #2f6bdc;
+  --brand: #00c29a;
+  --brand-deep: #087866;
   --brand-fg: #ffffff;
-  --brand-soft: rgba(47, 107, 220, 0.08);
-  --success: #2e8a4f;
-  --warning: #b97a12;
-  --danger: #c23b3b;
+  --brand-soft: rgba(0, 194, 154, 0.12);
+  --success: #2f9e63;
+  --warning: #d98600;
+  --danger: #d93f3f;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-input: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.04);
+  --shadow-pop: 0 8px 24px rgba(15, 23, 42, 0.1), 0 2px 6px rgba(15, 23, 42, 0.04);
 }
 
 .dark {
-  --bg-page: #161719;
-  --bg-surface-1: #1e2023;
-  --bg-surface-2: #18191c;
-  --bg-surface-3: #26282c;
-  --text-primary: #e8e7e4;
-  --text-secondary: #9b9a96;
-  --text-tertiary: #6b6a67;
-  --line-subtle: rgba(255, 255, 255, 0.09);
+  --bg-page: #1a1a1a;
+  --bg-surface-1: #242424;
+  --bg-surface-2: #1f1f1f;
+  --bg-surface-3: #2b2b2b;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --text-primary: #e8e8e8;
+  --text-secondary: rgba(255, 255, 255, 0.66);
+  --text-tertiary: rgba(255, 255, 255, 0.45);
+  --text-placeholder: #7c7c7c;
+  --line-subtle: rgba(255, 255, 255, 0.1);
   --line-strong: rgba(255, 255, 255, 0.18);
-  --brand: #5b8ae8;
-  --brand-fg: #10141c;
-  --brand-soft: rgba(91, 138, 232, 0.14);
-  --success: #55a877;
-  --warning: #d29a45;
-  --danger: #d95f5f;
+  --brand: #2fd6b0;
+  --brand-deep: #0dbfa3;
+  --brand-fg: #06251f;
+  --brand-soft: rgba(0, 194, 154, 0.16);
+  --success: #55b982;
+  --warning: #e0a44a;
+  --danger: #e46a6a;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-input: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.24);
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
 }
 
 /* ---------- 映射为 Tailwind 类 ---------- */
@@ -45,25 +57,55 @@
   --color-surface-1: var(--bg-surface-1);
   --color-surface-2: var(--bg-surface-2);
   --color-surface-3: var(--bg-surface-3);
+  --color-hover: var(--bg-hover);
   --color-primary: var(--text-primary);
   --color-secondary: var(--text-secondary);
   --color-tertiary: var(--text-tertiary);
+  --color-placeholder: var(--text-placeholder);
   --color-line: var(--line-subtle);
   --color-line-strong: var(--line-strong);
   --color-brand: var(--brand);
+  --color-brand-deep: var(--brand-deep);
   --color-brand-fg: var(--brand-fg);
   --color-brand-soft: var(--brand-soft);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-danger: var(--danger);
   --radius-card: 12px;
-  --shadow-card: 0 1px 3px rgb(0 0 0 / 0.05);
-  --shadow-float: 0 8px 24px rgb(0 0 0 / 0.12);
+  --radius-panel: 16px;
+  --shadow-card: var(--shadow-card);
+  --shadow-input: var(--shadow-input);
+  --shadow-float: var(--shadow-pop);
 }
 
 body {
   @apply bg-page text-primary antialiased;
   font-family:
-    "PingFang SC", "HarmonyOS Sans SC", "Segoe UI", "Microsoft YaHei",
-    system-ui, sans-serif;
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "HarmonyOS Sans SC", "Microsoft YaHei", "Helvetica Neue", system-ui, sans-serif;
+  font-feature-settings: "tnum";
+}
+
+/* 细滚动条，贴合 WorkBuddy 的克制观感 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.16) transparent;
+}
+.dark * {
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.16);
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
 }

@@ -38,15 +38,13 @@ function check(name, pass, detail = "") {
   check("运行前面板是关着的", (await page.getByLabel("产物预览面板").count()) === 0);
 
   await page
-    .locator("textarea")
+    .locator("[data-agent-composer]")
     .fill(`在当前项目里写一个文件 ${FILE}，内容只有一行：auto open ${STAMP}。写完就结束，不要做别的。`);
-  await page.getByRole("button", { name: /^运行$/ }).click();
+  await page.getByLabel("发送").click();
 
-  // 等运行结束（运行按钮恢复）
-  await page.waitForFunction(
-    () => [...document.querySelectorAll("button")].some((b) => b.textContent?.trim() === "运行"),
-    { timeout: 180000 },
-  );
+  // 等运行结束：先确认进入「停止运行」，结束后变回「发送」
+  await page.waitForSelector('button[aria-label="停止运行"]', { timeout: 20000 });
+  await page.waitForSelector('button[aria-label="发送"]', { timeout: 180000 });
   await page.waitForTimeout(1200);
 
   const panel = page.getByLabel("产物预览面板");

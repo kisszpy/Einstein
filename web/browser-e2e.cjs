@@ -28,19 +28,22 @@ const BASE = "http://localhost:5173";
   await page.waitForTimeout(1500);
   await page.screenshot({ path: "shots/agents-page.png", fullPage: false });
 
-  // 填任务并运行
-  const taskBox = page.locator("textarea").first();
+  // 填任务并运行（新版输入器：Enter 发送 / 发送按钮变停止）
+  const taskBox = page.locator("[data-agent-composer]");
   await taskBox.fill("创建一个名为 browser-e2e 的项目，写 hello.py 打印 1 到 5 的平方，运行验证后汇报。");
-  await page.getByRole("button", { name: "运行", exact: true }).click();
+  await page.getByLabel("发送").click();
   console.log("run clicked");
 
-  // 轮询等待完成：运行中… -> 运行
+  // 轮询等待完成：运行中按钮是「停止运行」，结束变回「发送」
+  await page.waitForSelector('button[aria-label="停止运行"]', { timeout: 20000 });
   const t0 = Date.now();
   let finished = false;
   while (Date.now() - t0 < 240000) {
     await page.waitForTimeout(3000);
-    const btn = await page.getByRole("button", { name: /运行$|运行中/ }).first().innerText();
-    if (btn.trim() === "运行") { finished = true; break; }
+    if ((await page.locator('button[aria-label="发送"]').count()) > 0) {
+      finished = true;
+      break;
+    }
   }
   await page.screenshot({ path: "shots/agents-run-done.png", fullPage: true });
   const text = await page.locator("body").innerText();

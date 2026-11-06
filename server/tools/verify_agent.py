@@ -58,7 +58,7 @@ def main() -> None:
     TOKEN = data["token"]
 
     # ---- 项目 API ----
-    call("DELETE", "/api/projects/%E8%83%BD%E5%8A%9B%E9%AA%8C%E8%AF%81")  # 清理上次残留
+    call("DELETE", "/api/projects/能力验证")  # 清理上次残留（call 内部会统一编码）
     code, created = call("POST", "/api/projects", {"name": "能力验证", "template": "python", "description": "冒烟"})
     check("创建项目", code == 200 and created.get("project"), str(created))
     pid = created.get("project", "")

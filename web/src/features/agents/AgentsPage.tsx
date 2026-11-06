@@ -1,62 +1,32 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  FileText,
+  Globe,
+  PanelLeft,
+  PanelRight,
+  Presentation,
+  Terminal,
+} from "lucide-react";
 import { readSseStream } from "@/features/chat/sse-parser";
-import { Markdown } from "@/features/chat/components/Markdown";
 import { PreviewPanel } from "@/features/browser/PreviewPanel";
 import { tabForPath, type BrowserState } from "@/features/browser/types";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import {
-  ChevronDown,
-  Download,
-  Eye,
-  FileText,
-  FolderPlus,
-  Globe,
-  MonitorPlay,
-  Presentation,
-  RefreshCw,
-  Terminal,
-  Trash2,
-} from "lucide-react";
 import { cn } from "@/lib/utils";
+import { TaskSidebar } from "./components/TaskSidebar";
+import { Composer } from "./components/Composer";
+import { AssistantTurn } from "./components/AssistantTurn";
+import {
+  type AgentRunItem,
+  type AgentStep,
+  type Artifact,
+  type KbInfo,
+  type ProjectInfo,
+  type ToolInfo,
+  type TreeNode,
+} from "./types";
 
-interface ToolInfo {
-  id: string;
-  name: string;
-  description: string;
-  group: string;
-  tools?: string[];
-  default?: boolean;
-}
-
-interface AgentStep {
-  kind: "tool_call" | "tool_result";
-  name: string;
-  args?: string;
-  content?: string;
-  duration_ms?: number | null;
-}
-
-interface Artifact {
-  path: string;
-  kind?: string;
-}
-
-interface KbInfo {
-  id: string;
-  name: string;
-  document_count: number;
-}
-
-interface ProjectInfo {
-  id: string;
-  name: string;
-  files: number;
-  size: string;
-  updated_at: string;
-}
-
+const PANEL_WIDTH_KEY = "einstein.agent.panelWidth";
+const SIDEBAR_KEY = "einstein.agent.sidebarOpen";
 
 /** 面板状态 → 独立浏览器页的深链。 */
 function browserUrl(state: BrowserState): string {
@@ -68,70 +38,32 @@ function browserUrl(state: BrowserState): string {
   return `/browser?${query.toString()}`;
 }
 
-interface TreeNode {
-  path: string;
-  type: "file" | "dir";
-  size?: string;
-}
-
-interface AgentRunItem {
-  id: string;
-  task: string;
-  tool_ids: string[];
-  steps: AgentStep[];
-  answer: string;
-  status: string;
-  created_at: string;
-  project?: string;
-  artifacts?: Artifact[];
-}
-
-const TOOL_LABELS: Record<string, string> = {
-  web_search: "网页搜索",
-  web_fetch: "抓取正文",
-  project_create: "创建项目",
-  fs_write: "写文件",
-  fs_read: "读文件",
-  fs_list: "文件树",
-  code_run: "运行代码",
-  ppt_create: "生成 PPT",
-  calculator: "计算器",
-  current_time: "当前时间",
-  text_stats: "文本统计",
-  kb_search: "知识库检索",
-};
-
-const TOOL_ICONS: Record<string, typeof Globe> = {
-  web_search: Globe,
-  web_fetch: Globe,
-  project_create: FolderPlus,
-  fs_write: FileText,
-  fs_read: FileText,
-  fs_list: FileText,
-  code_run: Terminal,
-  ppt_create: Presentation,
-};
-
-const toolLabel = (id: string) => TOOL_LABELS[id] ?? id;
-
-const PANEL_WIDTH_KEY = "einstein.agent.panelWidth";
-
-const CAP_ICONS: Record<string, typeof Globe> = {
-  web: Globe,
-  files: FolderPlus,
-  code: Terminal,
-  ppt: Presentation,
-};
-
-function fileName(path: string) {
-  return path.split("/").pop() ?? path;
-}
-
-function downloadUrl(project: string, path: string) {
-  return `/api/projects/${encodeURIComponent(project)}/download?path=${encodeURIComponent(path)}`;
-}
+const SUGGESTIONS = [
+  {
+    icon: Globe,
+    label: "查资料并做成 PPT",
+    prompt: "查一下 2025 年大模型市场的预测数据，写一份调研并做成 PPT",
+  },
+  {
+    icon: FileText,
+    label: "写一份调研报告",
+    prompt: "围绕「企业如何落地 AI 客服」写一份调研报告，保存成 report.md",
+  },
+  {
+    icon: Terminal,
+    label: "做一个能跑的网页",
+    prompt: "在当前项目里做一个单页官网：标题、三个卖点、一个联系表单",
+  },
+  {
+    icon: Presentation,
+    label: "把资料整理成 7 页 PPT",
+    prompt: "把当前项目里的资料整理成一份 7 页的演示文稿",
+  },
+];
 
 export function AgentsPage() {
+  const navigate = useNavigate();
+
   const [toolMeta, setToolMeta] = useState<{ tools: ToolInfo[]; capabilities: ToolInfo[] }>({
     tools: [],
     capabilities: [],
@@ -142,28 +74,38 @@ export function AgentsPage() {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [project, setProject] = useState("");
   const [tree, setTree] = useState<TreeNode[]>([]);
-  const [treeOpen, setTreeOpen] = useState(false);
+  const [runs, setRuns] = useState<AgentRunItem[]>([]);
+  const [query, setQuery] = useState("");
+
   const [task, setTask] = useState("");
+  const [submitted, setSubmitted] = useState("");
   const [steps, setSteps] = useState<AgentStep[]>([]);
-  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [answer, setAnswer] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [runs, setRuns] = useState<AgentRunItem[]>([]);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState<number | null>(null);
+  const startedAtRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   // —— 右侧预览面板（内置浏览器就地打开产物）——
-  const navigate = useNavigate();
   const [preview, setPreview] = useState<BrowserState | null>(null);
   const [previewToken, setPreviewToken] = useState(0);
   const [narrow, setNarrow] = useState(false);
-  const [leftWidth, setLeftWidth] = useState(1200);
-  const leftRef = useRef<HTMLDivElement | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    const saved = window.localStorage.getItem(SIDEBAR_KEY);
+    return saved === null ? true : saved === "1";
+  });
   const [panelWidth, setPanelWidth] = useState(() => {
     const saved = Number(window.localStorage.getItem(PANEL_WIDTH_KEY));
     return Number.isFinite(saved) && saved >= 360 ? saved : 620;
   });
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_KEY, sidebarOpen ? "1" : "0");
+  }, [sidebarOpen]);
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 1180px)");
@@ -173,29 +115,78 @@ export function AgentsPage() {
     return () => mq.removeEventListener("change", sync);
   }, []);
 
-  // 预览面板挤窄左侧时，把「项目 / 运行历史」折到下面，别让正文只剩一条缝
-  useEffect(() => {
-    const node = leftRef.current;
-    if (!node) return;
-    const ro = new ResizeObserver(([entry]) => {
-      if (entry) setLeftWidth(entry.contentRect.width);
-    });
-    ro.observe(node);
-    return () => ro.disconnect();
+  const loadProjects = useCallback(async () => {
+    const res = await fetch("/api/projects");
+    setProjects(await res.json());
   }, []);
+
+  const loadRuns = useCallback(async () => {
+    const res = await fetch("/api/agent/runs");
+    setRuns(await res.json());
+  }, []);
+
+  const loadTree = useCallback(async (pid: string) => {
+    if (!pid) {
+      setTree([]);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(pid)}/tree`);
+      if (!res.ok) {
+        setTree([]);
+        return;
+      }
+      const data = (await res.json()) as { entries: TreeNode[] };
+      setTree(data.entries);
+    } catch {
+      setTree([]);
+    }
+  }, []);
+
+  const selectProject = useCallback(
+    (pid: string) => {
+      setProject(pid);
+      void loadTree(pid);
+    },
+    [loadTree],
+  );
+
+  useEffect(() => {
+    void fetch("/api/agent/tools")
+      .then((r) => r.json())
+      .then((d: { tools: ToolInfo[]; capabilities: ToolInfo[] }) => {
+        setToolMeta(d);
+        setCaps(d.capabilities.filter((c) => c.default).map((c) => c.id));
+      });
+    void fetch("/api/kb").then((r) => r.json()).then(setKbs);
+    void loadProjects();
+    void loadRuns();
+  }, [loadProjects, loadRuns]);
+
+  // 还没选过项目就自动选最近更新的一个，预览入口不用干等用户手动选
+  useEffect(() => {
+    if (project || projects.length === 0) return;
+    const latest = [...projects].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+    if (latest[0]?.id) selectProject(latest[0].id);
+  }, [projects, project, selectProject]);
 
   const openFile = useCallback(
     (filePath: string, projectId?: string) => {
       const pid = projectId || project;
       if (!pid) return;
       setPreview({ tab: tabForPath(filePath), project: pid, path: filePath, url: "" });
+      if (window.innerWidth < 1500) setSidebarOpen(false);
     },
     [project],
   );
 
-  const openProject = useCallback((pid: string) => {
-    setPreview({ tab: "artifact", project: pid, path: "", url: "" });
-  }, []);
+  const openProject = useCallback(
+    (pid: string) => {
+      setPreview({ tab: "artifact", project: pid, path: "", url: "" });
+      if (window.innerWidth < 1500) setSidebarOpen(false);
+    },
+    [],
+  );
 
   const patchPreview = useCallback((patch: Partial<BrowserState>) => {
     setPreview((prev) => (prev ? { ...prev, ...patch } : prev));
@@ -225,94 +216,37 @@ export function AgentsPage() {
     window.addEventListener("mouseup", up);
   };
 
-  const loadProjects = useCallback(async () => {
-    const res = await fetch("/api/projects");
-    setProjects(await res.json());
-  }, []);
-
-  // 还没选过项目就自动选最近更新的一个，预览入口不用干等用户手动选
-  useEffect(() => {
-    if (project || projects.length === 0) return;
-    const latest = [...projects].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
-    if (latest[0]?.id) selectProject(latest[0].id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, project]);
-
-  const loadRuns = useCallback(async () => {
-    const res = await fetch("/api/agent/runs");
-    setRuns(await res.json());
-  }, []);
-
-  useEffect(() => {
-    void fetch("/api/agent/tools")
-      .then((r) => r.json())
-      .then((d: { tools: ToolInfo[]; capabilities: ToolInfo[] }) => {
-        setToolMeta(d);
-        setCaps(d.capabilities.filter((c) => c.default).map((c) => c.id));
-      });
-    void fetch("/api/kb").then((r) => r.json()).then(setKbs);
-    void loadProjects();
-    void loadRuns();
-  }, [loadProjects, loadRuns]);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [steps, answer, artifacts]);
-
-  const loadTree = useCallback(async (pid: string) => {
-    if (!pid) {
-      setTree([]);
-      return;
-    }
-    try {
-      const res = await fetch(`/api/projects/${encodeURIComponent(pid)}/tree`);
-      if (!res.ok) {
-        setTree([]);
-        return;
-      }
-      const data = (await res.json()) as { entries: TreeNode[] };
-      setTree(data.entries);
-    } catch {
-      setTree([]);
-    }
-  }, []);
-
-  const selectProject = (pid: string) => {
-    setProject(pid);
-    setTreeOpen(!!pid);
-    void loadTree(pid);
-  };
-
-  const toggleCap = (id: string) => {
-    setCaps((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]));
-  };
-
-  const toggleKb = (id: string) => {
-    setSelectedKbs((prev) => (prev.includes(id) ? prev.filter((k) => k !== id) : [...prev, id]));
-  };
-
-  const capabilityTools = caps.flatMap((capId) => {
-    const cap = toolMeta.capabilities.find((c) => c.id === capId);
-    return cap?.tools ?? [];
-  });
+  const capabilityTools = useMemo(
+    () =>
+      caps.flatMap((capId) => toolMeta.capabilities.find((c) => c.id === capId)?.tools ?? []),
+    [caps, toolMeta.capabilities],
+  );
 
   const run = useCallback(
     async (taskText: string) => {
-      if (!taskText.trim() || running) return;
+      const text = taskText.trim();
+      if (!text || running) return;
+      setSubmitted(text);
+      setActiveRunId(null);
       setSteps([]);
       setArtifacts([]);
       setAnswer("");
       setError(null);
+      setElapsed(null);
       setRunning(true);
+      startedAtRef.current = Date.now();
+      const controller = new AbortController();
+      abortRef.current = controller;
       try {
         const res = await fetch("/api/agent/run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
-            task: taskText.trim(),
+            task: text,
             tool_ids: capabilityTools,
             kb_ids: selectedKbs,
-            project: project,
+            project,
           }),
         });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
@@ -327,8 +261,12 @@ export function AgentsPage() {
             case "artifact": {
               const { artifact } = raw as { artifact: Artifact };
               setArtifacts((prev) => [...prev, artifact]);
-              // 产物一落盘就让右侧面板跟上
               setPreviewToken((n) => n + 1);
+              break;
+            }
+            case "delta": {
+              const { text: chunk } = raw as { text: string };
+              setAnswer((prev) => prev + chunk);
               break;
             }
             case "done": {
@@ -348,11 +286,6 @@ export function AgentsPage() {
               }
               break;
             }
-            case "delta": {
-              const { text } = raw as { text: string };
-              setAnswer((prev) => prev + text);
-              break;
-            }
             case "error":
               setError((raw as { message: string }).message);
               break;
@@ -363,12 +296,62 @@ export function AgentsPage() {
           setError(`请求失败：${(err as Error).message}`);
         }
       } finally {
+        abortRef.current = null;
         setRunning(false);
+        setElapsed(Date.now() - startedAtRef.current);
         void loadRuns();
       }
     },
-    [capabilityTools, selectedKbs, project, running, loadRuns, loadProjects, loadTree, openFile],
+    [
+      running,
+      capabilityTools,
+      selectedKbs,
+      project,
+      loadProjects,
+      loadRuns,
+      loadTree,
+      selectProject,
+      openFile,
+    ],
   );
+
+  const submit = () => {
+    const text = task;
+    if (!text.trim() || running) return;
+    setTask("");
+    void run(text);
+  };
+
+  const stop = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setRunning(false);
+    setElapsed(Date.now() - startedAtRef.current);
+  };
+
+  const newTask = () => {
+    if (running) return;
+    setSubmitted("");
+    setSteps([]);
+    setArtifacts([]);
+    setAnswer("");
+    setError(null);
+    setElapsed(null);
+    setActiveRunId(null);
+    setTask("");
+  };
+
+  const selectRun = (item: AgentRunItem) => {
+    if (running) return;
+    setSubmitted(item.task);
+    setSteps(item.steps ?? []);
+    setAnswer(item.answer ?? "");
+    setArtifacts(item.artifacts ?? []);
+    setError(null);
+    setElapsed(null);
+    setActiveRunId(item.id);
+    if (item.project && item.project !== project) selectProject(item.project);
+  };
 
   const createProject = async () => {
     const name = window.prompt("项目名称（字母/数字/中文/连字符）");
@@ -385,337 +368,188 @@ export function AgentsPage() {
     }
   };
 
-  const deleteProject = async (pid: string) => {
-    if (!window.confirm(`删除项目「${pid}」及其全部文件？此操作不可恢复。`)) return;
-    await fetch(`/api/projects/${encodeURIComponent(pid)}`, { method: "DELETE" });
-    if (project === pid) selectProject("");
+  const deleteProject = async () => {
+    if (!project) return;
+    if (!window.confirm(`删除项目「${project}」及其全部文件？此操作不可恢复。`)) return;
+    await fetch(`/api/projects/${encodeURIComponent(project)}`, { method: "DELETE" });
+    selectProject("");
     void loadProjects();
   };
 
+  // 有新内容就贴底
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: running ? "auto" : "smooth" });
+  }, [steps, answer, artifacts, running]);
+
+  const empty = !submitted && steps.length === 0 && !answer && !error;
+
+  useEffect(() => {
+    if (!empty) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "/" && !(e.target as HTMLElement)?.closest("textarea, input")) {
+        e.preventDefault();
+        document.querySelector<HTMLTextAreaElement>("[data-agent-composer]")?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [empty]);
+
+  const title = submitted ? submitted : "新任务";
+
+  const composer = (
+    <Composer
+      value={task}
+      onChange={setTask}
+      onSubmit={submit}
+      onStop={stop}
+      running={running}
+      capabilities={toolMeta.capabilities}
+      caps={caps}
+      onToggleCap={(id) =>
+        setCaps((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]))
+      }
+      kbs={kbs}
+      selectedKbs={selectedKbs}
+      onToggleKb={(id) =>
+        setSelectedKbs((prev) => (prev.includes(id) ? prev.filter((k) => k !== id) : [...prev, id]))
+      }
+      projects={projects}
+      project={project}
+      onSelectProject={selectProject}
+      onCreateProject={() => void createProject()}
+      autoFocus={empty}
+    />
+  );
+
   return (
-    <div className="relative flex h-full min-h-0 overflow-hidden">
-      <div ref={leftRef} className="min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[1100px] space-y-6 px-8 py-8">
-        <div>
-          <h1 className="text-lg font-medium">智能体工作台</h1>
-          <p className="mt-1 text-[13px] text-secondary">
-            工作型智能体：自主联网查资料、创建项目写文件、运行代码验证、直接产出 PPT。过程与产物全程可见。
-          </p>
-        </div>
-
-        <div
-          className={cn(
-            "grid items-start gap-6",
-            leftWidth < 1000 ? "grid-cols-1" : "grid-cols-[1fr_320px]",
-          )}
-        >
-          {/* 左：能力 + 任务 + 过程 */}
-          <div className="space-y-6">
-            <Card className="p-5">
-              <h3 className="text-[13px] font-medium">能力</h3>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                {toolMeta.capabilities.map((cap) => {
-                  const Icon = CAP_ICONS[cap.id] ?? Globe;
-                  const on = caps.includes(cap.id);
-                  return (
-                    <button
-                      key={cap.id}
-                      onClick={() => toggleCap(cap.id)}
-                      className={cn(
-                        "flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-left transition-colors duration-150",
-                        on ? "border-brand bg-brand-soft" : "border-line hover:border-line-strong",
-                      )}
-                    >
-                      <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", on ? "text-brand" : "text-tertiary")} strokeWidth={1.75} />
-                      <div>
-                        <div className={cn("text-[13px]", on ? "text-brand" : "text-primary")}>{cap.name}</div>
-                        <div className="text-xs text-tertiary">{cap.description}</div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-              {kbs.length > 0 && (
-                <div className="mt-4 border-t border-line pt-4">
-                  <h3 className="text-[13px] font-medium">
-                    知识库<span className="ml-2 font-normal text-tertiary">选中后自动启用检索工具</span>
-                  </h3>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {kbs.map((k) => (
-                      <button
-                        key={k.id}
-                        onClick={() => toggleKb(k.id)}
-                        className={cn(
-                          "rounded-lg border px-3 py-1.5 text-[13px] transition-colors duration-150",
-                          selectedKbs.includes(k.id)
-                            ? "border-brand bg-brand-soft text-brand"
-                            : "border-line text-primary hover:border-line-strong",
-                        )}
-                      >
-                        {k.name}
-                        <span className="ml-1.5 text-xs text-tertiary">{k.document_count}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </Card>
-
-            <Card className="flex items-end gap-2 p-3">
-              <textarea
-                value={task}
-                onChange={(e) => setTask(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    void run(task);
-                  }
-                }}
-                placeholder="给智能体一个任务，例如：查一下 2025 年大模型市场的预测数据，写份调研并做成 PPT"
-                rows={2}
-                className="max-h-40 flex-1 resize-none bg-transparent px-2 text-sm outline-none placeholder:text-tertiary"
-              />
-              <Button disabled={running || !task.trim()} onClick={() => void run(task)}>
-                {running ? "运行中…" : "运行"}
-              </Button>
-            </Card>
-
-            {(steps.length > 0 || answer || error || artifacts.length > 0) && (
-              <Card className="space-y-2 p-5">
-                <h3 className="text-[13px] font-medium">运行过程</h3>
-                {steps.map((s, i) => {
-                  const Icon = TOOL_ICONS[s.name] ?? FileText;
-                  const isCall = s.kind === "tool_call";
-                  const detail = isCall ? s.args : s.content;
-                  const open = expanded[i];
-                  return (
-                    <div
-                      key={i}
-                      className={cn("rounded-lg px-3 py-2", isCall ? "bg-brand-soft" : "bg-surface-3")}
-                    >
-                      <button
-                        className="flex w-full items-center gap-2 text-left"
-                        onClick={() => setExpanded((prev) => ({ ...prev, [i]: !prev[i] }))}
-                      >
-                        <Icon
-                          className={cn("h-3.5 w-3.5 shrink-0", isCall ? "text-brand" : "text-success")}
-                          strokeWidth={1.75}
-                        />
-                        <span className={cn("shrink-0 text-[13px]", isCall ? "text-brand" : "text-success")}>
-                          {isCall ? toolLabel(s.name) : `完成 · ${toolLabel(s.name)}`}
-                        </span>
-                        {!isCall && s.duration_ms != null && (
-                          <span className="shrink-0 text-xs text-tertiary">{s.duration_ms}ms</span>
-                        )}
-                        <span className="min-w-0 flex-1 truncate text-xs text-secondary">
-                          {isCall ? detail : (detail ?? "").replace(/\s+/g, " ").slice(0, 120)}
-                        </span>
-                        <ChevronDown
-                          className={cn("h-3.5 w-3.5 shrink-0 text-tertiary transition-transform", open && "rotate-180")}
-                          strokeWidth={1.75}
-                        />
-                      </button>
-                      {open && (
-                        <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-all rounded-md bg-surface-2 p-2.5 text-xs leading-relaxed text-secondary">
-                          {detail}
-                        </pre>
-                      )}
-                    </div>
-                  );
-                })}
-
-                {artifacts.length > 0 && (
-                  <div className="mt-3 rounded-lg border border-line p-3">
-                    <p className="mb-2 text-xs text-tertiary">产出物</p>
-                    <div className="flex flex-wrap gap-2">
-                      {artifacts.map((a) => (
-                        <span
-                          key={a.path}
-                          className="inline-flex items-center rounded-lg border border-line text-[13px] text-primary transition-colors duration-150 hover:border-brand"
-                        >
-                          {project ? (
-                            <button
-                              onClick={() => openFile(a.path)}
-                              className="inline-flex items-center gap-1.5 py-1.5 pl-2.5 text-primary hover:text-brand"
-                              title="在右侧预览（不改页面）"
-                            >
-                              <Presentation className="h-3.5 w-3.5 text-brand" strokeWidth={1.75} />
-                              {fileName(a.path)}
-                            </button>
-                          ) : (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5">
-                              <Presentation className="h-3.5 w-3.5 text-brand" strokeWidth={1.75} />
-                              {fileName(a.path)}
-                            </span>
-                          )}
-                          <a
-                            href={project ? downloadUrl(project, a.path) : undefined}
-                            title="下载"
-                            className="border-l border-line px-2 py-1.5 text-tertiary hover:text-brand"
-                          >
-                            <Download className="h-3 w-3" strokeWidth={1.75} />
-                          </a>
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {answer && (
-                  <div className="mt-3 border-t border-line pt-3">
-                    <p className="mb-1 text-xs text-tertiary">最终回答</p>
-                    <Markdown content={answer} />
-                  </div>
-                )}
-                {error && (
-                  <p className="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>
-                )}
-                <div ref={bottomRef} />
-              </Card>
-            )}
-          </div>
-
-          {/* 右：项目面板 */}
-          <div className="space-y-4">
-            <Card className="p-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-[13px] font-medium">项目</h3>
-                <div className="flex items-center gap-0.5">
-                  <button
-                    onClick={() => project && openProject(project)}
-                    disabled={!project}
-                    title="在右侧内置浏览器里打开项目"
-                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-secondary transition-colors duration-150 hover:bg-surface-3 hover:text-primary disabled:opacity-40"
-                  >
-                    <Eye className="h-3.5 w-3.5" strokeWidth={1.75} />
-                    预览
-                  </button>
-                  <button
-                    onClick={() => void createProject()}
-                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-secondary transition-colors duration-150 hover:bg-surface-3 hover:text-primary"
-                  >
-                    <FolderPlus className="h-3.5 w-3.5" strokeWidth={1.75} />
-                    新建
-                  </button>
-                </div>
-              </div>
-              <select
-                value={project}
-                onChange={(e) => selectProject(e.target.value)}
-                className="mt-2.5 h-9 w-full rounded-lg border border-line bg-surface-2 px-2 text-[13px] outline-none focus:border-line-strong"
-              >
-                <option value="">运行时由智能体创建</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}（{p.files} 文件 · {p.size}）
-                  </option>
-                ))}
-              </select>
-
-              {project && treeOpen && (
-                <div className="mt-3 border-t border-line pt-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs text-tertiary">文件树</p>
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => void loadTree(project)}
-                        title="刷新"
-                        className="rounded p-1 text-tertiary transition-colors duration-150 hover:bg-surface-3 hover:text-primary"
-                      >
-                        <RefreshCw className="h-3 w-3" strokeWidth={1.75} />
-                      </button>
-                      <a
-                        href={`/api/projects/${encodeURIComponent(project)}/archive`}
-                        title="下载整个项目（zip）"
-                        className="rounded p-1 text-tertiary transition-colors duration-150 hover:bg-surface-3 hover:text-primary"
-                      >
-                        <Download className="h-3 w-3" strokeWidth={1.75} />
-                      </a>
-                      <button
-                        onClick={() => void deleteProject(project)}
-                        title="删除项目"
-                        className="rounded p-1 text-tertiary transition-colors duration-150 hover:bg-danger/10 hover:text-danger"
-                      >
-                        <Trash2 className="h-3 w-3" strokeWidth={1.75} />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="mt-1.5 max-h-72 space-y-0.5 overflow-y-auto">
-                    {tree.length === 0 && <p className="px-1 py-2 text-xs text-tertiary">（空项目）</p>}
-                    {tree.map((node) => {
-                      const depth = node.path.split("/").length - 1;
-                      if (node.type === "dir") {
-                        return (
-                          <div
-                            key={node.path}
-                            className="truncate rounded px-1.5 py-1 text-xs text-secondary"
-                            style={{ paddingLeft: `${8 + depth * 14}px` }}
-                          >
-                            📁 {node.path.split("/").pop()}
-                          </div>
-                        );
-                      }
-                      return (
-                        <div
-                          key={node.path}
-                          className="group flex items-center gap-1 rounded pr-1 transition-colors duration-150 hover:bg-surface-3"
-                          style={{ paddingLeft: `${8 + depth * 14}px` }}
-                        >
-                          <button
-                            onClick={() => openFile(node.path, project)}
-                            className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded py-1 text-left text-xs text-primary hover:text-brand"
-                            title="在右侧预览（不改页面）"
-                          >
-                            <span className="truncate">{node.path.split("/").pop()}</span>
-                            <span className="shrink-0 text-tertiary">{node.size}</span>
-                          </button>
-                          <a
-                            href={downloadUrl(project, node.path)}
-                            title="下载"
-                            className="shrink-0 rounded p-0.5 text-tertiary opacity-0 transition-opacity hover:text-brand group-hover:opacity-100"
-                          >
-                            <Download className="h-3 w-3" strokeWidth={1.75} />
-                          </a>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </Card>
-
-            {runs.length > 0 && (
-              <Card className="p-4">
-                <h3 className="text-[13px] font-medium">运行历史（{runs.length}）</h3>
-                <div className="mt-2.5 max-h-96 space-y-1 overflow-y-auto">
-                  {runs.map((r) => (
-                    <button
-                      key={r.id}
-                      onClick={() => {
-                        setSteps(r.steps);
-                        setAnswer(r.answer);
-                        setArtifacts(r.artifacts ?? []);
-                        setError(null);
-                        setTask(r.task);
-                        if (r.project) selectProject(r.project);
-                      }}
-                      className="block w-full rounded-lg px-2.5 py-2 text-left transition-colors duration-150 hover:bg-surface-3"
-                    >
-                      <div className="truncate text-[13px] text-primary">{r.task}</div>
-                      <div className="mt-0.5 flex items-center gap-1.5 text-xs text-tertiary">
-                        <MonitorPlay className="h-3 w-3" strokeWidth={1.75} />
-                        {new Date(r.created_at).toLocaleString("zh-CN")} · {r.steps.filter((s) => s.kind === "tool_call").length} 次工具
-                        {r.project && ` · ${r.project}`}
-                        {r.artifacts && r.artifacts.length > 0 && ` · ${r.artifacts.length} 产物`}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </Card>
-            )}
-          </div>
-        </div>
+    <div className="relative flex h-full min-h-0 overflow-hidden bg-page">
+      <div
+        className={cn(
+          "shrink-0 overflow-hidden transition-[width] duration-200 ease-out",
+          sidebarOpen ? "w-[264px]" : "w-0",
+        )}
+      >
+        <TaskSidebar
+          runs={runs}
+          activeRunId={activeRunId}
+          onSelectRun={selectRun}
+          onNewTask={newTask}
+          query={query}
+          onQuery={setQuery}
+          project={project}
+          projects={projects}
+          onSelectProject={selectProject}
+          onCreateProject={() => void createProject()}
+          onDeleteProject={() => void deleteProject()}
+          onRefreshTree={() => void loadTree(project)}
+          onPreviewProject={() => project && openProject(project)}
+          tree={tree}
+          onOpenFile={(path) => openFile(path)}
+        />
       </div>
+
+      <div className="flex min-w-0 flex-1 flex-col bg-surface-1">
+        {/* 顶栏：标题 + 右侧操作 */}
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
+          <button
+            onClick={() => setSidebarOpen((v) => !v)}
+            title={sidebarOpen ? "收起任务栏" : "展开任务栏"}
+            className="rounded-md p-1.5 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary"
+          >
+            <PanelLeft size={15} strokeWidth={1.9} />
+          </button>
+
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13px] font-medium text-primary">{title}</div>
+            <div className="truncate text-[11px] text-tertiary">
+              {project ? `项目 · ${project}` : "未绑定项目"} · {caps.length} 项能力
+              {selectedKbs.length > 0 && ` · ${selectedKbs.length} 个知识库`}
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1">
+            <button
+              onClick={() => project && openProject(project)}
+              disabled={!project}
+              className="rounded-md px-2 py-1 text-[12px] text-secondary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:opacity-40"
+            >
+              预览
+            </button>
+            <button
+              onClick={() => (preview ? setPreview(null) : project && openProject(project))}
+              disabled={!project}
+              title={preview ? "收起预览面板" : "打开预览面板"}
+              className="rounded-md p-1.5 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:opacity-40"
+            >
+              <PanelRight size={15} strokeWidth={1.9} />
+            </button>
+          </div>
+        </header>
+
+        {empty ? (
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6">
+            <div className="w-full max-w-[720px] pb-6">
+              <div className="mb-6 flex flex-col items-center text-center">
+                <span className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-soft text-[17px] font-semibold text-brand-deep">
+                  E
+                </span>
+                <h1 className="text-[22px] font-medium tracking-tight text-primary">
+                  今天想做点什么？
+                </h1>
+                <p className="mt-1.5 text-[13px] text-secondary">
+                  把任务交给智能体：自己查资料、写文件、跑代码，直接产出可下载的成果
+                </p>
+              </div>
+
+              <div className="mb-5 flex flex-wrap justify-center gap-1.5">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s.label}
+                    onClick={() => setTask(s.prompt)}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-1 px-3 py-1.5 text-[12px] text-secondary transition-colors duration-150 hover:border-line-strong hover:text-primary"
+                  >
+                    <s.icon size={12.5} strokeWidth={1.9} className="text-tertiary" />
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+
+              {composer}
+            </div>
+          </div>
+        ) : (
+          <>
+            <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+              <div className="mx-auto w-full max-w-[848px] px-6 pb-4 pt-6">
+                {/* 用户消息 */}
+                <div className="mb-5 flex justify-end">
+                  <div className="max-w-[85%] whitespace-pre-wrap rounded-[16px] rounded-tr-[6px] bg-surface-3 px-4 py-2.5 text-[14px] leading-[22px] text-primary">
+                    {submitted}
+                  </div>
+                </div>
+
+                <AssistantTurn
+                  steps={steps}
+                  answer={answer}
+                  artifacts={artifacts}
+                  running={running}
+                  error={error}
+                  project={project}
+                  elapsedMs={elapsed}
+                  onOpenFile={(path) => openFile(path)}
+                  onRerun={() => void run(submitted)}
+                />
+              </div>
+            </div>
+
+            <div className="shrink-0 px-6 pb-3">
+              <div className="mx-auto w-full max-w-[848px]">{composer}</div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* 右侧预览面板：内置浏览器就地打开产物，不用离开当前任务 */}

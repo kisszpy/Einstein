@@ -1,0 +1,147 @@
+/** 智能体页的共享类型与展示映射。 */
+
+import {
+  Calculator,
+  Clock,
+  Database,
+  FileText,
+  FolderPlus,
+  Globe,
+  Presentation,
+  Terminal,
+  Type,
+  type LucideIcon,
+} from "lucide-react";
+
+export interface ToolInfo {
+  id: string;
+  name: string;
+  description: string;
+  group: string;
+  tools?: string[];
+  default?: boolean;
+}
+
+export interface AgentStep {
+  kind: "tool_call" | "tool_result";
+  name: string;
+  args?: string;
+  content?: string;
+  duration_ms?: number | null;
+}
+
+export interface Artifact {
+  path: string;
+  kind?: string;
+}
+
+export interface KbInfo {
+  id: string;
+  name: string;
+  document_count: number;
+}
+
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  files: number;
+  size: string;
+  updated_at: string;
+}
+
+export interface TreeNode {
+  path: string;
+  type: "file" | "dir";
+  size?: string;
+}
+
+export interface AgentRunItem {
+  id: string;
+  task: string;
+  tool_ids: string[];
+  steps: AgentStep[];
+  answer: string;
+  status: string;
+  created_at: string;
+  project?: string;
+  artifacts?: Artifact[];
+}
+
+export const TOOL_LABELS: Record<string, string> = {
+  web_search: "网页搜索",
+  web_fetch: "抓取正文",
+  project_create: "创建项目",
+  fs_write: "写文件",
+  fs_read: "读文件",
+  fs_list: "查看文件",
+  code_run: "运行代码",
+  ppt_create: "生成 PPT",
+  calculator: "计算",
+  current_time: "读取时间",
+  text_stats: "文本统计",
+  kb_search: "知识库检索",
+};
+
+export const TOOL_ICONS: Record<string, LucideIcon> = {
+  web_search: Globe,
+  web_fetch: Globe,
+  project_create: FolderPlus,
+  fs_write: FileText,
+  fs_read: FileText,
+  fs_list: FileText,
+  code_run: Terminal,
+  ppt_create: Presentation,
+  calculator: Calculator,
+  current_time: Clock,
+  text_stats: Type,
+  kb_search: Database,
+};
+
+export const toolLabel = (id: string) => TOOL_LABELS[id] ?? id;
+export const toolIcon = (id: string) => TOOL_ICONS[id] ?? FileText;
+
+export function fileName(path: string) {
+  return path.split("/").pop() ?? path;
+}
+
+export function downloadUrl(project: string, path: string) {
+  return `/api/projects/${encodeURIComponent(project)}/download?path=${encodeURIComponent(path)}`;
+}
+
+/** 产物类型 → 卡片上的副标题 */
+export function artifactKindLabel(artifact: Artifact): string {
+  const path = artifact.path.toLowerCase();
+  if (path.endsWith(".pptx")) return "演示文稿 · 可编辑";
+  if (path.endsWith(".html")) return "网页 · 可预览";
+  if (path.endsWith(".md")) return "文档 · Markdown";
+  if (path.endsWith(".csv") || path.endsWith(".xlsx")) return "数据表";
+  if (/\.(png|jpg|jpeg|webp|gif|svg)$/.test(path)) return "图片";
+  if (path.endsWith(".pdf")) return "PDF";
+  if (artifact.kind === "web") return "网页";
+  return "文件";
+}
+
+/** 相对时间，侧栏任务列表用。 */
+export function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const diff = Date.now() - then;
+  const minute = 60_000;
+  if (diff < minute) return "刚刚";
+  if (diff < 60 * minute) return `${Math.floor(diff / minute)} 分钟前`;
+  if (diff < 24 * 60 * minute) return `${Math.floor(diff / (60 * minute))} 小时前`;
+  const d = new Date(then);
+  return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+}
+
+/** 侧栏分组：今天 / 昨天 / 更早 */
+export function dayBucket(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const t = d.getTime();
+  if (t >= startOfToday) return "今天";
+  if (t >= startOfToday - 86_400_000) return "昨天";
+  if (t >= startOfToday - 7 * 86_400_000) return "近 7 天";
+  return "更早";
+}
