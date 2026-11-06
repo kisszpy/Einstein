@@ -230,6 +230,14 @@ export function AgentsPage() {
     setProjects(await res.json());
   }, []);
 
+  // 还没选过项目就自动选最近更新的一个，预览入口不用干等用户手动选
+  useEffect(() => {
+    if (project || projects.length === 0) return;
+    const latest = [...projects].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+    if (latest[0]?.id) selectProject(latest[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, project]);
+
   const loadRuns = useCallback(async () => {
     const res = await fetch("/api/agent/runs");
     setRuns(await res.json());

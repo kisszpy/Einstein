@@ -30,9 +30,9 @@ async def issue_ticket(
 
 
 @router.get("/web")
-async def proxy(url: str = Query(min_length=3)) -> Response:
+async def proxy(url: str = Query(min_length=3), ticket: str = Query(default="")) -> Response:
     try:
-        body, ctype, final_url = browser.frame_payload(url)
+        body, ctype, final_url = browser.frame_payload(url, ticket)
     except web.WebError as exc:
         return HTMLResponse(
             browser.error_page(url, str(exc)),
@@ -45,6 +45,23 @@ async def proxy(url: str = Query(min_length=3)) -> Response:
         "Cache-Control": "no-store",
     }
     return Response(content=body, media_type=ctype, headers=headers)
+
+
+@router.get("/asset")
+async def asset(url: str = Query(min_length=3), ticket: str = Query(default="")) -> Response:
+    """单资源代理：CSS/图片/脚本经服务端取回，绕开防盗链与混合内容。
+
+    票据由全站中间件统一校验（/api/browse/ 在预览前缀里，仅放行 GET）。
+    """
+    try:
+        body, ctype, _final = browser.asset_payload(url, ticket)
+    except web.WebError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return Response(
+        content=body,
+        media_type=ctype,
+        headers={"Cache-Control": "public, max-age=300"},
+    )
 
 
 @router.get("/read")

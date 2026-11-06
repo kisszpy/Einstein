@@ -129,7 +129,8 @@ def main() -> int:
     # ---------- 网页代理 ----------
     status, headers, body = request("GET", f"/api/browse/web?url=https://example.com/&ticket={ticket}")
     check("网页代理 200", status == 200 and "<html" in body.lower(), f"{status} {body[:100]}")
-    check("注入 base 保持相对链接", '<base href="https://example.com/' in body, body[:200])
+    check("不插 base（防止代理路径被解析回原站）", "<base" not in body.lower(), body[:200])
+    check("静态资源改写走资产代理", "/api/browse/asset?url=" in body, body[:200])
     check("注入导航桥", "einstein-browser" in body, "bridge missing")
     check("不返回 X-Frame-Options", header_value(headers, "x-frame-options") == "",
           header_value(headers, "x-frame-options"))
