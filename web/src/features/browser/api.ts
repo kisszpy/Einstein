@@ -23,9 +23,15 @@ export function projectTree(project: string): Promise<{ entries: TreeEntry[] }> 
 }
 
 export function readFile(project: string, path: string) {
-  return request<{ path: string; content: string; size?: string }>(
+  // 后端返回 { path, binary, bytes, truncated, text }，这里归一成 content 供编辑器使用
+  return request<{ path: string; binary: boolean; bytes: number; truncated: boolean; text: string }>(
     `/api/projects/${encodeURIComponent(project)}/file?path=${encodeURIComponent(path)}`,
-  );
+  ).then((data) => ({
+    path: data.path,
+    content: data.text ?? "",
+    bytes: data.bytes as number | undefined,
+    truncated: Boolean(data.truncated),
+  }));
 }
 
 export function writeFile(project: string, path: string, content: string) {

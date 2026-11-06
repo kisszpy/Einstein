@@ -67,12 +67,14 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [preview, setPreview] = useState(mode === "markdown");
+  const [truncated, setTruncated] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const editable = mode === "markdown" || mode === "text";
+  const isText = mode === "markdown" || mode === "text";
+  const editable = isText && !truncated;
 
   const load = useCallback(() => {
-    if (!editable) return;
+    if (mode !== "markdown" && mode !== "text") return;
     setLoading(true);
     setError("");
     api
@@ -80,13 +82,14 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
       .then((data) => {
         setContent(data.content);
         setOriginal(data.content);
+        setTruncated(data.truncated);
         setLoading(false);
       })
       .catch((exc: Error) => {
         setError(exc.message);
         setLoading(false);
       });
-  }, [project, path, editable]);
+  }, [project, path, mode]);
 
   useEffect(() => {
     setContent("");
@@ -124,7 +127,7 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
         <span className="min-w-0 flex-1 truncate text-[12.5px] text-secondary" title={path}>
           {path}
         </span>
-        {editable && mode === "markdown" && (
+        {isText && mode === "markdown" && (
           <div className="flex items-center rounded-md border border-line p-0.5 text-[11.5px]">
             <button
               onClick={() => setPreview(true)}
@@ -183,6 +186,12 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
           </button>
         )}
       </div>
+
+      {truncated && (
+        <div className="shrink-0 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-[11.5px] text-warning">
+          文件较大，仅加载前 12000 字符；已切换为只读，编辑请下载后处理
+        </div>
+      )}
 
       {error && (
         <div className="shrink-0 border-b border-danger/30 bg-danger/10 px-3 py-1.5 text-[11.5px] text-danger">
@@ -257,17 +266,18 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
           </div>
         )}
 
-        {editable && preview && mode === "markdown" && (
+        {isText && mode === "markdown" && preview && (
           <div className="h-full overflow-auto px-6 py-5">
             <Markdown content={content || "（空文件）"} />
           </div>
         )}
 
-        {editable && !preview && (
+        {isText && !(mode === "markdown" && preview) && (
           <textarea
             ref={editorRef}
             value={content}
-            onChange={(event) => setContent(event.target.value)}
+            onChange={(event) => !truncated && setContent(event.target.value)}
+            readOnly={truncated}
             spellCheck={false}
             className="h-full w-full resize-none border-0 bg-surface-1 px-4 py-3 font-mono text-[12.5px] leading-relaxed text-primary outline-none"
             placeholder={loading ? "正在读取…" : ""}
