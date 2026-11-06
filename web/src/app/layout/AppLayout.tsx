@@ -1,15 +1,13 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 import {
+  Blocks,
   Bot,
-  Cable,
   Database,
   FlaskConical,
   Globe,
   KeyRound,
   MessagesSquare,
   Settings2,
-  Sparkles,
-  Users,
   type LucideIcon,
 } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
@@ -22,6 +20,8 @@ interface NavEntry {
   to: string;
   label: string;
   icon: LucideIcon;
+  /** 命中这些路径都算激活（聚合入口用，如 专家&技能&MCP） */
+  match?: string[];
 }
 
 const NAV: { title: string; items: NavEntry[] }[] = [
@@ -31,10 +31,13 @@ const NAV: { title: string; items: NavEntry[] }[] = [
       { to: "/chat", label: "对话", icon: MessagesSquare },
       { to: "/browser", label: "浏览器", icon: Globe },
       { to: "/kb", label: "知识库", icon: Database },
-      { to: "/experts", label: "专家", icon: Users },
-      { to: "/skills", label: "技能", icon: Sparkles },
+      {
+        to: "/experts",
+        match: ["/experts", "/skills", "/mcp"],
+        label: "专家 & 技能 & MCP",
+        icon: Blocks,
+      },
       { to: "/agents", label: "智能体", icon: Bot },
-      { to: "/mcp", label: "MCP", icon: Cable },
     ],
   },
   {
@@ -47,40 +50,36 @@ const NAV: { title: string; items: NavEntry[] }[] = [
   },
 ];
 
-function NavItem({ to, label, icon: Icon }: NavEntry) {
+function NavItem({ to, label, icon: Icon, match }: NavEntry) {
+  const { pathname } = useLocation();
+  const isActive = (match ?? [to]).some((p) => pathname === p || pathname.startsWith(`${p}/`));
   return (
-    <NavLink
+    <Link
       to={to}
-      className={({ isActive }) =>
-        cn(
-          "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-[13px] transition-colors duration-150",
-          isActive
-            ? "bg-brand-soft font-medium text-brand"
-            : "text-secondary hover:bg-surface-3 hover:text-primary",
-        )
-      }
-    >
-      {({ isActive }) => (
-        <>
-          <span
-            aria-hidden
-            className={cn(
-              "absolute left-0 top-1/2 h-3.5 w-[2.5px] -translate-y-1/2 rounded-r-full bg-brand transition-opacity duration-150",
-              isActive ? "opacity-100" : "opacity-0",
-            )}
-          />
-          <Icon
-            size={15}
-            strokeWidth={1.75}
-            className={cn(
-              "shrink-0 transition-colors duration-150",
-              isActive ? "text-brand" : "text-tertiary group-hover:text-secondary",
-            )}
-          />
-          <span className="truncate">{label}</span>
-        </>
+      className={cn(
+        "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-[13px] transition-colors duration-150",
+        isActive
+          ? "bg-brand-soft font-medium text-brand"
+          : "text-secondary hover:bg-surface-3 hover:text-primary",
       )}
-    </NavLink>
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "absolute left-0 top-1/2 h-3.5 w-[2.5px] -translate-y-1/2 rounded-r-full bg-brand transition-opacity duration-150",
+          isActive ? "opacity-100" : "opacity-0",
+        )}
+      />
+      <Icon
+        size={15}
+        strokeWidth={1.75}
+        className={cn(
+          "shrink-0 transition-colors duration-150",
+          isActive ? "text-brand" : "text-tertiary group-hover:text-secondary",
+        )}
+      />
+      <span className="truncate">{label}</span>
+    </Link>
   );
 }
 
