@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { readSseStream } from "@/features/chat/sse-parser";
 import { Markdown } from "@/features/chat/components/Markdown";
+import { PreviewPanel } from "@/features/browser/PreviewPanel";
+import { tabForPath, type BrowserState } from "@/features/browser/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   ChevronDown,
   Download,
+  Eye,
   FileText,
   FolderPlus,
   Globe,
@@ -55,10 +58,14 @@ interface ProjectInfo {
 }
 
 
-/** 产物在内置浏览器里打开的路径（pptx 直接进编辑器）。 */
-function browserLink(project: string, path: string): string {
-  const tab = path.toLowerCase().endsWith(".pptx") ? "deck" : "artifact";
-  return `/browser?tab=${tab}&project=${encodeURIComponent(project)}&path=${encodeURIComponent(path)}`;
+/** 面板状态 → 独立浏览器页的深链。 */
+function browserUrl(state: BrowserState): string {
+  const query = new URLSearchParams();
+  query.set("tab", state.tab);
+  if (state.project) query.set("project", state.project);
+  if (state.path) query.set("path", state.path);
+  if (state.url) query.set("url", state.url);
+  return `/browser?${query.toString()}`;
 }
 
 interface TreeNode {
@@ -107,6 +114,8 @@ const TOOL_ICONS: Record<string, typeof Globe> = {
 
 const toolLabel = (id: string) => TOOL_LABELS[id] ?? id;
 
+const PANEL_WIDTH_KEY = "einstein.agent.panelWidth";
+
 const CAP_ICONS: Record<string, typeof Globe> = {
   web: Globe,
   files: FolderPlus,
@@ -143,6 +152,78 @@ export function AgentsPage() {
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<AgentRunItem[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // —— 右侧预览面板（内置浏览器就地打开产物）——
+  const navigate = useNavigate();
+  const [preview, setPreview] = useState<BrowserState | null>(null);
+  const [previewToken, setPreviewToken] = useState(0);
+  const [narrow, setNarrow] = useState(false);
+  const [leftWidth, setLeftWidth] = useState(1200);
+  const leftRef = useRef<HTMLDivElement | null>(null);
+  const [panelWidth, setPanelWidth] = useState(() => {
+    const saved = Number(window.localStorage.getItem(PANEL_WIDTH_KEY));
+    return Number.isFinite(saved) && saved >= 360 ? saved : 620;
+  });
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 1180px)");
+    const sync = () => setNarrow(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  // 预览面板挤窄左侧时，把「项目 / 运行历史」折到下面，别让正文只剩一条缝
+  useEffect(() => {
+    const node = leftRef.current;
+    if (!node) return;
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry) setLeftWidth(entry.contentRect.width);
+    });
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, []);
+
+  const openFile = useCallback(
+    (filePath: string, projectId?: string) => {
+      const pid = projectId || project;
+      if (!pid) return;
+      setPreview({ tab: tabForPath(filePath), project: pid, path: filePath, url: "" });
+    },
+    [project],
+  );
+
+  const openProject = useCallback((pid: string) => {
+    setPreview({ tab: "artifact", project: pid, path: "", url: "" });
+  }, []);
+
+  const patchPreview = useCallback((patch: Partial<BrowserState>) => {
+    setPreview((prev) => (prev ? { ...prev, ...patch } : prev));
+  }, []);
+
+  const startResize = (event: React.MouseEvent) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = panelWidth;
+    const move = (ev: MouseEvent) => {
+      const next = Math.min(Math.max(startWidth + (startX - ev.clientX), 380), window.innerWidth - 460);
+      setPanelWidth(next);
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setPanelWidth((width) => {
+        window.localStorage.setItem(PANEL_WIDTH_KEY, String(Math.round(width)));
+        return width;
+      });
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
 
   const loadProjects = useCallback(async () => {
     const res = await fetch("/api/projects");
@@ -238,13 +319,25 @@ export function AgentsPage() {
             case "artifact": {
               const { artifact } = raw as { artifact: Artifact };
               setArtifacts((prev) => [...prev, artifact]);
+              // 产物一落盘就让右侧面板跟上
+              setPreviewToken((n) => n + 1);
               break;
             }
             case "done": {
               const d = raw as { project?: string; artifacts?: Artifact[] };
+              const pid = d.project || project;
               if (d.project && d.project !== project) selectProject(d.project);
               else if (d.project) void loadTree(d.project);
+              setPreviewToken((n) => n + 1);
               void loadProjects();
+              // 跑完自动把产物摊开——和 WorkBuddy 一样，不用用户再点一次
+              const produced = d.artifacts ?? [];
+              if (produced.length > 0 && pid) {
+                const pick =
+                  [...produced].reverse().find((a) => a.path.toLowerCase().endsWith(".pptx")) ??
+                  produced[produced.length - 1];
+                if (pick) openFile(pick.path, pid);
+              }
               break;
             }
             case "delta": {
@@ -266,7 +359,7 @@ export function AgentsPage() {
         void loadRuns();
       }
     },
-    [capabilityTools, selectedKbs, project, running, loadRuns, loadProjects, loadTree],
+    [capabilityTools, selectedKbs, project, running, loadRuns, loadProjects, loadTree, openFile],
   );
 
   const createProject = async () => {
@@ -292,8 +385,9 @@ export function AgentsPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[1100px] space-y-6 px-8 py-8">
+    <div className="relative flex h-full min-h-0 overflow-hidden">
+      <div ref={leftRef} className="min-w-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-[1100px] space-y-6 px-8 py-8">
         <div>
           <h1 className="text-lg font-medium">智能体工作台</h1>
           <p className="mt-1 text-[13px] text-secondary">
@@ -301,7 +395,12 @@ export function AgentsPage() {
           </p>
         </div>
 
-        <div className="grid grid-cols-[1fr_320px] items-start gap-6">
+        <div
+          className={cn(
+            "grid items-start gap-6",
+            leftWidth < 1000 ? "grid-cols-1" : "grid-cols-[1fr_320px]",
+          )}
+        >
           {/* 左：能力 + 任务 + 过程 */}
           <div className="space-y-6">
             <Card className="p-5">
@@ -427,14 +526,14 @@ export function AgentsPage() {
                           className="inline-flex items-center rounded-lg border border-line text-[13px] text-primary transition-colors duration-150 hover:border-brand"
                         >
                           {project ? (
-                            <Link
-                              to={browserLink(project, a.path)}
+                            <button
+                              onClick={() => openFile(a.path)}
                               className="inline-flex items-center gap-1.5 py-1.5 pl-2.5 text-primary hover:text-brand"
-                              title="在内置浏览器中打开"
+                              title="在右侧预览（不改页面）"
                             >
                               <Presentation className="h-3.5 w-3.5 text-brand" strokeWidth={1.75} />
                               {fileName(a.path)}
-                            </Link>
+                            </button>
                           ) : (
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5">
                               <Presentation className="h-3.5 w-3.5 text-brand" strokeWidth={1.75} />
@@ -473,13 +572,24 @@ export function AgentsPage() {
             <Card className="p-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-[13px] font-medium">项目</h3>
-                <button
-                  onClick={() => void createProject()}
-                  className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-secondary transition-colors duration-150 hover:bg-surface-3 hover:text-primary"
-                >
-                  <FolderPlus className="h-3.5 w-3.5" strokeWidth={1.75} />
-                  新建
-                </button>
+                <div className="flex items-center gap-0.5">
+                  <button
+                    onClick={() => project && openProject(project)}
+                    disabled={!project}
+                    title="在右侧内置浏览器里打开项目"
+                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-secondary transition-colors duration-150 hover:bg-surface-3 hover:text-primary disabled:opacity-40"
+                  >
+                    <Eye className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    预览
+                  </button>
+                  <button
+                    onClick={() => void createProject()}
+                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-secondary transition-colors duration-150 hover:bg-surface-3 hover:text-primary"
+                  >
+                    <FolderPlus className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    新建
+                  </button>
+                </div>
               </div>
               <select
                 value={project}
@@ -543,14 +653,14 @@ export function AgentsPage() {
                           className="group flex items-center gap-1 rounded pr-1 transition-colors duration-150 hover:bg-surface-3"
                           style={{ paddingLeft: `${8 + depth * 14}px` }}
                         >
-                          <Link
-                            to={browserLink(project, node.path)}
-                            className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded py-1 text-xs text-primary hover:text-brand"
-                            title="在内置浏览器中打开"
+                          <button
+                            onClick={() => openFile(node.path, project)}
+                            className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded py-1 text-left text-xs text-primary hover:text-brand"
+                            title="在右侧预览（不改页面）"
                           >
                             <span className="truncate">{node.path.split("/").pop()}</span>
                             <span className="shrink-0 text-tertiary">{node.size}</span>
-                          </Link>
+                          </button>
                           <a
                             href={downloadUrl(project, node.path)}
                             title="下载"
@@ -598,6 +708,38 @@ export function AgentsPage() {
           </div>
         </div>
       </div>
+      </div>
+
+      {/* 右侧预览面板：内置浏览器就地打开产物，不用离开当前任务 */}
+      {preview && (
+        <>
+          {!narrow && (
+            <div
+              onMouseDown={startResize}
+              title="拖动调整宽度"
+              className="group relative z-10 w-1 shrink-0 cursor-col-resize bg-line transition-colors hover:bg-brand/50"
+            >
+              <span className="absolute inset-y-0 -left-1.5 -right-1.5" />
+            </div>
+          )}
+          <aside
+            aria-label="产物预览面板"
+            className={cn(
+              "flex min-h-0 flex-col bg-surface-1",
+              narrow ? "absolute inset-0 z-30" : "shrink-0 border-l border-line",
+            )}
+            style={narrow ? undefined : { width: panelWidth }}
+          >
+            <PreviewPanel
+              value={preview}
+              onChange={patchPreview}
+              onClose={() => setPreview(null)}
+              onMaximize={() => navigate(browserUrl(preview))}
+              refreshToken={previewToken}
+            />
+          </aside>
+        </>
+      )}
     </div>
   );
 }

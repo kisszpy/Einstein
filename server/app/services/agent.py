@@ -116,10 +116,16 @@ async def run_agent(
                             "content": _short(msg.content),
                             "duration_ms": round((time.perf_counter() - started) * 1000) if started else None,
                         }
-                        # 工具执行后把新增产物推给前端
+                        # 工具执行后把新增产物推给前端。
+                        # 注意事件类型字段和产物类型字段不能重名：artifact 自带的
+                        # kind（pptx/file/...）会覆盖事件 kind，路由就认不出了。
                         if ctx is not None:
                             for artifact in ctx.artifacts:
-                                yield {"kind": "artifact", **artifact}
+                                yield {
+                                    "kind": "artifact",
+                                    "path": artifact.get("path", ""),
+                                    "artifact_kind": artifact.get("kind", "file"),
+                                }
                     elif node == "agent" and getattr(msg, "content", None):
                         _acc_usage(msg)
                         final_text = str(msg.content)

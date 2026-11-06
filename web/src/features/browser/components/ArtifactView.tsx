@@ -54,9 +54,11 @@ interface Props {
   path: string;
   ticket: string;
   onEditDeck: () => void;
+  /** 外部写入（智能体刚改完文件）时递增，触发重新拉取 */
+  refreshToken?: number;
 }
 
-export function ArtifactView({ project, path, ticket, onEditDeck }: Props) {
+export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken = 0 }: Props) {
   const mode = useMemo(() => modeOf(path), [path]);
   const [reloadKey, setReloadKey] = useState(0);
   const [content, setContent] = useState("");
@@ -91,7 +93,7 @@ export function ArtifactView({ project, path, ticket, onEditDeck }: Props) {
     setOriginal("");
     load();
     setPreview(mode === "markdown");
-  }, [load, mode]);
+  }, [load, mode, refreshToken]);
 
   const dirty = content !== original;
 
@@ -110,7 +112,8 @@ export function ArtifactView({ project, path, ticket, onEditDeck }: Props) {
     }
   };
 
-  const url = api.previewUrl(project, path, ticket);
+  // v 参数用于外部改写后绕开缓存；票据变了也会换 URL
+  const url = `${api.previewUrl(project, path, ticket)}&v=${reloadKey}-${refreshToken}`;
 
   return (
     <div className="flex h-full min-h-0 flex-col">

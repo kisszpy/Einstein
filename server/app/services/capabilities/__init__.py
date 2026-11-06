@@ -69,6 +69,21 @@ class AgentContext:
             self.artifacts.append(entry)
 
 
+def _artifact_kind(path: str) -> str:
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    if ext in ("html", "htm"):
+        return "html"
+    if ext in ("png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"):
+        return "image"
+    if ext == "pdf":
+        return "pdf"
+    if ext == "pptx":
+        return "pptx"
+    if ext in ("md", "markdown"):
+        return "markdown"
+    return "file"
+
+
 # ---------- 参数模型 ----------
 
 class WebSearchArgs(BaseModel):
@@ -196,6 +211,8 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
         def _fs_write(path: str, content: str) -> str:
             project = need_project()
             info = sandbox.write_file(ws, project, path, content)
+            # 写出的文件就是产物：推给前端，右侧预览面板可以就地打开
+            ctx.note_artifact(info.get("path") or path, _artifact_kind(info.get("path") or path))
             return sandbox.dumps(info)
 
         tools.append(StructuredTool.from_function(

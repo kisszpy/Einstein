@@ -2,6 +2,25 @@
 
 export type BrowserSource = "artifact" | "web" | "deck";
 
+/** 工作台的全部状态：独立页放 URL，智能体页面板放组件内。 */
+export interface BrowserState {
+  tab: BrowserSource;
+  project: string;
+  path: string;
+  url: string;
+}
+
+export const BROWSER_TABS: { id: BrowserSource; label: string }[] = [
+  { id: "artifact", label: "产物" },
+  { id: "web", label: "网页" },
+  { id: "deck", label: "演示" },
+];
+
+/** 按文件后缀决定落到哪个标签：pptx 进编辑器，其余进产物预览。 */
+export function tabForPath(path: string): BrowserSource {
+  return path.toLowerCase().endsWith(".pptx") ? "deck" : "artifact";
+}
+
 export interface TreeEntry {
   path: string;
   type: "file" | "dir";

@@ -17,6 +17,7 @@ import {
   Plus,
   Redo2,
   Save,
+  SlidersHorizontal,
   Trash2,
   Undo2,
 } from "lucide-react";
@@ -52,9 +53,11 @@ interface DeckEditorProps {
   project: string;
   path: string;
   onClose: () => void;
+  /** 面板模式（半屏宽）：缩略图改顶部胶片条，属性面板改成可切换抽屉 */
+  compact?: boolean;
 }
 
-export function DeckEditor({ project, path, onClose }: DeckEditorProps) {
+export function DeckEditor({ project, path, onClose, compact = false }: DeckEditorProps) {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [themes, setThemes] = useState<ThemePreset[]>([FALLBACK_THEME]);
   const [selected, setSelected] = useState(0);
@@ -62,6 +65,7 @@ export function DeckEditor({ project, path, onClose }: DeckEditorProps) {
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [propsOpen, setPropsOpen] = useState(false);
 
   const past = useRef<Deck[]>([]);
   const future = useRef<Deck[]>([]);
@@ -210,32 +214,48 @@ export function DeckEditor({ project, path, onClose }: DeckEditorProps) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* 工具条 */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
+      <div className="flex shrink-0 items-center gap-1.5 border-b border-line px-2.5 py-2">
         <button
           onClick={onClose}
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12.5px] text-secondary hover:bg-surface-3 hover:text-primary"
+          className="flex shrink-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-[12.5px] text-secondary hover:bg-surface-3 hover:text-primary"
+          title="返回演示列表"
         >
-          <ArrowLeft size={13} /> 演示列表
+          <ArrowLeft size={13} /> {!compact && "演示列表"}
         </button>
-        <span className="h-4 w-px bg-line-strong" />
+        <span className="h-4 w-px shrink-0 bg-line-strong" />
         <input
           value={deck.title}
           onChange={(event) => mutate((current) => ({ ...current, title: event.target.value }))}
           className="min-w-0 max-w-[280px] flex-1 rounded-md bg-transparent px-2 py-1 text-[13px] font-medium outline-none hover:bg-surface-3 focus:bg-surface-3"
           placeholder="演示标题"
         />
-        <span className="hidden text-[11.5px] text-tertiary sm:inline">
-          {deck.slides.length} 页 · {deck.path}
-        </span>
+        {!compact && (
+          <span className="hidden text-[11.5px] text-tertiary sm:inline">
+            {deck.slides.length} 页 · {deck.path}
+          </span>
+        )}
 
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {compact && (
+            <button
+              onClick={() => setPropsOpen((prev) => !prev)}
+              className={cn(
+                "rounded-md p-1.5 hover:bg-surface-3",
+                propsOpen ? "text-brand" : "text-secondary",
+              )}
+              title="页面属性"
+              aria-label="页面属性"
+            >
+              <SlidersHorizontal size={14} />
+            </button>
+          )}
           <select
             value={deck.theme}
             aria-label="主题配色"
             onChange={(event) =>
               mutate((current) => ({ ...current, theme: event.target.value }))
             }
-            className="rounded-md border border-line bg-surface-1 px-2 py-1 text-[12.5px] outline-none"
+            className="rounded-md border border-line bg-surface-1 px-1.5 py-1 text-[12px] outline-none"
             title="主题配色"
           >
             {themes.map((item) => (
@@ -296,76 +316,103 @@ export function DeckEditor({ project, path, onClose }: DeckEditorProps) {
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1">
-        {/* 缩略图 */}
-        <div className="flex w-[132px] shrink-0 flex-col gap-2 overflow-y-auto border-r border-line bg-surface-2 p-2.5">
-          {deck.slides.map((item, i) => (
-            <button
-              key={i}
-              onClick={() => setSelected(i)}
-              aria-label="幻灯片缩略图"
-              className={cn(
-                "group relative rounded-md ring-offset-1 transition-all",
-                i === selected ? "ring-2 ring-brand" : "ring-1 ring-line hover:ring-line-strong",
-              )}
-            >
-              <span className="absolute -left-1 top-0 z-10 rounded-full bg-surface-1 px-1 text-[9.5px] text-tertiary">
-                {i + 1}
-              </span>
-              <SlideCanvas
+      <div className="relative flex min-h-0 flex-1">
+        {/* 缩略图（宽屏走左栏） */}
+        {!compact && (
+          <div className="flex w-[132px] shrink-0 flex-col gap-2 overflow-y-auto border-r border-line bg-surface-2 p-2.5">
+            {deck.slides.map((item, i) => (
+              <Thumb
+                key={i}
                 slide={item}
                 theme={theme}
                 index={i}
                 deckTitle={deck.title}
                 author={deck.author}
-                className="w-full rounded-md"
+                active={i === selected}
+                onClick={() => setSelected(i)}
               />
-            </button>
-          ))}
-          <button
-            onClick={() => {
-              mutate((current) => ({
-                ...current,
-                slides: [...current.slides, blankSlide("bullets")],
-              }));
-              setSelected(deck.slides.length);
-            }}
-            className="flex items-center justify-center gap-1 rounded-md border border-dashed border-line-strong py-2 text-[11.5px] text-tertiary hover:border-brand hover:text-brand"
-          >
-            <Plus size={12} /> 加一页
-          </button>
-        </div>
-
-        {/* 画布 */}
-        <div className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-page">
-          <div className="flex items-center justify-between px-4 py-2 text-[11.5px] text-tertiary">
-            <span>
-              第 {selected + 1} / {deck.slides.length} 页 · {LAYOUT_LABELS[slide.layout]}
-              {deck.editable === "partial" && (
-                <span className="ml-2 rounded bg-warning/10 px-1.5 py-0.5 text-warning">
-                  外部版式，保存将重排
-                </span>
-              )}
-            </span>
-            <span className="hidden lg:inline">点文字直接改，改完失焦生效</span>
-          </div>
-          <div className="mx-auto w-full max-w-[920px] px-4 pb-6">
-            <SlideCanvas
-              key={`${selected}-${slide.layout}`}
-              slide={slide}
-              theme={theme}
-              index={selected}
-              deckTitle={deck.title}
-              author={deck.author}
-              editable
-              onChange={patchSlide}
-              className="rounded-lg"
+            ))}
+            <AddSlideButton
+              onClick={() => {
+                mutate((current) => ({
+                  ...current,
+                  slides: [...current.slides, blankSlide("bullets")],
+                }));
+                setSelected(deck.slides.length);
+              }}
             />
           </div>
+        )}
+
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* 缩略图（面板模式走顶部胶片条） */}
+          {compact && (
+            <div className="flex shrink-0 items-start gap-2 overflow-x-auto border-b border-line bg-surface-2 px-2.5 py-2">
+              {deck.slides.map((item, i) => (
+                <Thumb
+                  key={i}
+                  slide={item}
+                  theme={theme}
+                  index={i}
+                  deckTitle={deck.title}
+                  author={deck.author}
+                  active={i === selected}
+                  onClick={() => setSelected(i)}
+                  className="w-[92px] shrink-0"
+                />
+              ))}
+              <AddSlideButton
+                compact
+                onClick={() => {
+                  mutate((current) => ({
+                    ...current,
+                    slides: [...current.slides, blankSlide("bullets")],
+                  }));
+                  setSelected(deck.slides.length);
+                }}
+              />
+            </div>
+          )}
+
+          {/* 画布 */}
+          <div className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-page">
+            <div className="flex items-center justify-between gap-2 px-4 py-2 text-[11.5px] text-tertiary">
+              <span className="min-w-0 truncate">
+                第 {selected + 1} / {deck.slides.length} 页 · {LAYOUT_LABELS[slide.layout]}
+                {deck.editable === "partial" && (
+                  <span className="ml-2 rounded bg-warning/10 px-1.5 py-0.5 text-warning">
+                    外部版式，保存将重排
+                  </span>
+                )}
+              </span>
+              <span className="hidden shrink-0 lg:inline">点文字直接改，改完失焦生效</span>
+            </div>
+            <div className={cn("mx-auto w-full px-4 pb-6", compact ? "max-w-[680px]" : "max-w-[920px]")}>
+              <SlideCanvas
+                key={`${selected}-${slide.layout}`}
+                slide={slide}
+                theme={theme}
+                index={selected}
+                deckTitle={deck.title}
+                author={deck.author}
+                editable
+                onChange={patchSlide}
+                className="rounded-lg"
+              />
+            </div>
+          </div>
         </div>
 
-        {/* 属性面板 */}
-        <div className="w-[268px] shrink-0 overflow-y-auto border-l border-line bg-surface-1 p-3">
+        {/* 属性面板：宽屏常驻，面板模式是可切换的浮层 */}
+        {(!compact || propsOpen) && (
+          <div
+            className={cn(
+              "shrink-0 overflow-y-auto bg-surface-1 p-3",
+              compact
+                ? "absolute right-0 top-0 z-20 h-full w-[264px] border-l border-line shadow-[-10px_0_30px_rgb(0_0_0/0.12)]"
+                : "w-[268px] border-l border-line",
+            )}
+          >
           <div className="mb-3 flex items-center gap-1.5">
             <select
               value={slide.layout}
@@ -602,9 +649,68 @@ export function DeckEditor({ project, path, onClose }: DeckEditorProps) {
             保存时按当前版式重新生成 pptx，文件 {Math.max(1, Math.round(deck.bytes / 1024))} KB。
             {deck.theme_inferred && " 主题由原文件推断，可能与原稿略有差异。"}
           </p>
-        </div>
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+function AddSlideButton({ onClick, compact = false }: { onClick: () => void; compact?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "flex items-center justify-center gap-1 rounded-md border border-dashed border-line-strong text-[11.5px] text-tertiary hover:border-brand hover:text-brand",
+        compact ? "h-[52px] w-[84px] shrink-0" : "py-2",
+      )}
+    >
+      <Plus size={12} /> 加一页
+    </button>
+  );
+}
+
+function Thumb({
+  slide,
+  theme,
+  index,
+  deckTitle,
+  author,
+  active,
+  onClick,
+  className,
+}: {
+  slide: DeckSlide;
+  theme: ThemePreset;
+  index: number;
+  deckTitle: string;
+  author: string;
+  active: boolean;
+  onClick: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label="幻灯片缩略图"
+      className={cn(
+        "group relative rounded-md ring-offset-1 transition-all",
+        active ? "ring-2 ring-brand" : "ring-1 ring-line hover:ring-line-strong",
+        className,
+      )}
+    >
+      <span className="absolute -left-1 top-0 z-10 rounded-full bg-surface-1 px-1 text-[9.5px] text-tertiary">
+        {index + 1}
+      </span>
+      <SlideCanvas
+        slide={slide}
+        theme={theme}
+        index={index}
+        deckTitle={deckTitle}
+        author={author}
+        className="w-full rounded-md"
+      />
+    </button>
   );
 }
 

@@ -109,9 +109,10 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
                 if kind == "final":
                     final_text = step["text"]
                 elif kind == "artifact":
-                    if step not in artifacts:
-                        artifacts.append(step)
-                        yield _sse("artifact", {"artifact": {k: v for k, v in step.items() if k != "kind"}})
+                    entry = {"path": step.get("path", ""), "kind": step.get("artifact_kind", "file")}
+                    if entry not in artifacts:
+                        artifacts.append(entry)
+                        yield _sse("artifact", {"artifact": entry})
                 else:
                     steps.append(step)
                     yield _sse("step", {"step": step})
