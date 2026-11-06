@@ -29,7 +29,10 @@ MAX_BULLETS = 40
 MAX_CELLS_COLS = 8
 MAX_CELLS_ROWS = 30
 
-LAYOUTS = ("title", "section", "bullets", "two_col", "quote", "table", "end")
+LAYOUTS = (
+    "title", "section", "bullets", "two_col", "quote", "table",
+    "stat", "chart", "timeline", "grid", "vs", "end",
+)
 
 
 # ---------- sidecar ----------
@@ -317,15 +320,75 @@ def normalize(payload: dict) -> dict:
             continue
         layout = _text(item.get("layout"), 20).lower()
         if layout not in LAYOUTS:
-            layout = "bullets"
+            # 未写/写错版式时按字段推断（封面、数据页、结尾页不再一律降级成 bullets）
+            layout = ppt._infer_layout(item if isinstance(item, dict) else {}, len(slides), len(raw_slides[:MAX_SLIDES]))
+            if layout not in LAYOUTS:
+                layout = "bullets"
         slide: dict = {"layout": layout}
-        for key in ("title", "subtitle", "kicker", "number", "quote"):
+        for key in ("title", "subtitle", "kicker", "number", "quote", "variant", "note"):
             value = _text(item.get(key))
             if value:
                 slide[key] = value
         bullets = _lines(item.get("bullets"))
         if bullets:
             slide["bullets"] = bullets
+        # 可视化版式的结构化字段
+        stats_raw = item.get("stats")
+        if isinstance(stats_raw, list):
+            stats = []
+            for raw in stats_raw[:4]:
+                if isinstance(raw, dict):
+                    stats.append({"value": _text(raw.get("value"), 14), "label": _text(raw.get("label"), 18),
+                                  "note": _text(raw.get("note"), 40)})
+                elif isinstance(raw, str) and raw.strip():
+                    parts = raw.strip().split("：", 1)
+                    stats.append({"value": _text(parts[0], 14),
+                                  "label": _text(parts[1], 18) if len(parts) > 1 else "", "note": ""})
+            stats = [x for x in stats if x["value"]]
+            if stats:
+                slide["stats"] = stats
+        items_raw = item.get("items")
+        if isinstance(items_raw, list):
+            items = []
+            for raw in items_raw[:7]:
+                if isinstance(raw, dict):
+                    items.append({"label": _text(raw.get("label"), 22), "value": _text(raw.get("value"), 16)})
+                elif isinstance(raw, str) and "：" in raw:
+                    label, value = raw.split("：", 1)
+                    items.append({"label": _text(label, 22), "value": _text(value, 16)})
+            items = [x for x in items if x["label"]]
+            if items:
+                slide["items"] = items
+        steps_raw = item.get("steps")
+        if isinstance(steps_raw, list):
+            steps = []
+            for raw in steps_raw[:5]:
+                if isinstance(raw, dict):
+                    steps.append({"label": _text(raw.get("label"), 14), "text": _text(raw.get("text"), 60)})
+                elif isinstance(raw, str) and raw.strip():
+                    parts = raw.strip().split("：", 1)
+                    steps.append({"label": _text(parts[0], 14),
+                                  "text": _text(parts[1], 60) if len(parts) > 1 else ""})
+            if steps:
+                slide["steps"] = steps
+        cards_raw = item.get("cards")
+        if isinstance(cards_raw, list):
+            cards = []
+            for raw in cards_raw[:6]:
+                if isinstance(raw, dict):
+                    cards.append({"title": _text(raw.get("title"), 20), "text": _text(raw.get("text"), 90)})
+                elif isinstance(raw, str) and raw.strip():
+                    parts = raw.strip().split("：", 1)
+                    cards.append({"title": _text(parts[0], 20),
+                                  "text": _text(parts[1], 90) if len(parts) > 1 else ""})
+            if cards:
+                slide["cards"] = cards
+        for side_key in ("left", "right"):
+            raw = item.get(side_key)
+            if isinstance(raw, dict):
+                slide[side_key] = {"title": _text(raw.get("title"), 24), "bullets": _lines(raw.get("bullets"))}
+            elif isinstance(raw, str) and raw.strip():
+                slide[side_key] = {"title": "", "bullets": _lines(raw)}
         columns = item.get("columns")
         if isinstance(columns, list) and columns:
             cols = []
@@ -389,6 +452,12 @@ def load_deck(root: Path, rel: str) -> dict:
         raise sandbox.SandboxError("只支持 .pptx 演示文稿")
     payload = _read_sidecar(root, rel, target.stat().st_mtime)
     if payload is not None:
+        # sidecar 可能缺 layout（生成时靠推断渲染），读取时补齐，编辑器才能正确预览
+        slides = payload.get("slides") or []
+        total = len(slides)
+        for idx, slide in enumerate(slides):
+            if isinstance(slide, dict) and slide.get("layout") not in LAYOUTS:
+                slide["layout"] = ppt._infer_layout(slide, idx, total)
         return _describe(root, rel, payload, "sidecar", False, target)
     parsed, inferred = parse_pptx(target)
     return _describe(root, rel, parsed, "parsed", inferred, target)

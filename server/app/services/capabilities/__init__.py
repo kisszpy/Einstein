@@ -278,8 +278,17 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
         tools.append(StructuredTool.from_function(
             _safe(_ppt_create), name="ppt_create",
             description=(
-                "生成 16:9 演示文稿（自动排版：封面/章节/要点/两栏/引用/表格/结尾）。"
-                "slides 每页给足内容，要点页 3-6 条、每条一句话，不要堆砌"
+                "生成 16:9 演示文稿。slides 每页一个 dict："
+                "封面页 {title, subtitle, variant?}；"
+                "要点页 {layout:'bullets', title, bullets:[…]}（3-6 条、每条一句话）；"
+                "大数字页 {layout:'stat', title, stats:[{value:'38%', label, note}]}（关键指标优先用它）；"
+                "条形图页 {layout:'chart', title, items:[{label, value:'-6.4%'}], note?}（可比较的量化数据用它）；"
+                "时间线 {layout:'timeline', title, steps:[{label, text}]}（3-5 步）；"
+                "卡片矩阵 {layout:'grid', title, cards:[{title, text}]}（2-6 张）；"
+                "对比页 {layout:'vs', title, left:{title, bullets}, right:{title, bullets}}；"
+                "两栏 {layout:'two_col', title, columns:[…]}、引用 {layout:'quote', quote, subtitle}、"
+                "表格 {layout:'table', title, headers, rows}、章节 {layout:'section', title}、结尾 {layout:'end'}。"
+                "版式按内容选、整份有变化，不要整份都是要点页"
             ),
             args_schema=PptCreateArgs, coroutine=None))
 

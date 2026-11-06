@@ -35,11 +35,44 @@ export interface ProjectInfo {
   updated_at: string;
 }
 
-export type SlideLayout = "title" | "section" | "bullets" | "two_col" | "quote" | "table" | "end";
+export type SlideLayout =
+  | "title"
+  | "section"
+  | "bullets"
+  | "two_col"
+  | "quote"
+  | "table"
+  | "stat"
+  | "chart"
+  | "timeline"
+  | "grid"
+  | "vs"
+  | "end";
 
 export interface DeckColumn {
   title: string;
   bullets: string[];
+}
+
+export interface DeckStat {
+  value: string;
+  label: string;
+  note: string;
+}
+
+export interface DeckBarItem {
+  label: string;
+  value: string;
+}
+
+export interface DeckStep {
+  label: string;
+  text: string;
+}
+
+export interface DeckCard {
+  title: string;
+  text: string;
 }
 
 export interface DeckSlide {
@@ -49,10 +82,18 @@ export interface DeckSlide {
   kicker?: string;
   number?: string;
   quote?: string;
+  variant?: string;
+  note?: string;
   bullets?: string[];
   columns?: DeckColumn[];
   headers?: string[];
   rows?: string[][];
+  stats?: DeckStat[];
+  items?: DeckBarItem[];
+  steps?: DeckStep[];
+  cards?: DeckCard[];
+  left?: DeckColumn;
+  right?: DeckColumn;
 }
 
 export interface Deck {
@@ -100,6 +141,11 @@ export const LAYOUT_LABELS: Record<SlideLayout, string> = {
   two_col: "两栏",
   quote: "引用",
   table: "表格",
+  stat: "大数字",
+  chart: "条形图",
+  timeline: "时间线",
+  grid: "卡片矩阵",
+  vs: "对比",
   end: "结尾",
 };
 
@@ -121,6 +167,53 @@ export function blankSlide(layout: SlideLayout): DeckSlide {
       };
     case "quote":
       return { layout, quote: "一句值得单独占一页的话", subtitle: "" };
+    case "stat":
+      return {
+        layout,
+        title: "核心指标",
+        stats: [
+          { value: "38%", label: "指标一", note: "" },
+          { value: "15%", label: "指标二", note: "" },
+        ],
+      };
+    case "chart":
+      return {
+        layout,
+        title: "数据对比",
+        items: [
+          { label: "项目一", value: "12" },
+          { label: "项目二", value: "8" },
+          { label: "项目三", value: "5" },
+        ],
+      };
+    case "timeline":
+      return {
+        layout,
+        title: "落地节奏",
+        steps: [
+          { label: "第一步", text: "做什么" },
+          { label: "第二步", text: "再做什么" },
+          { label: "第三步", text: "最后做什么" },
+        ],
+      };
+    case "grid":
+      return {
+        layout,
+        title: "要点矩阵",
+        cards: [
+          { title: "卡片一", text: "说明文字" },
+          { title: "卡片二", text: "说明文字" },
+          { title: "卡片三", text: "说明文字" },
+          { title: "卡片四", text: "说明文字" },
+        ],
+      };
+    case "vs":
+      return {
+        layout,
+        title: "方案对比",
+        left: { title: "方案 A", bullets: ["优势一"] },
+        right: { title: "方案 B", bullets: ["优势一"] },
+      };
     case "table":
       return { layout, title: "数据表", headers: ["项目", "数值"], rows: [["示例", "0"]] };
     case "end":

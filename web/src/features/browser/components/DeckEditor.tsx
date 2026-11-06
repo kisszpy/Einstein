@@ -33,7 +33,20 @@ import {
   type ThemePreset,
 } from "../types";
 
-const LAYOUTS: SlideLayout[] = ["title", "section", "bullets", "two_col", "quote", "table", "end"];
+const LAYOUTS: SlideLayout[] = [
+  "title",
+  "section",
+  "bullets",
+  "stat",
+  "chart",
+  "timeline",
+  "grid",
+  "vs",
+  "two_col",
+  "quote",
+  "table",
+  "end",
+];
 
 const FALLBACK_THEME: ThemePreset = {
   id: "midnight",
@@ -502,7 +515,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
             </Field>
           )}
 
-          {["bullets", "two_col", "table"].includes(slide.layout) && (
+          {["bullets", "two_col", "table", "stat", "chart", "timeline", "grid", "vs"].includes(slide.layout) && (
             <Field label="小标签（可选）">
               <input
                 value={slide.kicker ?? ""}
@@ -594,6 +607,129 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                         };
                         patchSlide({ columns });
                       }}
+                      rows={4}
+                      className={cn(inputCls, "resize-y leading-relaxed")}
+                    />
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {slide.layout === "stat" && (
+            <Field label="指标（每行一条：数值 | 标签 | 备注）">
+              <textarea
+                value={(slide.stats ?? []).map((s) => [s.value, s.label, s.note].join(" | ")).join("\n")}
+                onChange={(event) =>
+                  patchSlide({
+                    stats: event.target.value
+                      .split("\n")
+                      .map((line) => line.split("|").map((cell) => cell.trim()))
+                      .filter((cells) => cells[0])
+                      .map((cells) => ({ value: cells[0] ?? "", label: cells[1] ?? "", note: cells[2] ?? "" })),
+                  })
+                }
+                rows={4}
+                className={cn(inputCls, "resize-y leading-relaxed")}
+              />
+            </Field>
+          )}
+
+          {slide.layout === "chart" && (
+            <>
+              <Field label="数据（每行一条：标签 | 数值）">
+                <textarea
+                  value={(slide.items ?? []).map((it) => `${it.label} | ${it.value}`).join("\n")}
+                  onChange={(event) =>
+                    patchSlide({
+                      items: event.target.value
+                        .split("\n")
+                        .map((line) => line.split("|").map((cell) => cell.trim()))
+                        .filter((cells) => cells[0])
+                        .map((cells) => ({ label: cells[0] ?? "", value: cells[1] ?? "" })),
+                    })
+                  }
+                  rows={5}
+                  className={cn(inputCls, "resize-y leading-relaxed")}
+                />
+              </Field>
+              <Field label="脚注（可选）">
+                <input
+                  value={slide.note ?? ""}
+                  onChange={(event) => patchSlide({ note: event.target.value })}
+                  className={inputCls}
+                  placeholder="例如：数据截至最近季度末"
+                />
+              </Field>
+            </>
+          )}
+
+          {slide.layout === "timeline" && (
+            <Field label="节点（每行一条：标签 | 说明）">
+              <textarea
+                value={(slide.steps ?? []).map((s) => `${s.label} | ${s.text}`).join("\n")}
+                onChange={(event) =>
+                  patchSlide({
+                    steps: event.target.value
+                      .split("\n")
+                      .map((line) => line.split("|").map((cell) => cell.trim()))
+                      .filter((cells) => cells[0])
+                      .map((cells) => ({ label: cells[0] ?? "", text: cells[1] ?? "" })),
+                  })
+                }
+                rows={5}
+                className={cn(inputCls, "resize-y leading-relaxed")}
+              />
+            </Field>
+          )}
+
+          {slide.layout === "grid" && (
+            <Field label="卡片（每行一条：标题 | 说明）">
+              <textarea
+                value={(slide.cards ?? []).map((c) => `${c.title} | ${c.text}`).join("\n")}
+                onChange={(event) =>
+                  patchSlide({
+                    cards: event.target.value
+                      .split("\n")
+                      .map((line) => line.split("|").map((cell) => cell.trim()))
+                      .filter((cells) => cells[0])
+                      .map((cells) => ({ title: cells[0] ?? "", text: cells[1] ?? "" })),
+                  })
+                }
+                rows={5}
+                className={cn(inputCls, "resize-y leading-relaxed")}
+              />
+            </Field>
+          )}
+
+          {slide.layout === "vs" && (
+            <>
+              {(["left", "right"] as const).map((key) => {
+                const col = slide[key] ?? { title: "", bullets: [] };
+                return (
+                  <div key={key} className="mb-3 rounded-md bg-surface-2 p-2">
+                    <p className="mb-1.5 text-[11px] text-tertiary">
+                      {key === "left" ? "左侧" : "右侧"}
+                    </p>
+                    <input
+                      value={col.title}
+                      onChange={(event) => patchSlide({ [key]: { ...col, title: event.target.value } })}
+                      placeholder="标题"
+                      className={cn(inputCls, "mb-1.5")}
+                    />
+                    <textarea
+                      value={col.bullets.join("\n")}
+                      onChange={(event) =>
+                        patchSlide({
+                          [key]: {
+                            ...col,
+                            bullets: event.target.value
+                              .split("\n")
+                              .map((line) => line.trim())
+                              .filter(Boolean),
+                          },
+                        })
+                      }
                       rows={4}
                       className={cn(inputCls, "resize-y leading-relaxed")}
                     />
