@@ -1,0 +1,630 @@
+/**
+ * PPT 可视化编辑器。
+ *
+ * 数据是「结构化 deck」而不是二进制：每次保存都由服务端按 deck 重新排版
+ * 生成 pptx，所以界面上看到的就是最终版式，不会出现文本框错位。
+ * 外部导入的 pptx 首次保存会被归一成本产品主题，接口用 editable 标明，
+ * 这里要如实提示。
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronUp,
+  Download,
+  Loader2,
+  Plus,
+  Redo2,
+  Save,
+  Trash2,
+  Undo2,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { SlideCanvas } from "./SlideCanvas";
+import * as api from "../api";
+import {
+  LAYOUT_LABELS,
+  blankSlide,
+  type Deck,
+  type DeckSlide,
+  type SlideLayout,
+  type ThemePreset,
+} from "../types";
+
+const LAYOUTS: SlideLayout[] = ["title", "section", "bullets", "two_col", "quote", "table", "end"];
+
+const FALLBACK_THEME: ThemePreset = {
+  id: "midnight",
+  name: "午夜蓝",
+  bg: "0F172A",
+  surface: "1E293B",
+  accent: "6366F1",
+  accent2: "22D3EE",
+  on_dark: "F8FAFC",
+  on_dark_muted: "94A3B8",
+  ink: "0F172A",
+  ink_muted: "64748B",
+  paper: "FFFFFF",
+};
+
+interface DeckEditorProps {
+  project: string;
+  path: string;
+  onClose: () => void;
+}
+
+export function DeckEditor({ project, path, onClose }: DeckEditorProps) {
+  const [deck, setDeck] = useState<Deck | null>(null);
+  const [themes, setThemes] = useState<ThemePreset[]>([FALLBACK_THEME]);
+  const [selected, setSelected] = useState(0);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  const past = useRef<Deck[]>([]);
+  const future = useRef<Deck[]>([]);
+  const deckRef = useRef<Deck | null>(null);
+  const [, setHistoryTick] = useState(0);
+
+  const apply = useCallback((next: Deck | null) => {
+    deckRef.current = next;
+    setDeck(next);
+    setHistoryTick((n) => n + 1);
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    apply(null);
+    setError("");
+    past.current = [];
+    future.current = [];
+    api
+      .readDeck(project, path)
+      .then((data) => {
+        if (!alive) return;
+        apply(data);
+        setSelected(0);
+        setDirty(false);
+      })
+      .catch((exc: Error) => alive && setError(exc.message));
+    api
+      .listThemes()
+      .then((list) => alive && list.length > 0 && setThemes(list))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [project, path, apply]);
+
+  const theme = useMemo(
+    () => themes.find((item) => item.id === deck?.theme) ?? themes[0] ?? FALLBACK_THEME,
+    [themes, deck?.theme],
+  );
+
+  const slide: DeckSlide | null = deck ? (deck.slides[selected] ?? null) : null;
+
+  /** 所有修改都走这里：入栈历史 → 标记未保存。 */
+  const mutate = useCallback(
+    (updater: (draft: Deck) => Deck) => {
+      const current = deckRef.current;
+      if (!current) return;
+      const next = updater(current);
+      if (next === current) return;
+      past.current = [...past.current.slice(-49), current];
+      future.current = [];
+      apply(next);
+      setDirty(true);
+      setNotice("");
+    },
+    [apply],
+  );
+
+  const patchSlide = useCallback(
+    (patch: Partial<DeckSlide>) => {
+      mutate((current) => ({
+        ...current,
+        slides: current.slides.map((item, i) => (i === selected ? { ...item, ...patch } : item)),
+      }));
+    },
+    [mutate, selected],
+  );
+
+  const undo = () => {
+    const previous = past.current.pop();
+    if (!previous) return;
+    if (deckRef.current) future.current.push(deckRef.current);
+    apply(previous);
+    setDirty(true);
+  };
+
+  const redo = () => {
+    const next = future.current.pop();
+    if (!next) return;
+    if (deckRef.current) past.current.push(deckRef.current);
+    apply(next);
+    setDirty(true);
+  };
+
+  const save = async () => {
+    if (!deck || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      const fresh = await api.saveDeck(project, path, deck);
+      apply(fresh);
+      past.current = [];
+      future.current = [];
+      setDirty(false);
+      setNotice(
+        fresh.editable === "partial"
+          ? "已保存：外部版式已按当前主题重排，下次可继续编辑"
+          : "已保存",
+      );
+    } catch (exc) {
+      setError((exc as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const meta = event.metaKey || event.ctrlKey;
+      if (meta && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void save();
+      }
+      if (meta && event.key.toLowerCase() === "z" && !event.shiftKey) {
+        const target = event.target as HTMLElement;
+        if (target.isContentEditable) return; // 输入框内交给浏览器原生撤销
+        event.preventDefault();
+        undo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  if (error && !deck) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-[13px]">
+        <p className="text-danger">{error}</p>
+        <button onClick={onClose} className="text-brand hover:underline">
+          返回列表
+        </button>
+      </div>
+    );
+  }
+
+  if (!deck || !slide) {
+    return (
+      <div className="flex h-full items-center justify-center gap-2 text-[13px] text-tertiary">
+        <Loader2 size={14} className="animate-spin" />
+        正在解析演示文稿…
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {/* 工具条 */}
+      <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
+        <button
+          onClick={onClose}
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12.5px] text-secondary hover:bg-surface-3 hover:text-primary"
+        >
+          <ArrowLeft size={13} /> 演示列表
+        </button>
+        <span className="h-4 w-px bg-line-strong" />
+        <input
+          value={deck.title}
+          onChange={(event) => mutate((current) => ({ ...current, title: event.target.value }))}
+          className="min-w-0 max-w-[280px] flex-1 rounded-md bg-transparent px-2 py-1 text-[13px] font-medium outline-none hover:bg-surface-3 focus:bg-surface-3"
+          placeholder="演示标题"
+        />
+        <span className="hidden text-[11.5px] text-tertiary sm:inline">
+          {deck.slides.length} 页 · {deck.path}
+        </span>
+
+        <div className="ml-auto flex items-center gap-1.5">
+          <select
+            value={deck.theme}
+            aria-label="主题配色"
+            onChange={(event) =>
+              mutate((current) => ({ ...current, theme: event.target.value }))
+            }
+            className="rounded-md border border-line bg-surface-1 px-2 py-1 text-[12.5px] outline-none"
+            title="主题配色"
+          >
+            {themes.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={undo}
+            disabled={past.current.length === 0}
+            className="rounded-md p-1.5 text-secondary hover:bg-surface-3 disabled:opacity-30"
+            title="撤销 (Ctrl+Z)"
+          >
+            <Undo2 size={14} />
+          </button>
+          <button
+            onClick={redo}
+            disabled={future.current.length === 0}
+            className="rounded-md p-1.5 text-secondary hover:bg-surface-3 disabled:opacity-30"
+            title="重做"
+          >
+            <Redo2 size={14} />
+          </button>
+          <a
+            href={api.downloadUrl(project, path)}
+            className="rounded-md p-1.5 text-secondary hover:bg-surface-3"
+            title="下载 pptx"
+          >
+            <Download size={14} />
+          </a>
+          <button
+            onClick={save}
+            disabled={saving || !dirty}
+            className={cn(
+              "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12.5px] font-medium transition-colors",
+              dirty
+                ? "bg-brand text-brand-fg hover:opacity-90"
+                : "bg-surface-3 text-tertiary",
+            )}
+          >
+            {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+            {saving ? "保存中" : dirty ? "保存" : "已保存"}
+          </button>
+        </div>
+      </div>
+
+      {(notice || error) && (
+        <div
+          className={cn(
+            "shrink-0 border-b px-4 py-1.5 text-[11.5px]",
+            error
+              ? "border-danger/30 bg-danger/10 text-danger"
+              : "border-line bg-surface-2 text-secondary",
+          )}
+        >
+          {error || notice}
+        </div>
+      )}
+
+      <div className="flex min-h-0 flex-1">
+        {/* 缩略图 */}
+        <div className="flex w-[132px] shrink-0 flex-col gap-2 overflow-y-auto border-r border-line bg-surface-2 p-2.5">
+          {deck.slides.map((item, i) => (
+            <button
+              key={i}
+              onClick={() => setSelected(i)}
+              aria-label="幻灯片缩略图"
+              className={cn(
+                "group relative rounded-md ring-offset-1 transition-all",
+                i === selected ? "ring-2 ring-brand" : "ring-1 ring-line hover:ring-line-strong",
+              )}
+            >
+              <span className="absolute -left-1 top-0 z-10 rounded-full bg-surface-1 px-1 text-[9.5px] text-tertiary">
+                {i + 1}
+              </span>
+              <SlideCanvas
+                slide={item}
+                theme={theme}
+                index={i}
+                deckTitle={deck.title}
+                author={deck.author}
+                className="w-full rounded-md"
+              />
+            </button>
+          ))}
+          <button
+            onClick={() => {
+              mutate((current) => ({
+                ...current,
+                slides: [...current.slides, blankSlide("bullets")],
+              }));
+              setSelected(deck.slides.length);
+            }}
+            className="flex items-center justify-center gap-1 rounded-md border border-dashed border-line-strong py-2 text-[11.5px] text-tertiary hover:border-brand hover:text-brand"
+          >
+            <Plus size={12} /> 加一页
+          </button>
+        </div>
+
+        {/* 画布 */}
+        <div className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-page">
+          <div className="flex items-center justify-between px-4 py-2 text-[11.5px] text-tertiary">
+            <span>
+              第 {selected + 1} / {deck.slides.length} 页 · {LAYOUT_LABELS[slide.layout]}
+              {deck.editable === "partial" && (
+                <span className="ml-2 rounded bg-warning/10 px-1.5 py-0.5 text-warning">
+                  外部版式，保存将重排
+                </span>
+              )}
+            </span>
+            <span className="hidden lg:inline">点文字直接改，改完失焦生效</span>
+          </div>
+          <div className="mx-auto w-full max-w-[920px] px-4 pb-6">
+            <SlideCanvas
+              key={`${selected}-${slide.layout}`}
+              slide={slide}
+              theme={theme}
+              index={selected}
+              deckTitle={deck.title}
+              author={deck.author}
+              editable
+              onChange={patchSlide}
+              className="rounded-lg"
+            />
+          </div>
+        </div>
+
+        {/* 属性面板 */}
+        <div className="w-[268px] shrink-0 overflow-y-auto border-l border-line bg-surface-1 p-3">
+          <div className="mb-3 flex items-center gap-1.5">
+            <select
+              value={slide.layout}
+              onChange={(event) => {
+                const layout = event.target.value as SlideLayout;
+                mutate((current) => ({
+                  ...current,
+                  slides: current.slides.map((item, i) =>
+                    i === selected ? { ...blankSlide(layout), title: item.title } : item,
+                  ),
+                }));
+              }}
+              className="flex-1 rounded-md border border-line bg-surface-2 px-2 py-1.5 text-[12.5px] outline-none"
+            >
+              {LAYOUTS.map((layout) => (
+                <option key={layout} value={layout}>
+                  {LAYOUT_LABELS[layout]}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => {
+                if (deck.slides.length <= 1) return;
+                mutate((current) => ({
+                  ...current,
+                  slides: current.slides.filter((_, i) => i !== selected),
+                }));
+                setSelected(Math.max(0, selected - 1));
+              }}
+              disabled={deck.slides.length <= 1}
+              className="rounded-md p-1.5 text-secondary hover:bg-surface-3 hover:text-danger disabled:opacity-30"
+              title="删除本页"
+            >
+              <Trash2 size={14} />
+            </button>
+            <button
+              onClick={() => {
+                if (selected === 0) return;
+                mutate((current) => {
+                  const list = [...current.slides];
+                  const [item] = list.splice(selected, 1);
+                  if (item) list.splice(selected - 1, 0, item);
+                  return { ...current, slides: list };
+                });
+                setSelected(selected - 1);
+              }}
+              disabled={selected === 0}
+              className="rounded-md p-1.5 text-secondary hover:bg-surface-3 disabled:opacity-30"
+              title="上移"
+            >
+              <ChevronUp size={14} />
+            </button>
+            <button
+              onClick={() => {
+                if (selected >= deck.slides.length - 1) return;
+                mutate((current) => {
+                  const list = [...current.slides];
+                  const [item] = list.splice(selected, 1);
+                  if (item) list.splice(selected + 1, 0, item);
+                  return { ...current, slides: list };
+                });
+                setSelected(selected + 1);
+              }}
+              disabled={selected >= deck.slides.length - 1}
+              className="rounded-md p-1.5 text-secondary hover:bg-surface-3 disabled:opacity-30"
+              title="下移"
+            >
+              <ChevronDown size={14} />
+            </button>
+          </div>
+
+          <Field label="标题">
+            <input
+              value={slide.title ?? ""}
+              onChange={(event) => patchSlide({ title: event.target.value })}
+              className={inputCls}
+            />
+          </Field>
+
+          {slide.layout !== "two_col" && slide.layout !== "table" && (
+            <Field label={slide.layout === "quote" ? "出处" : "副标题"}>
+              <input
+                value={slide.subtitle ?? ""}
+                onChange={(event) => patchSlide({ subtitle: event.target.value })}
+                className={inputCls}
+              />
+            </Field>
+          )}
+
+          {["bullets", "two_col", "table"].includes(slide.layout) && (
+            <Field label="小标签（可选）">
+              <input
+                value={slide.kicker ?? ""}
+                onChange={(event) => patchSlide({ kicker: event.target.value })}
+                className={inputCls}
+                placeholder="例如：背景 / 数据"
+              />
+            </Field>
+          )}
+
+          {slide.layout === "section" && (
+            <Field label="章节序号">
+              <input
+                value={slide.number ?? ""}
+                onChange={(event) => patchSlide({ number: event.target.value })}
+                className={inputCls}
+                placeholder="留空则自动编号"
+              />
+            </Field>
+          )}
+
+          {slide.layout === "quote" && (
+            <Field label="引文">
+              <textarea
+                value={slide.quote ?? ""}
+                onChange={(event) => patchSlide({ quote: event.target.value })}
+                rows={4}
+                className={cn(inputCls, "resize-y leading-relaxed")}
+              />
+            </Field>
+          )}
+
+          {(slide.layout === "bullets" || slide.layout === "table") && (
+            <Field
+              label="要点（每行一条，以 - 开头为次级）"
+              hint={slide.layout === "table" ? "表格页缺表头时按要点渲染" : undefined}
+            >
+              <textarea
+                value={(slide.bullets ?? []).join("\n")}
+                onChange={(event) =>
+                  patchSlide({
+                    bullets: event.target.value
+                      .split("\n")
+                      .map((line) => line.trim())
+                      .filter(Boolean),
+                  })
+                }
+                rows={7}
+                className={cn(inputCls, "resize-y leading-relaxed")}
+              />
+            </Field>
+          )}
+
+          {slide.layout === "two_col" && (
+            <>
+              {[0, 1].map((ci) => {
+                const col = slide.columns?.[ci] ?? { title: "", bullets: [] };
+                return (
+                  <div key={ci} className="mb-3 rounded-md bg-surface-2 p-2">
+                    <p className="mb-1.5 text-[11px] text-tertiary">
+                      {ci === 0 ? "左栏" : "右栏"}
+                    </p>
+                    <input
+                      value={col.title}
+                      onChange={(event) => {
+                        const columns = [0, 1].map((index) => ({
+                          ...(slide.columns?.[index] ?? { title: "", bullets: [] }),
+                        }));
+                        const target = columns[ci] ?? { title: "", bullets: [] };
+                        columns[ci] = { ...target, title: event.target.value };
+                        patchSlide({ columns });
+                      }}
+                      placeholder="栏标题"
+                      className={cn(inputCls, "mb-1.5")}
+                    />
+                    <textarea
+                      value={col.bullets.join("\n")}
+                      onChange={(event) => {
+                        const columns = [0, 1].map((index) => ({
+                          ...(slide.columns?.[index] ?? { title: "", bullets: [] }),
+                        }));
+                        const target = columns[ci] ?? { title: "", bullets: [] };
+                        columns[ci] = {
+                          ...target,
+                          bullets: event.target.value
+                            .split("\n")
+                            .map((line) => line.trim())
+                            .filter(Boolean),
+                        };
+                        patchSlide({ columns });
+                      }}
+                      rows={4}
+                      className={cn(inputCls, "resize-y leading-relaxed")}
+                    />
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {slide.layout === "table" && (
+            <>
+              <Field label="表头（用 | 分隔）">
+                <input
+                  value={(slide.headers ?? []).join(" | ")}
+                  onChange={(event) => {
+                    const headers = event.target.value
+                      .split("|")
+                      .map((cell) => cell.trim())
+                      .filter(Boolean);
+                    patchSlide({ headers, rows: slide.rows ?? [] });
+                  }}
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="数据行（每行一组，用 | 分隔）">
+                <textarea
+                  value={(slide.rows ?? []).map((row) => row.join(" | ")).join("\n")}
+                  onChange={(event) =>
+                    patchSlide({
+                      rows: event.target.value
+                        .split("\n")
+                        .filter((line) => line.trim())
+                        .map((line) => line.split("|").map((cell) => cell.trim())),
+                    })
+                  }
+                  rows={6}
+                  className={cn(inputCls, "resize-y leading-relaxed")}
+                />
+              </Field>
+            </>
+          )}
+
+          <Field label="作者 / 署名">
+            <input
+              value={deck.author}
+              onChange={(event) => mutate((current) => ({ ...current, author: event.target.value }))}
+              className={inputCls}
+              placeholder="显示在封面上"
+            />
+          </Field>
+
+          <p className="mt-4 border-t border-line pt-3 text-[11px] leading-relaxed text-tertiary">
+            保存时按当前版式重新生成 pptx，文件 {Math.max(1, Math.round(deck.bytes / 1024))} KB。
+            {deck.theme_inferred && " 主题由原文件推断，可能与原稿略有差异。"}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const inputCls =
+  "w-full rounded-md border border-line bg-surface-2 px-2 py-1.5 text-[12.5px] outline-none focus:border-brand";
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="mb-3 block">
+      <span className="mb-1 block text-[11px] tracking-wide text-tertiary">{label}</span>
+      {children}
+      {hint && <span className="mt-1 block text-[10.5px] text-tertiary">{hint}</span>}
+    </label>
+  );
+}

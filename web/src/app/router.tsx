@@ -3,6 +3,7 @@ import { AppLayout } from "./layout/AppLayout";
 import { RequireAuth } from "./RequireAuth";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { ChatPage } from "@/features/chat/ChatPage";
+import { BrowserPage } from "@/features/browser/BrowserPage";
 import { KbPage } from "@/features/kb/KbPage";
 import { SkillsPage } from "@/features/skills/SkillsPage";
 import { ExpertsPage } from "@/features/experts/ExpertsPage";
@@ -24,6 +25,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/chat" replace /> },
       { path: "chat", element: <ChatPage /> },
+      { path: "browser", element: <BrowserPage /> },
       { path: "kb", element: <KbPage /> },
       { path: "experts", element: <ExpertsPage /> },
       { path: "skills", element: <SkillsPage /> },

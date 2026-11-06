@@ -10,11 +10,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api import deps
-from app.api.routes import agent, auth, chat, conversations, experts, health, kb, mcp, skills
+from app.api.routes import agent, auth, browse, chat, conversations, experts, health, kb, mcp, skills
 from app.api.routes import eval as eval_routes
 from app.api.routes import observability, openapi, platform, projects
 from app.core.config import get_settings
-from app.services import audit, metrics
+from app.services import audit, metrics, tickets
 
 # 控制台无需登录即可访问的端点：登录本身与健康探针
 PUBLIC_API_PATHS = {"/api/auth/login", "/api/health"}
@@ -28,6 +28,8 @@ def create_app() -> FastAPI:
     async def _auth_middleware(request: Request, call_next):
         """控制台全站鉴权：除白名单外，/api/* 一律要求有效会话。
 
+        例外是「预览票据」：iframe / img 带不了 Authorization 头，改用短期
+        票据（只对 GET + 预览前缀生效），见 services/tickets.py。
         /v1 走 API Key（各路由自带依赖），不放行到这里。
         """
         path = request.url.path
@@ -38,6 +40,15 @@ def create_app() -> FastAPI:
         ):
             token = deps._extract_bearer(request.headers.get("authorization"))
             user = deps.user_from_token(token)
+            if user is None:
+                grant = tickets.resolve(
+                    tickets.token_from(path, request.query_params.get("ticket")), path, request.method
+                )
+                if grant is not None:
+                    user = deps.users.get_user_store().get(grant["user_id"])
+                    if user is not None and not user.disabled:
+                        request.state.user = user
+                        request.state.ticket = grant
             if user is None:
                 return JSONResponse(
                     status_code=401,
@@ -82,6 +93,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router, prefix="/api")
     app.include_router(projects.router, prefix="/api")
+    app.include_router(browse.router, prefix="/api")
     app.include_router(auth.router, prefix="/api")
     app.include_router(chat.router, prefix="/api")
     app.include_router(kb.router, prefix="/api")

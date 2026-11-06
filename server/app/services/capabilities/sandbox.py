@@ -125,6 +125,17 @@ _TEMPLATES: dict[str, dict[str, str]] = {
 TEMPLATES = tuple(_TEMPLATES)
 
 
+def _render(content: str, ctx: dict[str, str]) -> str:
+    """只替换 {title}/{description} 这类占位符。
+
+    不能用 str.format——模板里有 CSS（`:root { color-scheme: ... }`）和
+    JS 花括号，format 会把它们当字段名并抛 KeyError。
+    """
+    for key, value in ctx.items():
+        content = content.replace("{" + key + "}", value)
+    return content
+
+
 def create_project(
     workspace_id: str, name: str, template: str = "blank", description: str = ""
 ) -> dict:
@@ -144,7 +155,7 @@ def create_project(
         if target.exists():
             continue  # 幂等：不覆盖已有文件
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content.format(**ctx), encoding="utf-8")
+        target.write_text(_render(content, ctx), encoding="utf-8")
         written.append(rel)
     return {
         "project": pid,
@@ -182,7 +193,8 @@ def delete_project(workspace_id: str, project: str) -> bool:
 
 # ---------- 文件 ----------
 
-_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", ".agent_tmp"}
+# .deck 存演示文稿的可编辑来源（sidecar），属于实现细节，不进文件树与打包
+_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", ".agent_tmp", ".deck"}
 
 
 def write_file(workspace_id: str, project: str, rel: str, content: str) -> dict:

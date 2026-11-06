@@ -9,6 +9,8 @@ export interface WebSource {
   url: string;
   snippet: string;
   fetched: boolean;
+  /** 抓取正文后回填的真实地址（重定向后可能与 url 不同） */
+  final_url?: string;
 }
 
 /** 一轮对话里联网的进展与结果 */

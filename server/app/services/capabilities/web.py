@@ -389,6 +389,8 @@ def web_fetch(url: str, max_chars: int = 6000) -> str:
             final_url = resp.geturl()
     except urllib.error.HTTPError as exc:
         raise WebError(f"页面返回 {exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+        raise WebError(f"抓取失败：{exc}") from exc
 
     if len(raw) > MAX_BYTES:
         raw = raw[:MAX_BYTES]
@@ -430,3 +432,91 @@ def web_fetch(url: str, max_chars: int = 6000) -> str:
     }
     _cache_put(key, payload)
     return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+# ---------- 内置浏览器用的原语 ----------
+
+def normalize_url(url: str) -> str:
+    target = (url or "").strip()
+    if not target:
+        raise WebError("地址为空")
+    if not target.startswith(("http://", "https://")):
+        target = "https://" + target
+    return target
+
+
+def fetch_raw(url: str, timeout: int = FETCH_TIMEOUT) -> tuple[bytes, str, str]:
+    """抓原始字节：返回 (body, final_url, content_type)。
+
+    网页代理与阅读模式共用这一条通道——与 web_fetch 的区别是这里不做
+    正文抽取、也不进缓存，调用方要的是能原样吐给浏览器的材料。
+    """
+    target = normalize_url(url)
+    _assert_public(target)
+    try:
+        with _open(target, timeout) as resp:
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            raw = resp.read(MAX_BYTES + 1)
+            final_url = resp.geturl()
+    except urllib.error.HTTPError as exc:
+        raise WebError(f"页面返回 {exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+        raise WebError(f"抓取失败：{exc}") from exc
+    return raw[:MAX_BYTES], final_url, ctype
+
+
+def decode_body(raw: bytes, ctype: str) -> str:
+    charset = "utf-8"
+    m = re.search(r"charset=([\w-]+)", ctype)
+    if m:
+        charset = m.group(1)
+    try:
+        return raw.decode(charset, "ignore")
+    except LookupError:
+        return raw.decode("utf-8", "ignore")
+
+
+def read_page(url: str, max_chars: int = 60000) -> dict:
+    """阅读模式：只回正文与标题，给前端排版成可读页面。"""
+    raw, final_url, ctype = fetch_raw(url)
+    if "application/pdf" in ctype:
+        return {
+            "url": url,
+            "final_url": final_url,
+            "content_type": ctype,
+            "title": final_url.rsplit("/", 1)[-1] or final_url,
+            "text": "",
+            "chars": 0,
+            "kind": "pdf",
+        }
+    if ctype and not any(x in ctype for x in ("html", "text", "json", "xml")):
+        return {
+            "url": url,
+            "final_url": final_url,
+            "content_type": ctype,
+            "title": final_url,
+            "text": "",
+            "chars": 0,
+            "kind": "binary",
+        }
+    html = decode_body(raw, ctype)
+    title, text = _extract(html, final_url)
+    if "json" in ctype:
+        return {
+            "url": url,
+            "final_url": final_url,
+            "content_type": ctype,
+            "title": final_url,
+            "text": html[:max_chars],
+            "chars": len(html),
+            "kind": "json",
+        }
+    return {
+        "url": url,
+        "final_url": final_url,
+        "content_type": ctype,
+        "title": title,
+        "text": text[:max_chars],
+        "chars": len(text),
+        "kind": "article",
+    }

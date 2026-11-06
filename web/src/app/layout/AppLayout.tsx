@@ -4,6 +4,7 @@ import {
   Cable,
   Database,
   FlaskConical,
+  Globe,
   KeyRound,
   MessagesSquare,
   Settings2,
@@ -28,6 +29,7 @@ const NAV: { title: string; items: NavEntry[] }[] = [
     title: "工作台",
     items: [
       { to: "/chat", label: "对话", icon: MessagesSquare },
+      { to: "/browser", label: "浏览器", icon: Globe },
       { to: "/kb", label: "知识库", icon: Database },
       { to: "/experts", label: "专家", icon: Users },
       { to: "/skills", label: "技能", icon: Sparkles },
@@ -119,7 +121,7 @@ export function AppLayout() {
 
         <div className="flex items-center gap-1.5 border-t border-line px-4 py-3 text-[11.5px] text-tertiary">
           <span className="h-1 w-1 rounded-full bg-tertiary" />
-          v0.1.0 · M7
+          v0.1.0 · M11
         </div>
       </aside>
 

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ChevronDown, Globe } from "lucide-react";
+import { Link } from "react-router-dom";
+import { AppWindow, ChevronDown, Globe } from "lucide-react";
 import { Markdown } from "./Markdown";
 import { cn } from "@/lib/utils";
 import type { ChatMessage, WebState } from "../chat-types";
@@ -57,7 +58,7 @@ function WebPanel({ web }: { web: WebState }) {
       {open && (
         <ol className="mt-1.5 space-y-1">
           {web.sources.map((s) => (
-            <li key={s.index} className="text-xs leading-relaxed">
+            <li key={s.index} className="flex items-center gap-1.5 text-xs leading-relaxed">
               <a
                 href={s.url}
                 target="_blank"
@@ -67,7 +68,14 @@ function WebPanel({ web }: { web: WebState }) {
               >
                 [W{s.index}] {s.title}
               </a>
-              {hostOf(s.url) && <span className="ml-1 text-tertiary">{hostOf(s.url)}</span>}
+              {hostOf(s.url) && <span className="text-tertiary">{hostOf(s.url)}</span>}
+              <Link
+                to={`/browser?tab=web&url=${encodeURIComponent(s.final_url || s.url)}`}
+                title="在内置浏览器中打开"
+                className="shrink-0 text-tertiary transition-colors hover:text-brand"
+              >
+                <AppWindow size={12} />
+              </Link>
             </li>
           ))}
         </ol>

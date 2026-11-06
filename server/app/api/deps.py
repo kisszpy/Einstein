@@ -67,6 +67,11 @@ def current_workspace(
     """
     requested = workspaces.resolve(x_workspace)
     user = getattr(request.state, "user", None)
+    # iframe / img 带不了 X-Workspace 头，工作区以票据绑定的为准，
+    # 否则预览会掉到 default 工作区里 404。
+    ticket = getattr(request.state, "ticket", None)
+    if ticket and not x_workspace:
+        return ticket.get("workspace") or requested
     if user is None:
         return requested
     if user.can_access(requested):

@@ -16,7 +16,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
-from app.services.capabilities import code_exec, ppt, sandbox, web
+from app.services.capabilities import code_exec, deck, ppt, sandbox, web
 
 # 能力分组（前端展示 / 默认勾选用）
 CAPABILITIES = [
@@ -247,8 +247,11 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
                 "theme": theme, "filename": filename, "slides": slides or [],
             }
             rel = f"deck/{ppt._safe_filename(payload['filename'] or title)}.pptx"
-            out: Path = sandbox.resolve_in(sandbox.project_dir(ws, project), rel)
+            root = sandbox.project_dir(ws, project)
+            out: Path = sandbox.resolve_in(root, rel)
             info = ppt.write_pptx(payload, out)
+            # 记住结构化来源：之后在内置浏览器里编辑这份 PPT 可无损还原
+            deck.remember(root, rel, payload)
             info["ok"] = True
             info["path"] = rel
             del info["file"]

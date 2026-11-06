@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { readSseStream } from "@/features/chat/sse-parser";
 import { Markdown } from "@/features/chat/components/Markdown";
 import { Button } from "@/components/ui/button";
@@ -51,6 +52,13 @@ interface ProjectInfo {
   files: number;
   size: string;
   updated_at: string;
+}
+
+
+/** 产物在内置浏览器里打开的路径（pptx 直接进编辑器）。 */
+function browserLink(project: string, path: string): string {
+  const tab = path.toLowerCase().endsWith(".pptx") ? "deck" : "artifact";
+  return `/browser?tab=${tab}&project=${encodeURIComponent(project)}&path=${encodeURIComponent(path)}`;
 }
 
 interface TreeNode {
@@ -414,15 +422,33 @@ export function AgentsPage() {
                     <p className="mb-2 text-xs text-tertiary">产出物</p>
                     <div className="flex flex-wrap gap-2">
                       {artifacts.map((a) => (
-                        <a
+                        <span
                           key={a.path}
-                          href={project ? downloadUrl(project, a.path) : undefined}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[13px] text-primary transition-colors duration-150 hover:border-brand hover:text-brand"
+                          className="inline-flex items-center rounded-lg border border-line text-[13px] text-primary transition-colors duration-150 hover:border-brand"
                         >
-                          <Presentation className="h-3.5 w-3.5 text-brand" strokeWidth={1.75} />
-                          {fileName(a.path)}
-                          <Download className="h-3 w-3 text-tertiary" strokeWidth={1.75} />
-                        </a>
+                          {project ? (
+                            <Link
+                              to={browserLink(project, a.path)}
+                              className="inline-flex items-center gap-1.5 py-1.5 pl-2.5 text-primary hover:text-brand"
+                              title="在内置浏览器中打开"
+                            >
+                              <Presentation className="h-3.5 w-3.5 text-brand" strokeWidth={1.75} />
+                              {fileName(a.path)}
+                            </Link>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5">
+                              <Presentation className="h-3.5 w-3.5 text-brand" strokeWidth={1.75} />
+                              {fileName(a.path)}
+                            </span>
+                          )}
+                          <a
+                            href={project ? downloadUrl(project, a.path) : undefined}
+                            title="下载"
+                            className="border-l border-line px-2 py-1.5 text-tertiary hover:text-brand"
+                          >
+                            <Download className="h-3 w-3" strokeWidth={1.75} />
+                          </a>
+                        </span>
                       ))}
                     </div>
                   </div>
@@ -512,16 +538,27 @@ export function AgentsPage() {
                         );
                       }
                       return (
-                        <a
+                        <div
                           key={node.path}
-                          href={downloadUrl(project, node.path)}
-                          className="flex items-center justify-between gap-2 truncate rounded px-1.5 py-1 text-xs text-primary transition-colors duration-150 hover:bg-surface-3 hover:text-brand"
+                          className="group flex items-center gap-1 rounded pr-1 transition-colors duration-150 hover:bg-surface-3"
                           style={{ paddingLeft: `${8 + depth * 14}px` }}
-                          title={`下载 ${node.path}`}
                         >
-                          <span className="truncate">{node.path.split("/").pop()}</span>
-                          <span className="shrink-0 text-tertiary">{node.size}</span>
-                        </a>
+                          <Link
+                            to={browserLink(project, node.path)}
+                            className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded py-1 text-xs text-primary hover:text-brand"
+                            title="在内置浏览器中打开"
+                          >
+                            <span className="truncate">{node.path.split("/").pop()}</span>
+                            <span className="shrink-0 text-tertiary">{node.size}</span>
+                          </Link>
+                          <a
+                            href={downloadUrl(project, node.path)}
+                            title="下载"
+                            className="shrink-0 rounded p-0.5 text-tertiary opacity-0 transition-opacity hover:text-brand group-hover:opacity-100"
+                          >
+                            <Download className="h-3 w-3" strokeWidth={1.75} />
+                          </a>
+                        </div>
                       );
                     })}
                   </div>
