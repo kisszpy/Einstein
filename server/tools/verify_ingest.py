@@ -1,24 +1,24 @@
 """摄取链路验收：格式解析 / 去重 / 版本 / 回滚 / 切片编辑 / 删除 / 异步任务。
 
-要求：后端已启动且与脚本使用同一个存储后端（脚本默认 sqlite）。
+脚本会在自己的进程里起一个「假 worker」：从队列领任务、直接调 handler 执行，
+所以**必须与被测服务共用同一份配置**（同一 .env、同一存储后端、同一队列）。
+以前这里硬编码 sqlite，导致服务跑在 PG 上时，异步用例其实写进了 SQLite —— 表面
+18/18，实际验的不是同一个库。现在一律继承 .env，需要换目标就换 --base 与 .env。
 
 用法：
-    APP_STORE_BACKEND=sqlite ./.venv/Scripts/python.exe tools/verify_ingest.py \
-        --base http://127.0.0.1:8001
+    ./.venv/Scripts/python.exe tools/verify_ingest.py                        # 打 8000
+    ./.venv/Scripts/python.exe tools/verify_ingest.py --base http://127.0.0.1:8001
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
-
-os.environ.setdefault("APP_STORE_BACKEND", "sqlite")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -32,7 +32,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base", default="http://127.0.0.1:8001")
+    parser.add_argument("--base", default="http://127.0.0.1:8000")
     args = parser.parse_args()
     base = args.base.rstrip("/")
 
@@ -80,6 +80,12 @@ def main() -> int:
     status, kb = call("POST", "/api/kb", {"name": f"摄取验收-{uuid.uuid4().hex[:6]}"})
     kb_id = kb["id"]
     print(f"\n验收知识库 {kb_id}")
+
+    # 中途断言失败也要清库：否则每崩一次就留一个「摄取验收-xxxx」加一堆测试文档，
+    # 在 PG 里看着像真实数据。
+    import atexit
+
+    atexit.register(lambda: call("DELETE", f"/api/kb/{kb_id}"))
 
     csv_v1 = "产品,价格\n甲,100\n乙,200\n".encode()
     csv_v2 = "产品,价格\n甲,120\n乙,200\n丙,300\n".encode()
@@ -158,6 +164,33 @@ def main() -> int:
         check("不支持的格式直接 failed", failed is not None and failed.status == "failed",
               f"{failed.status if failed else 'NA'}")
 
+    # ---------------- 在途任务 + 删库：不能留下孤儿文档
+    # 任务入队后库被删，worker 才消费——曾经会往已删除的库里写文档/切片/向量，
+    # 列表里看不见却白占存储，只能手工清。这里守住这个边界。
+    status, kb2 = call("POST", "/api/kb", {"name": f"竞态验收-{uuid.uuid4().hex[:6]}"})
+    if status == 200 and kb2.get("id"):
+        atexit.register(lambda: call("DELETE", f"/api/kb/{kb2['id']}"))
+        status, j2 = upload(f"/api/kb/{kb2['id']}/documents/async", "在途.md",
+                            "# 在途\n这段文本对应一个马上被删除的知识库。\n".encode())
+        ds, dbody = call("DELETE", f"/api/kb/{kb2['id']}")
+        check("删库成功（任务仍在队列里）", ds == 200, f"{ds} {dbody}")
+        if status == 200 and j2.get("job_id"):
+            from app.services.queue import get_queue
+            from app.services.store import get_store
+            from app.workers.worker import execute
+
+            q = get_queue()
+            claimed = q.claim()
+            if claimed:
+                execute(q, claimed)
+            refused = q.get(j2["job_id"])
+            check("删库后在途任务被拒（不重试）",
+                  refused is not None and refused.status == "failed"
+                  and "已被删除" in (refused.error or ""),
+                  f"{refused.status if refused else 'NA'} {refused.error if refused else ''}")
+            left = [d for d in get_store().repo.list_documents_all() if d.kb_id == kb2["id"]]
+            check("删库后不留孤儿文档", not left, f"残留 {len(left)} 篇")
+
     # ---------------- 删除文档
     status, deleted = call("DELETE", f"/api/kb/{kb_id}/documents/{r1['id']}")
     check("删除文档成功", status == 200 and deleted.get("ok") is True, str(deleted))
@@ -170,7 +203,9 @@ def main() -> int:
     check("URL 抓取失败返回 400 而非 500", status == 400, f"{status} {url_res}")
 
     # ---------------- 清理
-    call("DELETE", f"/api/kb/{kb_id}")
+    status, _ = call("DELETE", f"/api/kb/{kb_id}")
+    if status != 200:
+        print(f"  ! 清理失败：DELETE /api/kb/{kb_id} -> {status}")
 
     total = len(RESULTS)
     passed = sum(1 for r in RESULTS if r[1])

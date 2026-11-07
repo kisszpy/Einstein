@@ -61,6 +61,17 @@ def _kb_ingest(job: Job) -> dict:
     if not src.exists():
         raise PermanentJobError(f"上传文件已不存在：{raw_path}")
 
+    store = get_store()
+    if store.repo.get_kb(kb_id) is None:
+        # 任务入队后库可能已被删除。此时继续入库会写出孤儿文档/切片/向量：
+        # 列表里看不到（库没了），却占存储、污染向量索引，只能手工清。
+        # 这种情况重试也不会好，判永久失败并清掉落盘文件。
+        try:
+            src.unlink()
+        except OSError:
+            pass
+        raise PermanentJobError(f"知识库 {kb_id} 已被删除，放弃入库")
+
     progress("解析", 10)
     try:
         content = parse_document(src.read_bytes(), name)
@@ -70,7 +81,6 @@ def _kb_ingest(job: Job) -> dict:
         raise PermanentJobError(f"{name}: 解析结果为空")
 
     progress("切片与嵌入", 40, chars=len(content))
-    store = get_store()
     result = asyncio.run(
         ingest_document(
             store, kb_id, name, content, source=data.get("source") or "upload"
@@ -103,6 +113,7 @@ def _kb_reindex(job: Job) -> dict:
     """
     import asyncio
 
+    from app.services.queue.base import PermanentJobError
     from app.services.rag import reindex_document
     from app.services.store import get_store
     from app.services.vector import get_vector_index
@@ -112,7 +123,10 @@ def _kb_reindex(job: Job) -> dict:
     document_id = payload.get("document_id") or None
 
     if document_id:
-        count = asyncio.run(reindex_document(get_store(), document_id))
+        store = get_store()
+        if store.get_document(document_id) is None:
+            raise PermanentJobError(f"文档 {document_id} 已不存在（可能随知识库一起删除了）")
+        count = asyncio.run(reindex_document(store, document_id))
         return {"document_id": document_id, "indexed": count}
 
     chunks = [c for c in get_store().list_chunks([kb_id] if kb_id else None) if c.vector]
