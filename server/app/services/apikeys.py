@@ -13,10 +13,13 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.services.state import blob
+
 from app.services.workspaces import DEFAULT_ID
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 STORE_PATH = DATA_DIR / "api_keys.json"
+_STATE = blob("apikeys", STORE_PATH)
 
 KEY_PREFIX = "sk-"
 
@@ -99,19 +102,17 @@ class ApiKeyStore:
         return None
 
     def save(self) -> None:
-        DATA_DIR.mkdir(exist_ok=True)
         payload = {k: asdict(v) for k, v in self.items.items()}
-        STORE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _STATE.write(payload)
 
     @classmethod
     def load(cls) -> "ApiKeyStore":
         store = cls()
-        if STORE_PATH.exists():
-            try:
-                payload = json.loads(STORE_PATH.read_text(encoding="utf-8"))
-                store.items = {k: ApiKey(**v) for k, v in payload.items()}
-            except Exception:  # noqa: BLE001 — 损坏则重建
-                pass
+        try:
+            payload = _STATE.read() or {}
+            store.items = {k: ApiKey(**v) for k, v in payload.items()}
+        except Exception:  # noqa: BLE001 — 损坏则重建
+            pass
         return store
 
 

@@ -15,6 +15,8 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+
+from app.services.state import blob
 from typing import Literal
 
 import mcp.client.stdio as _stdio
@@ -24,6 +26,7 @@ from pydantic import BaseModel, Field
 
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 _STORE_PATH = _DATA_DIR / "mcp_servers.json"
+_STATE = blob("mcp", _STORE_PATH)
 
 TOOL_CALL_TIMEOUT = 120  # 单次工具调用上限（秒）
 LIST_TIMEOUT = 20        # 刷新工具清单上限（秒）
@@ -68,19 +71,16 @@ _lock = threading.Lock()
 
 
 def _load() -> dict[str, McpServer]:
-    if not _STORE_PATH.exists():
-        return {}
     try:
-        payload = json.loads(_STORE_PATH.read_text(encoding="utf-8"))
+        payload = _STATE.read() or {}
         return {sid: McpServer(**v) for sid, v in payload.items()}
     except Exception:  # noqa: BLE001 — 损坏则重建
         return {}
 
 
 def _save(servers: dict[str, McpServer]) -> None:
-    _DATA_DIR.mkdir(exist_ok=True)
     payload = {sid: s.model_dump(by_alias=True) for sid, s in servers.items()}
-    _STORE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _STATE.write(payload)
 
 
 def _registry() -> dict[str, McpServer]:

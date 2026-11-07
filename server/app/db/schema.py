@@ -139,10 +139,22 @@ _MIGRATION_003 = [
     "CREATE INDEX IF NOT EXISTS idx_job_lease ON jobs(status, lease_until)",
 ]
 
+_MIGRATION_004 = [
+    """
+    CREATE TABLE IF NOT EXISTS domain_state (
+        domain     TEXT PRIMARY KEY,
+        payload    TEXT NOT NULL,
+        version    INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL
+    )
+    """,
+]
+
 MIGRATIONS: list[tuple[int, list[str]]] = [
     (1, _MIGRATION_001),
     (2, _MIGRATION_002),
     (3, _MIGRATION_003),
+    (4, _MIGRATION_004),
 ]
 
 _TYPE_TOKENS = {

@@ -25,6 +25,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 SERVER_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = SERVER_ROOT / "data" / "kb_store.json"
 DEFAULT_HISTORY = SERVER_ROOT / "data" / "history_store.json"
+DEFAULT_DATA = SERVER_ROOT / "data"
+
+# 配置域：整域一份 JSON，迁到 domain_state 表（domain 主键）
+STATE_DOMAINS = {
+    "experts": "experts_store.json",
+    "skills": "skills_store.json",
+    "users": "users.json",
+    "workspaces": "workspaces.json",
+    "apikeys": "api_keys.json",
+    "audit": "audit.json",
+    "eval": "eval_sets.json",
+    "mcp": "mcp_servers.json",
+}
 
 
 def load_source(path: Path) -> dict:
@@ -47,10 +60,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", default=str(DEFAULT_SOURCE))
     parser.add_argument("--history-source", default=str(DEFAULT_HISTORY))
-    parser.add_argument("--only", choices=["all", "kb", "history"], default="all")
+    parser.add_argument("--only", choices=["all", "kb", "history", "state"], default="all")
     parser.add_argument("--backend", choices=["sqlite", "postgres"], default=None)
     parser.add_argument("--db", default=None, help="sqlite 文件路径（--backend sqlite 时生效）")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force", action="store_true", help="库内已有不同内容时也覆盖")
     args = parser.parse_args()
 
     from app.core.config import get_settings
@@ -63,6 +77,7 @@ def main() -> int:
 
     do_kb = args.only in ("all", "kb")
     do_history = args.only in ("all", "history")
+    do_state = args.only in ("all", "state")
 
     payload = load_source(Path(args.source)) if do_kb else {}
     kbs = payload.get("kbs") or {}
@@ -81,6 +96,10 @@ def main() -> int:
     if do_history:
         print(f"会话源：{args.history_source}")
         print(f"  待迁移：{len(convs)} 个会话 / {msg_count} 条消息 / {len(runs)} 条运行记录")
+    if do_state:
+        print(f"配置域源：{DEFAULT_DATA}")
+        present = [d for d in STATE_DOMAINS if (DEFAULT_DATA / STATE_DOMAINS[d]).exists()]
+        print(f"  待迁移：{len(present)} 个域（{'、'.join(present) or '无文件'}）")
     if args.dry_run:
         print("--dry-run：未写入任何数据")
         return 0
@@ -103,6 +122,8 @@ def main() -> int:
         migrate_kb(db, kbs, documents, chunks, insert_ignore, conflict, now)
     if do_history:
         migrate_history(db, convs, runs, insert_ignore, conflict, now)
+    if do_state:
+        migrate_state(db, now, force=args.force)
 
     # 核对
     if do_kb:
@@ -127,6 +148,40 @@ def main() -> int:
             return 1
     print("迁移完成（幂等，可重复执行）")
     return 0
+
+
+def migrate_state(db, now: str, *, force: bool = False) -> int:
+    """把 8 个配置域的 JSON 灌进 domain_state；库内已有不同内容时默认不覆盖。"""
+    moved = 0
+    for domain, filename in STATE_DOMAINS.items():
+        path = DEFAULT_DATA / filename
+        if not path.exists():
+            print(f"  {domain}: 跳过（{filename} 不存在）")
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            print(f"  {domain}: 跳过（解析失败：{exc}）", file=sys.stderr)
+            continue
+        text = json.dumps(payload, ensure_ascii=False)
+        count = len(payload) if isinstance(payload, (dict, list)) else 1
+
+        existing = db.query_one("SELECT payload FROM domain_state WHERE domain = ?", (domain,))
+        if existing and existing["payload"] == text:
+            print(f"  {domain}: 已一致（{count} 条），跳过")
+            continue
+        if existing and not force:
+            print(f"  {domain}: 库内已有不同内容，跳过（--force 可覆盖）")
+            continue
+        db.execute(
+            "INSERT INTO domain_state (domain, payload, version, updated_at) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT (domain) DO UPDATE SET payload = excluded.payload,"
+            " version = domain_state.version + 1, updated_at = excluded.updated_at",
+            (domain, text, 1, now),
+        )
+        print(f"  {domain}: 已写入 {count} 条")
+        moved += 1
+    return moved
 
 
 def migrate_kb(db, kbs: dict, documents: dict, chunks: list, insert_ignore: str,

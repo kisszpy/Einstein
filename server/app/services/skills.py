@@ -9,8 +9,11 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from app.services.state import blob
+
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 STORE_PATH = DATA_DIR / "skills_store.json"
+_STATE = blob("skills", STORE_PATH)
 
 # ---------- 内置技能种子（builtin 不可删，可编辑） ----------
 
@@ -158,19 +161,17 @@ class SkillStore:
 
     # ---- 持久化 ----
     def save(self) -> None:
-        DATA_DIR.mkdir(exist_ok=True)
         payload = {k: asdict(v) for k, v in self.skills.items()}
-        STORE_PATH.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        _STATE.write(payload)
 
     @classmethod
     def load(cls) -> "SkillStore":
         store = cls()
-        if STORE_PATH.exists():
-            try:
-                payload = json.loads(STORE_PATH.read_text(encoding="utf-8"))
-                store.skills = {k: Skill(**v) for k, v in payload.items()}
-            except Exception:  # noqa: BLE001 — 损坏则重建
-                pass
+        try:
+            payload = _STATE.read() or {}
+            store.skills = {k: Skill(**v) for k, v in payload.items()}
+        except Exception:  # noqa: BLE001 — 损坏则重建
+            pass
         store.ensure_seed()
         return store
 

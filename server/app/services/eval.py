@@ -17,6 +17,8 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.services.state import blob
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.services import metrics
@@ -26,6 +28,7 @@ from app.services.store import get_store
 
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 _STORE_PATH = _DATA_DIR / "eval_sets.json"
+_STATE = blob("eval", _STORE_PATH)
 
 EVAL_TOP_K = 3
 EVAL_SYSTEM = (
@@ -58,10 +61,8 @@ _lock = threading.Lock()
 
 
 def _load() -> dict[str, EvalSet]:
-    if not _STORE_PATH.exists():
-        return {}
     try:
-        payload = json.loads(_STORE_PATH.read_text(encoding="utf-8"))
+        payload = _STATE.read() or {}
         return {
             sid: EvalSet(
                 id=v["id"],
@@ -78,9 +79,8 @@ def _load() -> dict[str, EvalSet]:
 
 def _save() -> None:
     assert _sets is not None
-    _DATA_DIR.mkdir(exist_ok=True)
     payload = {sid: asdict(s) for sid, s in _sets.items()}
-    _STORE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _STATE.write(payload)
 
 
 def _registry() -> dict[str, EvalSet]:

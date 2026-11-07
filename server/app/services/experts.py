@@ -10,8 +10,11 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from app.services.state import blob
+
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 STORE_PATH = DATA_DIR / "experts_store.json"
+_STATE = blob("experts", STORE_PATH)
 
 
 @dataclass
@@ -77,19 +80,17 @@ class ExpertStore:
 
     # ---- 持久化 ----
     def save(self) -> None:
-        DATA_DIR.mkdir(exist_ok=True)
         payload = {k: asdict(v) for k, v in self.experts.items()}
-        STORE_PATH.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        _STATE.write(payload)
 
     @classmethod
     def load(cls) -> "ExpertStore":
         store = cls()
-        if STORE_PATH.exists():
-            try:
-                payload = json.loads(STORE_PATH.read_text(encoding="utf-8"))
-                store.experts = {k: Expert(**v) for k, v in payload.items()}
-            except Exception:  # noqa: BLE001 — 损坏则重建
-                pass
+        try:
+            payload = _STATE.read() or {}
+            store.experts = {k: Expert(**v) for k, v in payload.items()}
+        except Exception:  # noqa: BLE001 — 损坏则重建
+            pass
         return store
 
 

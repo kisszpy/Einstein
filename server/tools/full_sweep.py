@@ -9,6 +9,7 @@
 """
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -16,7 +17,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
-BASE = "http://127.0.0.1:8000"
+# 可用 SWEEP_BASE 指向临时实例（如 8001 的全生产后端组合）
+BASE = os.environ.get("SWEEP_BASE", "http://127.0.0.1:8000").rstrip("/")
 _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 TOKEN = ""

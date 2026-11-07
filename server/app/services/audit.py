@@ -9,8 +9,11 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.services.state import blob
+
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 STORE_PATH = DATA_DIR / "audit.json"
+_STATE = blob("audit", STORE_PATH)
 
 MAX_ENTRIES = 3000
 
@@ -23,21 +26,17 @@ def _ensure_loaded() -> None:
     global _loaded
     if _loaded:
         return
-    if STORE_PATH.exists():
-        try:
-            payload = json.loads(STORE_PATH.read_text(encoding="utf-8"))
-            if isinstance(payload, list):
-                _entries.extend(payload[-MAX_ENTRIES:])
-        except Exception:  # noqa: BLE001 — 损坏则丢弃
-            pass
+    try:
+        payload = _STATE.read()
+        if isinstance(payload, list):
+            _entries.extend(payload[-MAX_ENTRIES:])
+    except Exception:  # noqa: BLE001 — 损坏则丢弃
+        pass
     _loaded = True
 
 
 def _flush() -> None:
-    DATA_DIR.mkdir(exist_ok=True)
-    STORE_PATH.write_text(
-        json.dumps(_entries[-MAX_ENTRIES:], ensure_ascii=False), encoding="utf-8"
-    )
+    _STATE.write(_entries[-MAX_ENTRIES:])
 
 
 def record(

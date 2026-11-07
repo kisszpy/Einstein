@@ -12,8 +12,11 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.services.state import blob
+
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 STORE_PATH = DATA_DIR / "workspaces.json"
+_STATE = blob("workspaces", STORE_PATH)
 
 DEFAULT_ID = "default"
 DEFAULT_NAME = "默认工作区"
@@ -73,19 +76,17 @@ class WorkspaceStore:
         return True
 
     def save(self) -> None:
-        DATA_DIR.mkdir(exist_ok=True)
         payload = {k: asdict(v) for k, v in self.items.items()}
-        STORE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _STATE.write(payload)
 
     @classmethod
     def load(cls) -> "WorkspaceStore":
         store = cls()
-        if STORE_PATH.exists():
-            try:
-                payload = json.loads(STORE_PATH.read_text(encoding="utf-8"))
-                store.items = {k: Workspace(**v) for k, v in payload.items()}
-            except Exception:  # noqa: BLE001 — 损坏则重建
-                pass
+        try:
+            payload = _STATE.read() or {}
+            store.items = {k: Workspace(**v) for k, v in payload.items()}
+        except Exception:  # noqa: BLE001 — 损坏则重建
+            pass
         store.ensure_default()
         return store
 
