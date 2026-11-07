@@ -1,126 +1,101 @@
-"""会话与智能体运行历史：开发期 JSON 持久化，与 KB 同一适配器模式。
+"""会话与智能体运行历史门面。
 
-生产替换点：PostgreSQL（conversations / messages / agent_runs 表）。
+对外保持 v0.1 的 `HistoryStore` 方法签名（`upsert_conversation` / `add_agent_run` /
+`list_session_runs` ...），内部按 `settings.store_backend` 委派给 JSON 或 SQL 仓储：
+- json   → 全量内存 + 单文件（兼容 v0.1 数据，无数据库时的降级路径）
+- sqlite → 单机事务（WAL），本地开发默认
+- postgres → 生产
+
+`conversations` / `agent_runs` 属性仍然可用（旧脚本会直接读），但它们是只读快照，
+热路径（列表、详情）必须走方法，否则 SQL 后端等于把全表读进内存。
 """
 
-import json
+from __future__ import annotations
+
 import threading
-import uuid
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
+
+from app.core.config import get_settings
+from app.db.engine import get_db
+from app.db.models import AgentRun, Conversation, StoredMessage
+from app.db.schema import migrate
+from app.services.repositories.history import (
+    HistoryRepository,
+    JsonHistoryRepository,
+    SqlHistoryRepository,
+)
+
+__all__ = [
+    "AgentRun",
+    "Conversation",
+    "HistoryStore",
+    "StoredMessage",
+    "get_history_store",
+    "reset_history_store",
+]
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 STORE_PATH = DATA_DIR / "history_store.json"
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-@dataclass
-class StoredMessage:
-    role: str
-    content: str
-    created_at: str
-
-
-@dataclass
-class Conversation:
-    id: str
-    title: str
-    created_at: str
-    updated_at: str
-    messages: list[StoredMessage] = field(default_factory=list)
-    workspace_id: str = "default"
-
-
-@dataclass
-class AgentRun:
-    id: str
-    task: str
-    tool_ids: list[str]
-    steps: list[dict]
-    answer: str
-    status: str  # ok | error
-    created_at: str
-    workspace_id: str = "default"
-    project: str = ""
-    artifacts: list[dict] = field(default_factory=list)
-    # 同一任务的后续追问共享 session_id；turn 从 1 开始递增
-    session_id: str = ""
-    turn: int = 1
-
-
-@dataclass
 class HistoryStore:
-    conversations: dict[str, Conversation] = field(default_factory=dict)
-    agent_runs: dict[str, AgentRun] = field(default_factory=dict)
+    def __init__(self, repo: HistoryRepository) -> None:
+        self.repo = repo
 
-    # ---- 会话 ----
+    # ---------- 兼容属性（只读快照） ----------
+    @property
+    def conversations(self) -> dict[str, Conversation]:
+        return {c.id: c for c in self.repo.list_conversations()}
+
+    @property
+    def agent_runs(self) -> dict[str, AgentRun]:
+        return {r.id: r for r in self.repo.list_agent_runs()}
+
+    # ---------- 会话 ----------
     def upsert_conversation(
         self, conversation_id: str, user_text: str, assistant_text: str, title: str,
         workspace_id: str = "default",
     ) -> Conversation:
-        now = _now()
-        conv = self.conversations.get(conversation_id)
-        if conv is None:
-            conv = Conversation(
-                id=conversation_id, title=title, created_at=now, updated_at=now,
-                workspace_id=workspace_id,
-            )
-            self.conversations[conversation_id] = conv
-        conv.messages.append(StoredMessage("user", user_text, now))
-        conv.messages.append(StoredMessage("assistant", assistant_text, now))
-        conv.updated_at = now
+        conv = self.repo.upsert_conversation(
+            conversation_id, user_text, assistant_text, title, workspace_id,
+        )
+        self.repo.save()
         return conv
 
     def list_conversations(self, workspace_id: str | None = None) -> list[Conversation]:
-        rows = list(self.conversations.values())
-        if workspace_id:
-            rows = [c for c in rows if c.workspace_id == workspace_id]
-        return sorted(rows, key=lambda c: c.updated_at, reverse=True)
+        return self.repo.list_conversations(workspace_id)
 
     def get_conversation(self, conversation_id: str) -> Conversation | None:
-        return self.conversations.get(conversation_id)
+        return self.repo.get_conversation(conversation_id)
 
     def delete_conversation(self, conversation_id: str) -> bool:
-        return self.conversations.pop(conversation_id, None) is not None
+        ok = self.repo.delete_conversation(conversation_id)
+        self.repo.save()
+        return ok
 
-    # ---- 智能体运行 ----
+    # ---------- 智能体运行 ----------
     def add_agent_run(
         self, task: str, tool_ids: list[str], steps: list[dict], answer: str, status: str,
         workspace_id: str = "default", project: str = "", artifacts: list[dict] | None = None,
         session_id: str = "", turn: int = 1,
     ) -> AgentRun:
-        run = AgentRun(
-            id=uuid.uuid4().hex[:12],
-            task=task,
-            tool_ids=tool_ids,
-            steps=steps,
-            answer=answer,
-            status=status,
-            created_at=_now(),
-            workspace_id=workspace_id,
-            project=project,
-            artifacts=artifacts or [],
-            session_id=session_id,
-            turn=turn,
+        run = self.repo.add_agent_run(
+            task, tool_ids, steps, answer, status, workspace_id, project, artifacts,
+            session_id, turn,
         )
-        self.agent_runs[run.id] = run
+        self.repo.save()
         return run
 
     def list_agent_runs(self, workspace_id: str | None = None) -> list[AgentRun]:
-        rows = list(self.agent_runs.values())
-        if workspace_id:
-            rows = [r for r in rows if r.workspace_id == workspace_id]
-        return sorted(rows, key=lambda r: r.created_at, reverse=True)
+        return self.repo.list_agent_runs(workspace_id)
 
     def get_agent_run(self, run_id: str) -> AgentRun | None:
-        return self.agent_runs.get(run_id)
+        return self.repo.get_agent_run(run_id)
 
     def delete_agent_run(self, run_id: str) -> bool:
-        return self.agent_runs.pop(run_id, None) is not None
+        ok = self.repo.delete_agent_run(run_id)
+        self.repo.save()
+        return ok
 
     @staticmethod
     def session_key(run: AgentRun) -> str:
@@ -129,66 +104,42 @@ class HistoryStore:
 
     def list_session_runs(self, session_id: str, workspace_id: str | None = None) -> list[AgentRun]:
         """取一个会话的全部轮次，按时间正序（含把自身 id 当会话 id 的老数据）。"""
-        rows = [
-            r for r in self.agent_runs.values()
-            if r.id == session_id or self.session_key(r) == session_id
-        ]
-        if workspace_id:
-            rows = [r for r in rows if r.workspace_id == workspace_id]
-        return sorted(rows, key=lambda r: (r.created_at, r.turn))
+        return self.repo.list_session_runs(session_id, workspace_id)
 
     def delete_session(self, session_id: str, workspace_id: str | None = None) -> int:
         """删除整个会话（所有轮次），返回删除条数。"""
-        targets = [r.id for r in self.list_session_runs(session_id, workspace_id)]
-        for rid in targets:
-            self.agent_runs.pop(rid, None)
-        return len(targets)
+        deleted = self.repo.delete_session(session_id, workspace_id)
+        self.repo.save()
+        return deleted
 
-    # ---- 持久化 ----
+    # ---------- 持久化 ----------
     def save(self) -> None:
-        DATA_DIR.mkdir(exist_ok=True)
-        payload = {
-            "conversations": {k: asdict(v) for k, v in self.conversations.items()},
-            "agent_runs": {k: asdict(v) for k, v in self.agent_runs.items()},
-        }
-        STORE_PATH.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-
-    @classmethod
-    def load(cls) -> "HistoryStore":
-        if not STORE_PATH.exists():
-            return cls()
-        try:
-            payload = json.loads(STORE_PATH.read_text(encoding="utf-8"))
-            store = cls()
-            # 消息在 JSON 里是 dict，必须反序列化成 StoredMessage，
-            # 否则读取会话详情时 m.role 会抛 AttributeError（500）。
-            store.conversations = {
-                k: Conversation(
-                    **{
-                        **v,
-                        "messages": [
-                            m if isinstance(m, StoredMessage) else StoredMessage(**m)
-                            for m in (v.get("messages") or [])
-                        ],
-                    }
-                )
-                for k, v in payload.get("conversations", {}).items()
-            }
-            store.agent_runs = {
-                k: AgentRun(**v) for k, v in payload.get("agent_runs", {}).items()
-            }
-            return store
-        except Exception:  # noqa: BLE001 — 损坏则重建
-            return cls()
+        self.repo.save()
 
 
 _store: HistoryStore | None = None
 _lock = threading.Lock()
 
 
+def _build_repo() -> HistoryRepository:
+    backend = get_settings().store_backend
+    if backend in ("sqlite", "postgres"):
+        db = get_db()
+        migrate(db)
+        return SqlHistoryRepository(db)
+    return JsonHistoryRepository(STORE_PATH)
+
+
 def get_history_store() -> HistoryStore:
     global _store
     with _lock:
         if _store is None:
-            _store = HistoryStore.load()
+            _store = HistoryStore(_build_repo())
         return _store
+
+
+def reset_history_store() -> None:
+    """测试用：换后端或换库后重新构建。"""
+    global _store
+    with _lock:
+        _store = None

@@ -1,8 +1,8 @@
-"""把 data/kb_store.json 迁移到 SQLite / PostgreSQL。
+"""把 data/kb_store.json 与 data/history_store.json 迁移到 SQLite / PostgreSQL。
 
 特性：
 - 幂等：按主键 INSERT ... DO NOTHING，可重复执行
-- 只读源文件：绝不修改 kb_store.json，迁移后仍可用 json 后端跑
+- 只读源文件：绝不修改源 JSON，迁移后仍可用 json 后端跑
 - --dry-run 先算账再动手
 - 迁移完做数量核对，不一致直接报错退出
 
@@ -10,6 +10,7 @@
     ./.venv/Scripts/python.exe tools/migrate_json_to_db.py                # 用当前 store_backend
     ./.venv/Scripts/python.exe tools/migrate_json_to_db.py --dry-run
     ./.venv/Scripts/python.exe tools/migrate_json_to_db.py --backend sqlite --db data/einstein.db
+    ./.venv/Scripts/python.exe tools/migrate_json_to_db.py --only history
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 SERVER_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = SERVER_ROOT / "data" / "kb_store.json"
+DEFAULT_HISTORY = SERVER_ROOT / "data" / "history_store.json"
 
 
 def load_source(path: Path) -> dict:
@@ -31,9 +33,21 @@ def load_source(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_history(path: Path) -> dict:
+    if not path.exists():
+        return {"conversations": {}, "agent_runs": {}}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 — 源文件坏了要明确报出，而不是静默当空
+        print(f"读取会话源文件失败：{type(exc).__name__}: {exc}", file=sys.stderr)
+        return {"conversations": {}, "agent_runs": {}}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", default=str(DEFAULT_SOURCE))
+    parser.add_argument("--history-source", default=str(DEFAULT_HISTORY))
+    parser.add_argument("--only", choices=["all", "kb", "history"], default="all")
     parser.add_argument("--backend", choices=["sqlite", "postgres"], default=None)
     parser.add_argument("--db", default=None, help="sqlite 文件路径（--backend sqlite 时生效）")
     parser.add_argument("--dry-run", action="store_true")
@@ -47,14 +61,26 @@ def main() -> int:
     backend = args.backend or (settings.store_backend if settings.store_backend != "json" else "sqlite")
     dsn = (args.db or settings.sqlite_path) if backend == "sqlite" else settings.postgres_dsn
 
-    payload = load_source(Path(args.source))
+    do_kb = args.only in ("all", "kb")
+    do_history = args.only in ("all", "history")
+
+    payload = load_source(Path(args.source)) if do_kb else {}
     kbs = payload.get("kbs") or {}
     documents = payload.get("documents") or {}
     chunks = payload.get("chunks") or []
 
-    print(f"源文件：{args.source}")
+    history_payload = load_history(Path(args.history_source)) if do_history else {}
+    convs = history_payload.get("conversations") or {}
+    runs = history_payload.get("agent_runs") or {}
+    msg_count = sum(len(c.get("messages") or []) for c in convs.values())
+
     print(f"目标：{backend} · {dsn}")
-    print(f"待迁移：{len(kbs)} 个知识库 / {len(documents)} 篇文档 / {len(chunks)} 个切片")
+    if do_kb:
+        print(f"知识库源：{args.source}")
+        print(f"  待迁移：{len(kbs)} 个知识库 / {len(documents)} 篇文档 / {len(chunks)} 个切片")
+    if do_history:
+        print(f"会话源：{args.history_source}")
+        print(f"  待迁移：{len(convs)} 个会话 / {msg_count} 条消息 / {len(runs)} 条运行记录")
     if args.dry_run:
         print("--dry-run：未写入任何数据")
         return 0
@@ -73,6 +99,40 @@ def main() -> int:
         conflict = " ON CONFLICT (id) DO NOTHING"
 
     now = _now()
+    if do_kb:
+        migrate_kb(db, kbs, documents, chunks, insert_ignore, conflict, now)
+    if do_history:
+        migrate_history(db, convs, runs, insert_ignore, conflict, now)
+
+    # 核对
+    if do_kb:
+        got = {
+            "kbs": db.scalar("SELECT count(*) FROM knowledge_bases"),
+            "documents": db.scalar("SELECT count(*) FROM documents"),
+            "chunks": db.scalar("SELECT count(*) FROM chunks"),
+        }
+        print(f"库内知识库：{got['kbs']} / {got['documents']} / {got['chunks']}")
+        if got["kbs"] < len(kbs) or got["documents"] < len(documents) or got["chunks"] < len(chunks):
+            print("知识库迁移不完整：库内数量少于源文件，请检查错误日志", file=sys.stderr)
+            return 1
+    if do_history:
+        got = {
+            "conversations": db.scalar("SELECT count(*) FROM conversations"),
+            "messages": db.scalar("SELECT count(*) FROM messages"),
+            "agent_runs": db.scalar("SELECT count(*) FROM agent_runs"),
+        }
+        print(f"库内会话：{got['conversations']} / {got['messages']} / {got['agent_runs']}")
+        if got["conversations"] < len(convs) or got["agent_runs"] < len(runs):
+            print("会话迁移不完整：库内数量少于源文件，请检查错误日志", file=sys.stderr)
+            return 1
+    print("迁移完成（幂等，可重复执行）")
+    return 0
+
+
+def migrate_kb(db, kbs: dict, documents: dict, chunks: list, insert_ignore: str,
+               conflict: str, now: str) -> None:
+    from app.services.repositories.kb import vec_to_bytes
+
     with db.transaction():
         for kb_id, kb in kbs.items():
             db.execute(
@@ -101,8 +161,6 @@ def main() -> int:
                 ),
             )
 
-        from app.services.repositories.kb import vec_to_bytes
-
         rows = []
         for idx, chunk in enumerate(chunks):
             vector = chunk.get("vector") or []
@@ -122,18 +180,57 @@ def main() -> int:
             rows,
         )
 
-    # 核对
-    got = {
-        "kbs": db.scalar("SELECT count(*) FROM knowledge_bases"),
-        "documents": db.scalar("SELECT count(*) FROM documents"),
-        "chunks": db.scalar("SELECT count(*) FROM chunks"),
-    }
-    print(f"库内现有：{got['kbs']} / {got['documents']} / {got['chunks']}")
-    if got["kbs"] < len(kbs) or got["documents"] < len(documents) or got["chunks"] < len(chunks):
-        print("迁移不完整：库内数量少于源文件，请检查错误日志", file=sys.stderr)
-        return 1
-    print("迁移完成（幂等，可重复执行）")
-    return 0
+
+def migrate_history(db, convs: dict, runs: dict, insert_ignore: str,
+                    conflict: str, now: str) -> None:
+    """会话域迁移。
+
+    消息 id 用 `{conversation_id}-{seq}` 生成稳定值：源文件里的消息没有 id，
+    用序号拼出确定性主键才能保证重复执行不产生重复行。
+    """
+    with db.transaction():
+        for conv_id, conv in convs.items():
+            db.execute(
+                f"{insert_ignore} INTO conversations"
+                " (id, title, workspace_id, created_at, updated_at)"
+                f" VALUES (?, ?, ?, ?, ?){conflict}",
+                (
+                    conv_id, conv.get("title") or "", conv.get("workspace_id") or "default",
+                    conv.get("created_at") or now, conv.get("updated_at") or conv.get("created_at") or now,
+                ),
+            )
+            rows = [
+                (
+                    f"{conv_id}-{seq}", conv_id, msg.get("role") or "user",
+                    msg.get("content") or "", seq, msg.get("created_at") or now,
+                )
+                for seq, msg in enumerate(conv.get("messages") or [])
+            ]
+            if rows:
+                db.executemany(
+                    f"{insert_ignore} INTO messages"
+                    " (id, conversation_id, role, content, seq, created_at)"
+                    f" VALUES (?, ?, ?, ?, ?, ?){conflict}",
+                    rows,
+                )
+        for run_id, run in runs.items():
+            db.execute(
+                f"{insert_ignore} INTO agent_runs"
+                " (id, session_id, turn, task, tool_ids, steps, answer, status,"
+                " workspace_id, project, artifacts, created_at)"
+                f" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?){conflict}",
+                (
+                    run_id, run.get("session_id") or "", int(run.get("turn") or 1),
+                    run.get("task") or "",
+                    json.dumps(run.get("tool_ids") or [], ensure_ascii=False),
+                    json.dumps(run.get("steps") or [], ensure_ascii=False),
+                    run.get("answer") or "", run.get("status") or "ok",
+                    run.get("workspace_id") or "default", run.get("project") or "",
+                    json.dumps(run.get("artifacts") or [], ensure_ascii=False),
+                    run.get("created_at") or now,
+                ),
+            )
+
 
 
 def _now() -> str:

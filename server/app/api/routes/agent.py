@@ -65,7 +65,6 @@ async def delete_run(run_id: str, ws: str = Depends(current_workspace)) -> dict:
     if not runs:
         raise HTTPException(status_code=404, detail="run not found")
     deleted = history.delete_session(run_id, ws)
-    history.save()
     return {"ok": True, "deleted": deleted}
 
 
@@ -181,7 +180,6 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
             session_id=session_id,
             turn=len(prior_runs) + 1,
         )
-        history.save()
     except Exception as exc:  # noqa: BLE001 — 统一转 SSE error 事件
         print(f"[agent-stream] {run_id} run-error: {type(exc).__name__}: {exc}", flush=True)
         yield _sse("error", {"message": f"{type(exc).__name__}: {exc}"})

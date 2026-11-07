@@ -50,3 +50,42 @@ class Chunk:
     char_start: int = 0
     char_end: int = 0
     created_at: str = ""
+
+
+# ---------------------------------------------------------------- 会话域
+
+
+@dataclass
+class StoredMessage:
+    role: str
+    content: str
+    created_at: str
+
+
+@dataclass
+class Conversation:
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+    # 只在列表查询时填充（避免为了显示条数把全部消息读出来）；详情查询时为空
+    message_count: int = 0
+    messages: list[StoredMessage] = field(default_factory=list)
+    workspace_id: str = DEFAULT_WS
+
+
+@dataclass
+class AgentRun:
+    id: str
+    task: str
+    tool_ids: list[str]
+    steps: list[dict]
+    answer: str
+    status: str  # ok | error
+    created_at: str
+    workspace_id: str = DEFAULT_WS
+    project: str = ""
+    artifacts: list[dict] = field(default_factory=list)
+    # 同一任务的后续追问共享 session_id；turn 从 1 开始递增
+    session_id: str = ""
+    turn: int = 1

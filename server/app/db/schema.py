@@ -83,8 +83,55 @@ _MIGRATION_001 = [
     "CREATE INDEX IF NOT EXISTS idx_job_status ON jobs(status, created_at)",
 ]
 
+# 002：会话域（conversations / messages / agent_runs）
+#
+# messages 用 `seq` 而不是自增主键：自增语法两方言不一致（AUTOINCREMENT vs SERIAL），
+# 而序号本来就由业务侧掌握（一次问答写入两条），显式 seq 反而更好排序与去重。
+_MIGRATION_002 = [
+    """
+    CREATE TABLE IF NOT EXISTS conversations (
+        id            TEXT PRIMARY KEY,
+        title         TEXT NOT NULL DEFAULT '',
+        workspace_id  TEXT NOT NULL DEFAULT 'default',
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_conv_ws ON conversations(workspace_id, updated_at)",
+    """
+    CREATE TABLE IF NOT EXISTS messages (
+        id               TEXT PRIMARY KEY,
+        conversation_id  TEXT NOT NULL,
+        role             TEXT NOT NULL,
+        content          TEXT NOT NULL DEFAULT '',
+        seq              INTEGER NOT NULL DEFAULT 0,
+        created_at       TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, seq)",
+    """
+    CREATE TABLE IF NOT EXISTS agent_runs (
+        id            TEXT PRIMARY KEY,
+        session_id    TEXT NOT NULL DEFAULT '',
+        turn          INTEGER NOT NULL DEFAULT 1,
+        task          TEXT NOT NULL DEFAULT '',
+        tool_ids      TEXT NOT NULL DEFAULT '[]',
+        steps         TEXT NOT NULL DEFAULT '[]',
+        answer        TEXT NOT NULL DEFAULT '',
+        status        TEXT NOT NULL DEFAULT 'ok',
+        workspace_id  TEXT NOT NULL DEFAULT 'default',
+        project       TEXT NOT NULL DEFAULT '',
+        artifacts     TEXT NOT NULL DEFAULT '[]',
+        created_at    TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_run_ws ON agent_runs(workspace_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_run_session ON agent_runs(session_id, turn)",
+]
+
 MIGRATIONS: list[tuple[int, list[str]]] = [
     (1, _MIGRATION_001),
+    (2, _MIGRATION_002),
 ]
 
 _TYPE_TOKENS = {

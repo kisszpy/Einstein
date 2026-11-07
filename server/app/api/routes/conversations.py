@@ -20,7 +20,8 @@ async def list_conversations(ws: str = Depends(current_workspace)) -> list[dict]
         {
             "id": c.id,
             "title": c.title,
-            "message_count": len(c.messages),
+            # 列表接口只取计数，SQL 后端不会为了显示条数把全部消息读出来
+            "message_count": c.message_count or len(c.messages),
             "updated_at": c.updated_at,
         }
         for c in history.list_conversations(ws)
@@ -44,5 +45,4 @@ async def get_conversation(conversation_id: str, ws: str = Depends(current_works
 async def delete_conversation(conversation_id: str, ws: str = Depends(current_workspace)) -> dict:
     _require_own(conversation_id, ws)
     get_history_store().delete_conversation(conversation_id)
-    get_history_store().save()
     return {"deleted": conversation_id}
