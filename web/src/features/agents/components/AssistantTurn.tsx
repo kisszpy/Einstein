@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 import {
   Check,
   ChevronDown,
+  Circle,
   Copy,
   Download,
   Loader2,
@@ -44,10 +45,12 @@ interface Row {
 
 function pairSteps(steps: AgentStep[]): Row[] {
   const rows: Row[] = [];
-  for (let i = 0; i < steps.length; i += 1) {
-    const step = steps[i];
+  // 计划帧夹在调用与结果之间，先剔掉否则配对会错位
+  const toolSteps = steps.filter((s) => s.kind !== "plan");
+  for (let i = 0; i < toolSteps.length; i += 1) {
+    const step = toolSteps[i];
     if (!step || step.kind !== "tool_call") continue;
-    const next = steps[i + 1];
+    const next = toolSteps[i + 1];
     rows.push({ call: step, result: next?.kind === "tool_result" ? next : undefined });
   }
   return rows;
@@ -73,9 +76,17 @@ export function AssistantTurn({
   const [copied, setCopied] = useState(false);
 
   const rows = useMemo(() => pairSteps(steps), [steps]);
+  // 计划会随执行反复重写，只取最新一版渲染
+  const plan = useMemo(() => {
+    for (let i = steps.length - 1; i >= 0; i -= 1) {
+      const s = steps[i];
+      if (s?.kind === "plan" && (s.items?.length ?? 0) > 0) return s.items ?? [];
+    }
+    return [];
+  }, [steps]);
   const pending = useMemo(() => {
     if (!running || steps.length === 0) return null;
-    const last = steps[steps.length - 1];
+    const last = [...steps].reverse().find((s) => s.kind !== "plan");
     return last && last.kind === "tool_call" ? last : null;
   }, [running, steps]);
 
@@ -93,6 +104,42 @@ export function AssistantTurn({
 
   return (
     <div className="group/turn mb-6">
+      {plan.length > 0 && (
+        <div className="mb-2 rounded-lg border border-line bg-surface-1 px-3 py-2">
+          <div className="flex items-center gap-1.5 text-[11.5px] text-tertiary">
+            <span>计划</span>
+            <span className="tabular-nums">
+              {plan.filter((p) => p.status === "completed").length}/{plan.length}
+            </span>
+          </div>
+          <ul className="mt-1 space-y-0.5">
+            {plan.map((item, i) => {
+              const done = item.status === "completed";
+              const doing = item.status === "in_progress";
+              return (
+                <li key={i} className="flex items-start gap-1.5 text-[12.5px] leading-relaxed">
+                  {done ? (
+                    <Check size={12} className="mt-[5px] shrink-0 text-tertiary" />
+                  ) : doing ? (
+                    <Loader2 size={11} className="mt-[6px] shrink-0 animate-spin text-brand" />
+                  ) : (
+                    <Circle size={8} className="mt-[8px] shrink-0 text-tertiary/60" />
+                  )}
+                  <span
+                    className={cn(
+                      "min-w-0",
+                      done ? "text-tertiary line-through decoration-line" : doing ? "text-primary" : "text-secondary",
+                    )}
+                  >
+                    {item.content}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
       {steps.length > 0 && (
         <div className="mb-2">
           <button
@@ -111,7 +158,7 @@ export function AssistantTurn({
             <span>
               {running
                 ? pending
-                  ? `${toolLabel(pending.name)}…`
+                  ? `${toolLabel(pending.name ?? "")}…`
                   : "正在思考…"
                 : `已完成 ${rows.length} 个步骤`}
             </span>
@@ -130,7 +177,7 @@ export function AssistantTurn({
           {showRows && (
             <ol className="mt-1.5 space-y-px border-l border-line pl-2.5">
               {rows.map((row, i) => {
-                const Icon = toolIcon(row.call.name);
+                const Icon = toolIcon(row.call.name ?? "");
                 const failed = row.result?.content?.startsWith("错误") ?? false;
                 const expanded = detail[i];
                 return (
@@ -151,7 +198,7 @@ export function AssistantTurn({
                       <span className="min-w-0 flex-1">
                         <span className="flex items-baseline gap-1.5">
                           <span className="truncate text-[12.5px] text-secondary">
-                            {toolLabel(row.call.name)}
+                            {toolLabel(row.call.name ?? "")}
                           </span>
                           {row.result?.duration_ms != null && (
                             <span className="shrink-0 text-[11px] text-tertiary">

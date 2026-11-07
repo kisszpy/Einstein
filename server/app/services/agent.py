@@ -1,11 +1,11 @@
-"""智能体服务：LangGraph ReAct 循环。
+"""智能体服务：默认走 Deep Agents harness，可回退到 ReAct。
 
-用 create_react_agent 预置图（agent ↔ tools 循环），astream updates 模式
-产出每个节点的状态变化，映射为前端可展示的步骤事件；最终回答在
-同一次运行中捕获，不重跑图。
+两个引擎产出同一套事件（tool_call / tool_result / artifact / plan / final），
+上层路由与前端无需感知差异；`APP_AGENT_ENGINE=react` 是回滚开关。
 
-传入 AgentContext 后自动挂载工作能力（联网/项目文件/代码/PPT），
-运行中产生的文件通过 artifact 事件实时推给前端。
+ReAct 路径（`_run_react_agent`）用 create_react_agent 预置图（agent ↔ tools
+循环），astream updates 模式产出每个节点的状态变化，映射为前端可展示的步骤
+事件；最终回答在同一次运行中捕获，不重跑图。
 """
 
 import json
@@ -77,17 +77,35 @@ async def run_agent(
     ctx: AgentContext | None = None,
     history: list[dict] | None = None,
 ) -> AsyncIterator[dict]:
-    """运行 ReAct 智能体，产出步骤事件流。
+    """按配置选择引擎，对外只有这一个入口。
 
-    history：同一任务之前轮次的 [{"role": "user"|"assistant", "content": str}]，
-    用于承接「继续」「再改一下」这类追问。
-
-    事件结构：
+    events：
       {kind: "tool_call", name, args}
       {kind: "tool_result", name, content, duration_ms}
-      {kind: "artifact", path, kind}
+      {kind: "plan", items: [{content, status}]}
+      {kind: "artifact", path, artifact_kind}
       {kind: "final", text, artifacts, project}
     """
+    if get_settings().agent_engine == "react":
+        async for step in _run_react_agent(task, tool_ids, kb_ids, workspace_id, ctx, history):
+            yield step
+        return
+
+    from app.services.agent_deep import run_deep_agent  # 延迟导入：换引擎不该拖慢启动
+
+    async for step in run_deep_agent(task, tool_ids, kb_ids, workspace_id, ctx, history):
+        yield step
+
+
+async def _run_react_agent(
+    task: str,
+    tool_ids: list[str],
+    kb_ids: list[str],
+    workspace_id: str | None = None,
+    ctx: AgentContext | None = None,
+    history: list[dict] | None = None,
+) -> AsyncIterator[dict]:
+    """ReAct 引擎（回滚用）：单循环、无计划、无子智能体。"""
     lc_tools = build_lc_tools(tool_ids, kb_ids, workspace_id, ctx)
     agent = create_react_agent(
         _get_model(),

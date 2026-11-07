@@ -20,6 +20,8 @@ class Settings(BaseSettings):
 
     # 智能体能力
     agent_code_exec: bool = True   # 关闭后智能体不可执行代码（code_run 工具不注册）
+    # 引擎：deepagents（计划/子智能体/上下文压缩）| react（旧单循环，回滚用）
+    agent_engine: str = "deepagents"
 
     # 检索
     retrieval_mode: str = "hybrid"  # vector | lexical | hybrid

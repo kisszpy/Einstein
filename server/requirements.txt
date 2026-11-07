@@ -4,11 +4,14 @@ pydantic>=2.10
 pydantic-settings>=2.6
 
 # LangChain / LangGraph
-langchain-core>=0.3
+langchain-core>=1.7.6
+langchain>=1.4.9
 langchain-openai>=0.3
 langchain-text-splitters>=0.3
 langgraph>=0.2
 langgraph-checkpoint>=2.0   # 中断恢复（S2.5）
+# 智能体 harness：计划工具、子智能体、上下文压缩、虚拟文件系统
+deepagents>=0.7,<0.8
 
 # 存储与检索
 psycopg[binary]>=3.2        # PostgreSQL 客户端（原生 SQL，不引 ORM）

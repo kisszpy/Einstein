@@ -8,6 +8,7 @@ import {
   FolderPlus,
   Globe,
   Presentation,
+  Sparkles,
   Terminal,
   Type,
   type LucideIcon,
@@ -22,12 +23,20 @@ export interface ToolInfo {
   default?: boolean;
 }
 
+export interface PlanItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed" | string;
+}
+
 export interface AgentStep {
-  kind: "tool_call" | "tool_result";
-  name: string;
+  kind: "tool_call" | "tool_result" | "plan";
+  /** plan 帧没有工具名，所以可选 */
+  name?: string;
   args?: string;
   content?: string;
   duration_ms?: number | null;
+  /** kind=plan 时的计划清单（deepagents 的 write_todos） */
+  items?: PlanItem[];
 }
 
 export interface Artifact {
@@ -124,6 +133,16 @@ export const TOOL_LABELS: Record<string, string> = {
   current_time: "读取时间",
   text_stats: "文本统计",
   kb_search: "知识库检索",
+  // deepagents harness 自带的文件/计划工具
+  write_file: "写文件",
+  read_file: "读文件",
+  edit_file: "改文件",
+  ls: "列目录",
+  glob: "找文件",
+  grep: "搜内容",
+  delete: "删文件",
+  task: "子任务",
+  write_todos: "更新计划",
 };
 
 export const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -139,6 +158,15 @@ export const TOOL_ICONS: Record<string, LucideIcon> = {
   current_time: Clock,
   text_stats: Type,
   kb_search: Database,
+  write_file: FileText,
+  edit_file: FileText,
+  read_file: FileText,
+  ls: FolderPlus,
+  glob: FolderPlus,
+  grep: Type,
+  delete: FileText,
+  task: Sparkles,
+  write_todos: Sparkles,
 };
 
 export const toolLabel = (id: string) => TOOL_LABELS[id] ?? id;

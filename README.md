@@ -7,7 +7,9 @@
   **整目录 / ZIP 批量导入**（保留目录结构作文档名）、sha256 去重、文档版本与回滚、
   切片预览与编辑、异步摄取队列
 - **检索**：向量 + BM25 混合召回（RRF 融合），向量层可切 numpy 暴力检索或 Milvus HNSW
-- **智能体**：LangGraph 驱动的多步工具调用，多轮会话、过程与产物可见
+- **智能体**：Deep Agents harness（LangGraph）——显式计划（write_todos）、子智能体、
+  上下文自动压缩、按项目授权的文件系统；多轮会话、过程与产物可见，
+  `APP_AGENT_ENGINE=react` 可回退到旧单循环（事件协议一致，前端无感）
 - **开放平台**：`/v1` 兼容 OpenAI 协议，按工作区隔离、API Key 与审计
 - **数据层**：JSON 文件 / SQLite / PostgreSQL 三后端同一套代码，向量层 memory / Milvus，
   队列 local / Redis，全部由环境变量切换
@@ -136,6 +138,7 @@ APP_QUEUE_BACKEND=redis
 | `APP_RETRIEVAL_MODE` | `hybrid` | `vector` / `lexical` / `hybrid` |
 | `APP_RRF_K` | `60` | RRF 融合平滑常数 |
 | `APP_AGENT_CODE_EXEC` | `true` | 关掉后智能体不注册代码执行工具 |
+| `APP_AGENT_ENGINE` | `deepagents` | `deepagents`（计划/子智能体/压缩）/ `react`（旧单循环回滚用） |
 | `APP_DEBUG` | `false` | 生产务必保持 false（否则异常会吐堆栈） |
 | `APP_GITHUB_TOKEN` | 空 | 技能市场浏览，提额度用 |
 
@@ -157,6 +160,7 @@ APP_QUEUE_BACKEND=redis
 | `full_sweep.py --skip-live` | 91 条接口巡检（契约 + 安全边界） |
 | `web/ui-sweep.cjs` | 10 个前端路由 58 条页面断言 |
 | `web/kb-batch-check.cjs` | 目录导入 UI：选目录 → 预览 → 进度 → 落库 9 条断言 |
+| `web/agent-plan-check.cjs` | 智能体 UI：deepagents 计划块渲染、工具步骤与产物卡片 |
 
 编排层另有两个入口：
 
