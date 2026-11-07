@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import {
+  ComposerFrame,
+  ComposerInput,
+  ComposerSendButton,
+  ComposerToolbar,
+} from "@/components/ui/composer";
 import { useChatStream } from "./use-chat-stream";
 import { MessageBubble } from "./components/message-bubble";
 import type { WebMode } from "./chat-types";
@@ -134,10 +139,10 @@ export function ChatPage() {
         </div>
       </aside>
 
-      {/* 聊天流（约 760px 居中） */}
+      {/* 聊天流：与智能体页同一条内容基准线（800px 列宽，正文约 752px） */}
       <section className="flex min-w-0 flex-1 flex-col">
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-[760px] px-6">
+          <div className="conversation-column">
             {empty ? (
               <div className="flex h-full min-h-[60vh] flex-col items-center justify-center text-center">
                 <h1 className="text-xl font-medium">有什么可以帮你？</h1>
@@ -157,7 +162,7 @@ export function ChatPage() {
         </div>
 
         {/* 输入区 */}
-        <div className="mx-auto w-full max-w-[760px] shrink-0 px-6 pb-6">
+        <div className="conversation-column shrink-0 pb-6">
           {/* 专家选择行 */}
           {experts.length > 0 && (
             <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -194,51 +199,48 @@ export function ChatPage() {
               )}
             </div>
           )}
-          <Card className="p-3">
-            <textarea
+          <ComposerFrame data-composer-frame>
+            <ComposerInput
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  submit();
-                }
-              }}
-              placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-              rows={2}
-              className="max-h-40 w-full resize-none bg-transparent px-2 text-sm outline-none placeholder:text-tertiary"
+              onChange={setInput}
+              onSubmit={submit}
+              autoFocus
+              placeholder="输入消息，Enter 发送，Shift + Enter 换行"
+              className="min-h-[52px]"
             />
-            <div className="mt-1 flex items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setWebMode(WEB_NEXT[webMode])}
-                  title="联网模式：自动 → 始终 → 关闭"
-                  className={cn(
-                    "flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors duration-150",
-                    webMode === "off"
-                      ? "border-line text-tertiary hover:border-line-strong"
-                      : "border-brand bg-brand-soft text-brand",
-                  )}
-                >
-                  <Globe size={12} />
-                  联网 · {WEB_LABEL[webMode]}
-                </button>
-                <span className="hidden truncate text-xs text-tertiary sm:inline">
-                  {WEB_HINT[webMode]}
-                </span>
-              </div>
-              {isStreaming ? (
-                <Button variant="outline" onClick={stop}>
-                  停止
-                </Button>
-              ) : (
-                <Button disabled={!input.trim()} onClick={submit}>
-                  发送
-                </Button>
-              )}
-            </div>
-          </Card>
+            <ComposerToolbar
+              left={
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setWebMode(WEB_NEXT[webMode])}
+                    title="联网模式：自动 → 始终 → 关闭"
+                    className={cn(
+                      "flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors duration-150",
+                      webMode === "off"
+                        ? "border-line text-tertiary hover:border-line-strong"
+                        : "border-brand bg-brand-soft text-brand",
+                    )}
+                  >
+                    <Globe size={12} />
+                    联网 · {WEB_LABEL[webMode]}
+                  </button>
+                  <span className="hidden truncate text-xs text-tertiary sm:inline">
+                    {WEB_HINT[webMode]}
+                  </span>
+                </>
+              }
+              right={
+                <ComposerSendButton
+                  running={isStreaming}
+                  disabled={!input.trim()}
+                  onSend={submit}
+                  onStop={stop}
+                  labels={{ send: "发送", stop: "停止回答" }}
+                />
+              }
+            />
+          </ComposerFrame>
           <p className="mt-2 text-center text-xs text-tertiary">
             内容由 AI 生成，请自行核实重要信息
           </p>

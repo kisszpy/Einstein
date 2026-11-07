@@ -110,6 +110,14 @@ body {
   background: transparent;
 }
 
+/* 对话 / 智能体共用：与 WorkBuddy 一致的内容列宽（自带左右 24px 内边距，正文 752px） */
+.conversation-column {
+  width: 100%;
+  max-width: 800px;
+  margin-inline: auto;
+  padding-inline: 24px;
+}
+
 /* ---------- 登录页：光晕与动效 ---------- */
 :root {
   --login-glow: rgba(0, 194, 154, 0.2);

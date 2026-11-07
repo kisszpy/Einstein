@@ -564,8 +564,8 @@ export function AgentsPage() {
         </header>
 
         {empty ? (
-          <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6">
-            <div className="w-full max-w-[720px] pb-6">
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto">
+            <div className="conversation-column pb-6">
               <div className="mb-6 flex flex-col items-center text-center">
                 <span className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-soft text-[17px] font-semibold text-brand-deep">
                   E
@@ -597,7 +597,7 @@ export function AgentsPage() {
         ) : (
           <>
             <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-              <div className="mx-auto w-full max-w-[848px] px-6 pb-4 pt-6">
+              <div className="conversation-column pb-4 pt-6">
                 {/* 同一任务的历史轮次：完整的问答对，形成连续对话 */}
                 {turns.map((turn, index) => (
                   <div
@@ -648,8 +648,8 @@ export function AgentsPage() {
               </div>
             </div>
 
-            <div className="shrink-0 px-6 pb-3">
-              <div className="mx-auto w-full max-w-[848px]">{composer}</div>
+            <div className="shrink-0 pb-3">
+              <div className="conversation-column">{composer}</div>
             </div>
           </>
         )}
