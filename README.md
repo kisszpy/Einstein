@@ -4,7 +4,8 @@
 控制台与 OpenAI 兼容的开放接口。
 
 - **知识库**：多格式摄取（PDF / Word / Excel / PPT / CSV / HTML / Markdown / 网页），
-  sha256 去重、文档版本与回滚、切片预览与编辑、异步摄取队列
+  **整目录 / ZIP 批量导入**（保留目录结构作文档名）、sha256 去重、文档版本与回滚、
+  切片预览与编辑、异步摄取队列
 - **检索**：向量 + BM25 混合召回（RRF 融合），向量层可切 numpy 暴力检索或 Milvus HNSW
 - **智能体**：LangGraph 驱动的多步工具调用，多轮会话、过程与产物可见
 - **开放平台**：`/v1` 兼容 OpenAI 协议，按工作区隔离、API Key 与审计
@@ -16,7 +17,7 @@
 | 文档 | 内容 |
 |---|---|
 | `README.md` | 起步、配置、验收、排障（本文） |
-| [docs/API参考.md](docs/API参考.md) | 93 个接口的路径、参数、请求体字段、鉴权与 SSE 协议（由代码生成） |
+| [docs/API参考.md](docs/API参考.md) | 95 个接口的路径、参数、请求体字段、鉴权与 SSE 协议（由代码生成） |
 | [docs/运维手册.md](docs/运维手册.md) | 部署拓扑、巡检、备份恢复、升级、性能基线、故障手册 |
 
 ## 架构
@@ -119,6 +120,9 @@ APP_QUEUE_BACKEND=redis
 | `APP_MILVUS_COLLECTION` | `einstein_chunks` | 集合名，换嵌入模型时换名或 `--drop` |
 | `APP_QUEUE_BACKEND` | `local` | `local`（DB 表）/ `redis` |
 | `APP_REDIS_URL` | `redis://127.0.0.1:6380/0` | Redis 连接串 |
+| `APP_IMPORT_BATCH_MAX_FILES` | `500` | 单批导入文件数上限 |
+| `APP_IMPORT_BATCH_MAX_MB` | `2048` | 单批累计大小上限（MB） |
+| `APP_LOCAL_IMPORT_ROOTS` | 空（禁用） | 允许导入的服务端目录，逗号分隔绝对路径 |
 | `APP_LLM_BASE_URL` | `http://localhost:8080/v1` | OpenAI 兼容端点 |
 | `APP_LLM_MODEL` | `qwen3.6-27b` | 对话模型 |
 | `APP_EMBEDDING_BASE_URL` | `http://localhost:8081/v1` | 嵌入端点 |
@@ -141,11 +145,12 @@ APP_QUEUE_BACKEND=redis
 | `verify_state_backends.py` | 8 个配置域三后端 + 并发写 |
 | `verify_vector_index.py` | memory / Milvus 检索一致性 |
 | `verify_queue.py` | local / Redis 队列（含并发抢单、租约回收） |
-| `verify_ingest.py` | 摄取全链路：格式 / 去重 / 版本 / 回滚 / 切片编辑 / 异步任务 |
+| `verify_ingest.py` | 摄取全链路：格式 / 去重 / 版本 / 回滚 / 切片编辑 / 异步任务 / 批量导入 |
 | `verify_contracts.py` | 每个协议的所有后端实现是否齐全（防「只在某个后端漏方法」） |
 | `gen_api_doc.py --check` | `docs/API参考.md` 与路由是否同步 |
 | `full_sweep.py --skip-live` | 91 条接口巡检（契约 + 安全边界） |
 | `web/ui-sweep.cjs` | 10 个前端路由 58 条页面断言 |
+| `web/kb-batch-check.cjs` | 目录导入 UI：选目录 → 预览 → 进度 → 落库 9 条断言 |
 
 编排层另有两个入口：
 

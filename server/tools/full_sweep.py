@@ -267,6 +267,13 @@ def main() -> None:
     check("上传文件入库（同上）", status == 200 or (status == 503 and 503 in (status,)),
           f"HTTP {status} {str(up_status)[:120]}", "P1")
 
+    # 批量导入的两个边界：空请求不能被 500，越界目录不能被放行
+    status, bad_batch, _ = call("POST", f"/api/kb/{kb_id}/documents/batch", {})
+    check("批量导入拒绝空请求（422）", status == 422, f"HTTP {status} {str(bad_batch)[:120]}", "P2")
+    status, denied_dir, _ = call("POST", f"/api/kb/{kb_id}/documents/dir", {"path": "C:/Windows"})
+    check("目录导入越界被拒（400/403）", status in (400, 403),
+          f"HTTP {status} {str(denied_dir)[:120]}", "P1")
+
     status, docs, _ = call("GET", f"/api/kb/{kb_id}/documents")
     check("文档列表可读", status == 200, f"HTTP {status}", "P2")
 

@@ -9,3 +9,4 @@ server/data/sweep_results.json
 deploy/volumes/
 deploy/.env
 .smoke-tmp/
+.idea/

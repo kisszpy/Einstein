@@ -44,6 +44,17 @@ class Settings(BaseSettings):
     queue_backend: str = "local"
     redis_url: str = "redis://127.0.0.1:6380/0"
 
+    # 批量导入
+    # 服务端目录导入等于「让服务读本机任意文件」，默认关闭。
+    # 配置成逗号分隔的绝对路径后，只允许导入这些目录（及其子目录）下的文件。
+    local_import_roots: str = ""
+    import_batch_max_files: int = 500      # 单批文件数上限（超出部分跳过）
+    import_batch_max_mb: int = 2048        # 单批累计大小上限（MB）
+
+    @property
+    def import_roots(self) -> list[str]:
+        return [p.strip() for p in self.local_import_roots.split(",") if p.strip()]
+
 
 @lru_cache
 def get_settings() -> Settings:

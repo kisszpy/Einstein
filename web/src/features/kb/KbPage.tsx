@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { BatchImport } from "@/features/kb/BatchImport";
 import { cn } from "@/lib/utils";
 
 interface KBItem {
@@ -60,22 +61,30 @@ export function KbPage() {
     const res = await fetch("/api/kb");
     const data: KBItem[] = await res.json();
     setKbs(data);
-    if (!selected && data.length > 0) setSelected(data[0]!.id);
-  }, [selected]);
+    setSelected((prev) => prev ?? data[0]?.id ?? null);
+  }, []);
 
   useEffect(() => {
     void loadKbs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadKbs]);
+
+  /** 导入结束后刷新文档与库计数 */
+  const refreshDocs = useCallback(async () => {
+    if (!selected) return;
+    const [docsRes, kbsRes] = await Promise.all([
+      fetch(`/api/kb/${selected}/documents`).then((r) => r.json()),
+      fetch("/api/kb").then((r) => r.json()),
+    ]);
+    setDocs(docsRes as DocItem[]);
+    setKbs(kbsRes as KBItem[]);
+  }, [selected]);
 
   useEffect(() => {
     if (!selected) return;
     setHits(null);
     setError(null);
-    void fetch(`/api/kb/${selected}/documents`)
-      .then((r) => r.json())
-      .then(setDocs);
-  }, [selected]);
+    void refreshDocs();
+  }, [selected, refreshDocs]);
 
   const createKb = async () => {
     if (!newKbName.trim()) return;
@@ -111,27 +120,6 @@ export function KbPage() {
       if (!res.ok) throw new Error(await readError(res));
       setDocName("");
       setDocContent("");
-      setDocs(await (await fetch(`/api/kb/${selected}/documents`)).json());
-      await loadKbs();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const uploadFile = async (file: File) => {
-    if (!selected) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const res = await fetch(`/api/kb/${selected}/documents/upload`, {
-        method: "POST",
-        body: form,
-      });
-      if (!res.ok) throw new Error(await readError(res));
       setDocs(await (await fetch(`/api/kb/${selected}/documents`)).json());
       await loadKbs();
     } catch (e) {
@@ -249,43 +237,43 @@ export function KbPage() {
             )}
             {/* 添加文档 */}
             <Card className="p-5">
-              <h3 className="text-[13px] font-medium">添加文档</h3>
-              <div className="mt-3 flex items-center gap-3">
-                <input
-                  value={docName}
-                  onChange={(e) => setDocName(e.target.value)}
-                  placeholder="文档名称"
-                  className="h-9 w-48 rounded-lg border border-line bg-surface-1 px-3 text-[13px] outline-none placeholder:text-tertiary focus:border-line-strong"
-                />
-                <label className="cursor-pointer rounded-lg border border-line px-3 py-2 text-[13px] text-secondary transition-colors duration-150 hover:border-line-strong hover:text-primary">
-                  上传文档（PDF / Word / MD / TXT）
+              <div className="flex items-baseline justify-between gap-3">
+                <h3 className="text-[13px] font-medium">添加文档</h3>
+                <span className="text-[11.5px] text-tertiary">可整目录导入</span>
+              </div>
+              <div className="mt-3">
+                <BatchImport kbId={selected} onFinished={() => void refreshDocs()} />
+              </div>
+            </Card>
+
+            {/* 手动粘贴：保留小文本快速验证的场景 */}
+            <Card className="p-5">
+              <details>
+                <summary className="cursor-pointer text-[13px] font-medium">手动粘贴文本</summary>
+                <div className="mt-3 flex items-center gap-3">
                   <input
-                    type="file"
-                    accept=".pdf,.docx,.txt,.md,.markdown"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void uploadFile(f);
-                      e.target.value = "";
-                    }}
+                    value={docName}
+                    onChange={(e) => setDocName(e.target.value)}
+                    placeholder="文档名称"
+                    className="h-9 w-48 rounded-lg border border-line bg-surface-1 px-3 text-[13px] outline-none placeholder:text-tertiary focus:border-line-strong"
                   />
-                </label>
-              </div>
-              <textarea
-                value={docContent}
-                onChange={(e) => setDocContent(e.target.value)}
-                placeholder="粘贴文档内容，将自动切片并向量化…"
-                rows={4}
-                className="mt-3 w-full resize-y rounded-lg border border-line bg-surface-1 p-3 text-[13px] outline-none placeholder:text-tertiary focus:border-line-strong"
-              />
-              <div className="mt-3 flex justify-end">
-                <Button
-                  disabled={busy || !docName.trim() || !docContent.trim()}
-                  onClick={() => void addDoc()}
-                >
-                  入库
-                </Button>
-              </div>
+                </div>
+                <textarea
+                  value={docContent}
+                  onChange={(e) => setDocContent(e.target.value)}
+                  placeholder="粘贴文档内容，将自动切片并向量化…"
+                  rows={4}
+                  className="mt-3 w-full resize-y rounded-lg border border-line bg-surface-1 p-3 text-[13px] outline-none placeholder:text-tertiary focus:border-line-strong"
+                />
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    disabled={busy || !docName.trim() || !docContent.trim()}
+                    onClick={() => void addDoc()}
+                  >
+                    入库
+                  </Button>
+                </div>
+              </details>
             </Card>
 
             {/* 文档列表 */}

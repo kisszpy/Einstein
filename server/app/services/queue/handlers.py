@@ -102,6 +102,135 @@ def _kb_ingest(job: Job) -> dict:
     }
 
 
+@register("kb.ingest_batch")
+def _kb_ingest_batch(job: Job) -> dict:
+    """批量摄取：把一个目录/一批上传文件当成一个任务，逐篇消化。
+
+    payload:
+      kb_id        — 目标知识库
+      items        — [{path, name}]，name 是相对路径（作为文档名）
+      source       — upload | zip | dir
+      delete_after — 是否在成功后删掉落盘暂存文件（目录导入为 False，源文件不能动）
+
+    失败策略：单个文件解析失败只记进 failed 列表、继续下一篇（目录里混一个坏文件
+    不该让整批白跑）；但如果一篇都没成功、且原因是运行时（嵌入端点不可用），
+    就抛出异常让队列按 max_attempts 重试——此时没有任何源文件被删，重试是安全的。
+    """
+    import asyncio
+    from pathlib import Path
+
+    from app.services.parsers import ParseError, parse_document
+    from app.services.queue import get_queue
+    from app.services.queue.base import PermanentJobError
+    from app.services.rag import ingest_document
+    from app.services.store import get_store
+
+    queue = get_queue()
+    data = job.payload or {}
+    kb_id = data.get("kb_id") or ""
+    items = data.get("items") or []
+    source = data.get("source") or "upload"
+    delete_after = bool(data.get("delete_after", source != "dir"))
+    strategy = data.get("strategy") or "recursive"
+    chunk_size = int(data.get("chunk_size") or 500)
+    chunk_overlap = int(data.get("chunk_overlap") or 50)
+    if not kb_id:
+        raise PermanentJobError("任务缺少 kb_id")
+    if not items:
+        raise PermanentJobError("任务没有待处理文件")
+
+    store = get_store()
+    if store.repo.get_kb(kb_id) is None:
+        for item in items:
+            if delete_after:
+                try:
+                    Path(item.get("path") or "").unlink()
+                except OSError:
+                    pass
+        raise PermanentJobError(f"知识库 {kb_id} 已被删除，放弃入库")
+
+    total = len(items)
+    ok = 0
+    deduped = 0
+    chunks = 0
+    failed: list[dict] = []
+    documents: list[dict] = []
+    retryable = 0
+
+    def report(done: int, current: str = "", stage: str = "") -> None:
+        queue.set_progress(job.id, {
+            "stage": stage or f"导入 {done}/{total}",
+            "percent": min(99, int(done * 100 / total)) if total else 0,
+            "done": done, "total": total, "current": current,
+            "ok": ok, "failed": len(failed), "failed_items": failed[:20],
+        })
+
+    for index, item in enumerate(items, start=1):
+        raw_path = (item or {}).get("path") or ""
+        name = (item or {}).get("name") or (Path(raw_path).name if raw_path else "未命名")
+        src = Path(raw_path)
+        report(index - 1, name)
+
+        if not raw_path or not src.exists():
+            failed.append({"name": name, "error": "文件已不存在"})
+            continue
+        try:
+            content = parse_document(src.read_bytes(), name)
+        except ParseError as exc:
+            failed.append({"name": name, "error": str(exc)})
+            if delete_after:
+                try:
+                    src.unlink()
+                except OSError:
+                    pass
+            continue
+        if not content.strip():
+            failed.append({"name": name, "error": "解析结果为空"})
+            if delete_after:
+                try:
+                    src.unlink()
+                except OSError:
+                    pass
+            continue
+
+        try:
+            result = asyncio.run(ingest_document(
+                store, kb_id, name, content, source=source,
+                strategy=strategy, chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+            ))
+        except RuntimeError as exc:
+            # 嵌入/向量服务不可用：继续跑只会重复同一个错误，留给队列重试
+            retryable += 1
+            failed.append({"name": name, "error": str(exc)})
+            break
+        ok += 1
+        deduped += 1 if result.deduped else 0
+        chunks += result.chunk_count
+        if len(documents) < 50:
+            documents.append({
+                "id": result.document.id, "name": result.document.name,
+                "chunk_count": result.chunk_count, "deduped": result.deduped,
+            })
+        if delete_after:
+            try:
+                src.unlink()
+            except OSError:
+                pass
+
+    if ok == 0 and retryable:
+        raise RuntimeError(failed[-1]["error"] if failed else "批量导入失败")
+
+    queue.set_progress(job.id, {
+        "stage": "完成", "percent": 100, "done": total, "total": total,
+        "current": "", "ok": ok, "failed": len(failed), "failed_items": failed[:20],
+    })
+    return {
+        "kb_id": kb_id, "total": total, "ok": ok, "deduped": deduped,
+        "failed": len(failed), "failed_items": failed[:20],
+        "chunks": chunks, "documents": documents,
+    }
+
+
 @register("kb.reindex")
 def _kb_reindex(job: Job) -> dict:
     """重建向量索引。

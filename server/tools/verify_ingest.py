@@ -1,4 +1,4 @@
-"""摄取链路验收：格式解析 / 去重 / 版本 / 回滚 / 切片编辑 / 删除 / 异步任务。
+"""摄取链路验收：格式解析 / 去重 / 版本 / 回滚 / 切片编辑 / 删除 / 异步任务 / 批量导入。
 
 脚本会在自己的进程里起一个「假 worker」：从队列领任务、直接调 handler 执行，
 所以**必须与被测服务共用同一份配置**（同一 .env、同一存储后端、同一队列）。
@@ -13,11 +13,13 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 import urllib.error
 import urllib.request
 import uuid
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -66,6 +68,24 @@ def main() -> int:
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\";"
             f" filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
         ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+        return call("POST", path, raw=body,
+                    content_type=f"multipart/form-data; boundary={boundary}")
+
+    def upload_many(path: str, files: list[tuple[str, str, bytes]]) -> tuple[int, object]:
+        """多文件 multipart：files = [(相对路径, 文件名, 内容)]，同时带 paths 字段。"""
+        boundary = "----verify" + uuid.uuid4().hex
+        body = b""
+        for rel, _, _ in files:
+            body += (
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"paths\"\r\n\r\n"
+                f"{rel}\r\n"
+            ).encode()
+        for rel, filename, data in files:
+            body += (
+                f"--{boundary}\r\nContent-Disposition: form-data; name=\"files\";"
+                f" filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+            ).encode() + data + b"\r\n"
+        body += f"--{boundary}--\r\n".encode()
         return call("POST", path, raw=body,
                     content_type=f"multipart/form-data; boundary={boundary}")
 
@@ -201,6 +221,63 @@ def main() -> int:
     status, url_res = call("POST", f"/api/kb/{kb_id}/documents/url",
                            {"url": "http://127.0.0.1:9/nope"})
     check("URL 抓取失败返回 400 而非 500", status == 400, f"{status} {url_res}")
+
+    # ---------------- 批量导入：目录（多文件 + 相对路径 + 一个坏文件）
+    from app.services.queue import get_queue as _get_queue
+    from app.services.store import get_store as _get_store
+    from app.workers.worker import execute as _execute
+
+    def drain(job_id: str):
+        q = _get_queue()
+        claimed = q.claim()
+        if claimed:
+            _execute(q, claimed)
+        return q.get(job_id)
+
+    status, batch = upload_many(f"/api/kb/{kb_id}/documents/batch", [
+        ("产品/需求.md", "需求.md", "# 需求\n批量导入要能一次吃下一个目录。\n".encode()),
+        ("产品/接口/规范.md", "规范.md", "# 规范\nGET /api/kb 返回知识库列表。\n".encode()),
+        ("会议/周会.txt", "周会.txt", "周会纪要\n讨论了目录导入的排期。\n".encode()),
+        ("产品/坏文件.pdf", "坏文件.pdf", b"this is not a pdf"),
+    ])
+    check("批量导入返回 job_id", status == 200 and batch.get("job_id"), str(batch)[:200])
+    check("批量导入条目数正确", status == 200 and batch.get("files") == 4, str(batch)[:200])
+    if status == 200 and batch.get("job_id"):
+        done = drain(batch["job_id"])
+        result = (done.result or {}) if done else {}
+        check("批量任务完成", done is not None and done.status == "done",
+              f"{done.status if done else 'NA'} {done.error if done else ''}")
+        check("坏文件只失败一条、不中断整批",
+              result.get("ok") == 3 and result.get("failed") == 1, str(result)[:240])
+        names = [d.name for d in _get_store().repo.list_documents_all() if d.kb_id == kb_id]
+        check("文档名保留目录结构", "产品/接口/规范.md" in names, str(names))
+
+    # ---------------- 批量导入：ZIP（内部目录 + 垃圾条目）
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("资料/制度/报销.md", "# 报销\n差旅报销 10 个工作日内提交。\n")
+        zf.writestr("__MACOSX/._报销.md", b"junk")
+        zf.writestr("资料/.DS_Store", b"junk")
+    status, zipped = upload_many(f"/api/kb/{kb_id}/documents/batch",
+                                 [("资料.zip", "资料.zip", buf.getvalue())])
+    check("ZIP 上传返回 job_id", status == 200 and zipped.get("job_id"), str(zipped)[:200])
+    skipped_names = [s.get("name") for s in (zipped.get("skipped") or [])] if status == 200 else []
+    check("ZIP 内垃圾条目被跳过", any("__MACOSX" in n for n in skipped_names), str(skipped_names))
+    if status == 200 and zipped.get("job_id"):
+        done = drain(zipped["job_id"])
+        result = (done.result or {}) if done else {}
+        check("ZIP 解包后全部入库", done is not None and done.status == "done" and result.get("ok") == 1,
+              str(result)[:200])
+        names = [d.name for d in _get_store().repo.list_documents_all() if d.kb_id == kb_id]
+        check("ZIP 内目录结构保留", "资料/制度/报销.md" in names, str(names))
+
+    # ---------------- 服务端目录导入：默认必须关闭
+    from app.core.config import get_settings as _get_settings
+
+    if not _get_settings().import_roots:
+        status, denied = call("POST", f"/api/kb/{kb_id}/documents/dir", {"path": "C:/Windows"})
+        check("目录导入默认关闭（403 且说明怎么开）",
+              status == 403 and "APP_LOCAL_IMPORT_ROOTS" in str(denied), f"{status} {denied}")
 
     # ---------------- 清理
     status, _ = call("DELETE", f"/api/kb/{kb_id}")

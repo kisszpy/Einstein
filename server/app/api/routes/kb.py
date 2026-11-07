@@ -12,12 +12,13 @@
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.api.deps import current_workspace
 from app.core.config import get_settings
-from app.services.parsers import ParseError, fetch_url, parse_document
+from app.services import batch as batch_io
+from app.services.parsers import MAX_BYTES, ParseError, fetch_url, parse_document
 from app.services.queue import get_queue
 from app.services.rag import ingest_document, reembed_chunk, reindex_document, search
 from app.services.store import KBStore, get_store
@@ -44,6 +45,16 @@ class DocCreate(BaseModel):
 class UrlImport(BaseModel):
     url: str
     name: str | None = None
+
+
+class DirImport(BaseModel):
+    """服务端目录导入：直接扫描本机目录，零上传（需配置 APP_LOCAL_IMPORT_ROOTS）。"""
+
+    path: str
+    recursive: bool = True
+    strategy: str = "recursive"
+    chunk_size: int = 500
+    chunk_overlap: int = 50
 
 
 class ChunkPatch(BaseModel):
@@ -82,6 +93,30 @@ def _ingest_payload(result) -> dict:  # noqa: ANN001 — IngestResult
         "version": result.version,
         "deduped": result.deduped,
     }
+
+
+async def _save_upload(upload: UploadFile, target: Path, limit: int) -> int:
+    """分块落盘，守住单文件 50MB 与整批剩余额度（limit），超了立刻删残片。"""
+    size = 0
+    cap = min(limit, MAX_BYTES)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("wb") as fh:
+        while chunk := await upload.read(1024 * 1024):
+            size += len(chunk)
+            if size > cap:
+                fh.close()
+                target.unlink(missing_ok=True)
+                if cap < MAX_BYTES:
+                    raise HTTPException(413, "本批累计大小超过上限，请分批导入")
+                raise HTTPException(413, f"文件超过 {MAX_BYTES // 1024 // 1024}MB 上限")
+            fh.write(chunk)
+    return size
+
+
+def _cleanup_dir(path: Path) -> None:
+    import shutil
+
+    shutil.rmtree(path, ignore_errors=True)
 
 
 @router.get("")
@@ -207,6 +242,164 @@ async def upload_document_async(
         "status": job.status,
         "name": file.filename,
         "bytes": size,
+        "backend": settings.queue_backend,
+        "poll": f"/api/jobs/{job.id}",
+    }
+
+
+@router.post("/{kb_id}/documents/batch")
+async def upload_documents_batch(
+    kb_id: str,
+    files: list[UploadFile] = File(..., description="多文件；也可只传一个 zip 自动解包"),
+    paths: list[str] = Form(default=[], description="与 files 一一对应的相对路径（浏览器选目录时带上）"),
+    strategy: str = Form("recursive", description="recursive | fixed | semantic"),
+    chunk_size: int = Form(500),
+    chunk_overlap: int = Form(50),
+    ws: str = Depends(current_workspace),
+) -> dict:
+    """批量导入：一次收一个目录（多文件），或一个 ZIP 包。
+
+    前端选文件夹时会把 `webkitRelativePath` 一起提交，"产品/需求.md" 就成了文档名，
+    同类文件不会因重名覆盖，检索结果也能看出出处。整批入一个任务，
+    进度用 GET /jobs/{id} 看 done/total 与失败清单。
+    """
+    store = get_store()
+    _require_kb(store, kb_id, ws)
+
+    settings = get_settings()
+    max_files = max(1, settings.import_batch_max_files)
+    max_bytes = max(1, settings.import_batch_max_mb) * 1024 * 1024
+
+    batch_id = uuid.uuid4().hex[:12]
+    staging = UPLOAD_DIR / f"batch-{batch_id}"
+    staging.mkdir(parents=True, exist_ok=True)
+    items: list[batch_io.BatchItem] = []
+    skipped: list[batch_io.SkippedItem] = []
+    total_bytes = 0
+    from_archive = False
+
+    # 只有一个文件且是 zip：解包后按内部目录结构导入
+    if len(files) == 1:
+        only = files[0]
+        if Path(only.filename or "").suffix.lower() in (".zip", ".7z"):
+            if Path(only.filename or "").suffix.lower() == ".7z":
+                skipped.append(batch_io.SkippedItem(only.filename or "包", "仅支持 zip，请重新压缩"))
+            else:
+                archive = staging / "archive.zip"
+                size = await _save_upload(only, archive, max_bytes)
+                try:
+                    items, skipped = batch_io.extract_zip(
+                        archive, staging, max_files=max_files, max_bytes=max_bytes,
+                    )
+                except Exception as exc:  # noqa: BLE001 — 坏包按 400 返回，不抛 500
+                    raise HTTPException(400, f"ZIP 解包失败：{exc}") from exc
+                finally:
+                    archive.unlink(missing_ok=True)
+                from_archive = bool(items)
+                total_bytes = size if not items else sum(i.size for i in items)
+            files = []
+
+    for index, upload in enumerate(files):
+        raw_name = upload.filename or f"未命名-{index}"
+        rel = batch_io.clean_rel_path(paths[index]) if index < len(paths) and paths[index] else \
+            batch_io.clean_rel_path(raw_name)
+        reason = batch_io.is_ignored(rel)
+        if reason:
+            skipped.append(batch_io.SkippedItem(rel, reason))
+            continue
+        if len(items) >= max_files:
+            skipped.append(batch_io.SkippedItem(rel, f"超出单批 {max_files} 个文件上限"))
+            continue
+        if total_bytes >= max_bytes:
+            skipped.append(batch_io.SkippedItem(rel, "累计大小超过上限"))
+            continue
+        target = staging / f"{len(items):05d}{Path(rel).suffix.lower()}"
+        size = await _save_upload(upload, target, max_bytes - total_bytes)
+        total_bytes += size
+        items.append(batch_io.BatchItem(target, rel, size))
+
+    if not items:
+        _cleanup_dir(staging)
+        detail = "；".join(f"{s.name}（{s.reason}）" for s in skipped[:5]) or "没有可取的文件"
+        raise HTTPException(400, f"没有可导入的文件：{detail}")
+
+    job = get_queue().enqueue(
+        "kb.ingest_batch",
+        {
+            "kb_id": kb_id,
+            "items": [{"path": str(i.path), "name": i.name} for i in items],
+            "source": "zip" if from_archive else "upload",
+            "delete_after": True,
+            "strategy": strategy,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+        },
+        workspace_id=ws,
+        max_attempts=3,
+    )
+    return {
+        "batch_id": batch_id,
+        "job_id": job.id,
+        "status": job.status,
+        "files": len(items),
+        "bytes": total_bytes,
+        "skipped": [s.as_dict() for s in skipped[:50]],
+        "skipped_count": len(skipped),
+        "backend": settings.queue_backend,
+        "poll": f"/api/jobs/{job.id}",
+    }
+
+
+@router.post("/{kb_id}/documents/dir")
+async def import_directory(
+    kb_id: str, req: DirImport, ws: str = Depends(current_workspace)
+) -> dict:
+    """导入服务端目录（本地部署用）：不复制文件，直接按相对路径入库。
+
+    安全上默认关闭，需在 .env 配 `APP_LOCAL_IMPORT_ROOTS`（逗号分隔的绝对路径）；
+    未配置时返回 403 并说明怎么开。符号链接与依赖目录（node_modules/.git 等）会跳过。
+    """
+    store = get_store()
+    _require_kb(store, kb_id, ws)
+    settings = get_settings()
+    try:
+        root = batch_io.resolve_allowed_root(req.path, settings.import_roots)
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    items, skipped = batch_io.scan_directory(
+        root, recursive=req.recursive,
+        max_files=max(1, settings.import_batch_max_files),
+        max_bytes=max(1, settings.import_batch_max_mb) * 1024 * 1024,
+    )
+    if not items:
+        detail = "；".join(f"{s.name}（{s.reason}）" for s in skipped[:5]) or "目录为空"
+        raise HTTPException(400, f"没有可导入的文件：{detail}")
+
+    job = get_queue().enqueue(
+        "kb.ingest_batch",
+        {
+            "kb_id": kb_id,
+            "items": [{"path": str(i.path), "name": i.name} for i in items],
+            "source": "dir",
+            "delete_after": False,   # 源目录的文件不能删
+            "strategy": req.strategy,
+            "chunk_size": req.chunk_size,
+            "chunk_overlap": req.chunk_overlap,
+        },
+        workspace_id=ws,
+        max_attempts=2,
+    )
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "root": str(root),
+        "files": len(items),
+        "bytes": sum(i.size for i in items),
+        "skipped": [s.as_dict() for s in skipped[:50]],
+        "skipped_count": len(skipped),
         "backend": settings.queue_backend,
         "poll": f"/api/jobs/{job.id}",
     }

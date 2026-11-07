@@ -3,7 +3,7 @@
 > 本文由 `server/tools/gen_api_doc.py` 从应用自身的 OpenAPI schema 生成，**请勿手工编辑**。
 > 改完路由后运行 `python tools/gen_api_doc.py` 重新生成；CI 用 `--check` 校验是否漂移。
 >
-> 接口数：93 个操作 / 74 个路径 · 应用版本 0.1.0
+> 接口数：95 个操作 / 76 个路径 · 应用版本 0.1.0
 
 ## 1. 通用约定
 
@@ -108,6 +108,8 @@ nginx 需 `proxy_buffering off;`，并放宽 `proxy_read_timeout`。
 | `GET` | `/api/kb/{kb_id}/documents` | 文档列表（含解析状态与切片数） | 会话 |
 | `POST` | `/api/kb/{kb_id}/documents` | 粘贴文本入库（同步）。 | 会话 |
 | `POST` | `/api/kb/{kb_id}/documents/async` | 上传即返回：文件落盘 + 入队，解析/切片/嵌入全部交给 worker。 | 会话 |
+| `POST` | `/api/kb/{kb_id}/documents/batch` | 批量导入：一次收一个目录（多文件），或一个 ZIP 包。 | 会话 |
+| `POST` | `/api/kb/{kb_id}/documents/dir` | 导入服务端目录（本地部署用）：不复制文件，直接按相对路径入库。 | 会话 |
 | `POST` | `/api/kb/{kb_id}/documents/upload` | 上传并同步解析入库（小文件用；大文件走 /documents/async）。 | 会话 |
 | `POST` | `/api/kb/{kb_id}/documents/url` | 抓网页入库（同步，限制 8MB）。 | 会话 |
 | `DELETE` | `/api/kb/{kb_id}/documents/{doc_id}` | 删文档并级联清理切片与向量。 | 会话 |
@@ -579,6 +581,53 @@ SSE 运行智能体。事件：meta -> (step|artifact)* -> answer_start -> delta
 | --- | --- | --- | :---: | --- |
 | `kb_id` | path | string | 是 | — |
 | `x-workspace` | header | string? | 否 | — |
+
+**响应**：`200`
+
+#### `POST /api/kb/{kb_id}/documents/batch`
+
+批量导入：一次收一个目录（多文件），或一个 ZIP 包。
+
+前端选文件夹时会把 `webkitRelativePath` 一起提交，"产品/需求.md" 就成了文档名，
+同类文件不会因重名覆盖，检索结果也能看出出处。整批入一个任务，
+进度用 GET /jobs/{id} 看 done/total 与失败清单。
+
+**鉴权**：会话
+
+**参数**
+
+| 名称 | 位置 | 类型 | 必填 | 说明 |
+| --- | --- | --- | :---: | --- |
+| `kb_id` | path | string | 是 | — |
+| `x-workspace` | header | string? | 否 | — |
+
+**响应**：`200`
+
+#### `POST /api/kb/{kb_id}/documents/dir`
+
+导入服务端目录（本地部署用）：不复制文件，直接按相对路径入库。
+
+安全上默认关闭，需在 .env 配 `APP_LOCAL_IMPORT_ROOTS`（逗号分隔的绝对路径）；
+未配置时返回 403 并说明怎么开。符号链接与依赖目录（node_modules/.git 等）会跳过。
+
+**鉴权**：会话
+
+**参数**
+
+| 名称 | 位置 | 类型 | 必填 | 说明 |
+| --- | --- | --- | :---: | --- |
+| `kb_id` | path | string | 是 | — |
+| `x-workspace` | header | string? | 否 | — |
+
+**请求体**（`application/json`）
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | :---: | --- |
+| `path` | string | 是 | — |
+| `recursive` | boolean | 否 | 默认 `True` |
+| `strategy` | string | 否 | 默认 `recursive` |
+| `chunk_size` | integer | 否 | 默认 `500` |
+| `chunk_overlap` | integer | 否 | 默认 `50` |
 
 **响应**：`200`
 
