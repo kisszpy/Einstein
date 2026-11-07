@@ -35,6 +35,23 @@ def _deadline_epoch(seconds: int) -> float:
     return time.time() + seconds
 
 
+def _block_timeout() -> tuple[type[BaseException], ...]:
+    """BLPOP 空闲到期的异常类型。
+
+    redis-py < 6 到期返回 None；>= 6 抛 redis.exceptions.TimeoutError，
+    且它不继承内置 TimeoutError，必须单独捕获。redis 未安装时（注入 fake client）
+    退化成内置 TimeoutError。
+    """
+    try:
+        from redis.exceptions import TimeoutError as RedisTimeout
+    except ImportError:  # pragma: no cover — 只有测试注入 client 时才会走到
+        return (TimeoutError,)
+    return (RedisTimeout, TimeoutError)
+
+
+_BLOCK_TIMEOUT = _block_timeout()
+
+
 class RedisQueue:
     backend = "redis"
 
@@ -92,10 +109,15 @@ class RedisQueue:
         return job
 
     # ------------------------------------------------------------ 领取
-    def claim(self, block_seconds: int = 0) -> Job | None:
+    def claim(self, block_seconds: float = 0) -> Job | None:
         self._recover_expired()
         if block_seconds > 0:
-            item = self.r.blpop(self.k_pending, timeout=block_seconds)
+            try:
+                item = self.r.blpop(self.k_pending, timeout=block_seconds)
+            except _BLOCK_TIMEOUT:
+                # redis-py 6+ 在 BLPOP 到期时抛异常而不是返回 None（老版本返回 None），
+                # 语义上就是「这段时间没来任务」，交给调用方继续下一轮。
+                return None
             job_id = item[1] if item else None
         else:
             job_id = self.r.lpop(self.k_pending)

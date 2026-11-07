@@ -103,10 +103,29 @@ def run_forever(queue, *, concurrency: int, poll: float, block: bool, max_jobs: 
         pass
 
     def slot(idx: int) -> None:
+        # BLPOP 的 timeout 取整秒；小于 1 会让阻塞变成非阻塞，进而空转烧 CPU
+        block_seconds = max(1, int(round(poll))) if block else 0
+        backoff = 1.0
         while not stop.is_set():
-            job = queue.claim(block_seconds=int(poll) if block else 0)
+            started = time.monotonic()
+            try:
+                job = queue.claim(block_seconds=block_seconds)
+            except Exception as exc:  # noqa: BLE001 — 队列抖动（网络/空闲超时）不该杀掉 worker
+                print(
+                    f"[worker] 槽 {idx} 领取任务失败（{type(exc).__name__}: {exc}），"
+                    f"{backoff:.0f}s 后重试",
+                    flush=True,
+                )
+                stop.wait(backoff)
+                backoff = min(backoff * 2, 30.0)
+                continue
+            backoff = 1.0
             if job is None:
                 if block:
+                    # 正常 BLPOP 会整整阻塞 block_seconds；若明显提前返回（连接抖动、
+                    # 队列实现不阻塞），补一个短等待，否则这里会变成空转烧 CPU。
+                    if time.monotonic() - started < block_seconds * 0.5:
+                        stop.wait(min(1.0, max(poll, 0.2)))
                     continue
                 stop.wait(poll)
                 continue

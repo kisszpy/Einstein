@@ -133,6 +133,22 @@ def run_suite(backend: str, make_queue) -> None:  # noqa: ANN001
     weird = queue.enqueue("not-a-real-kind", {})
     check(backend, "未知 kind 可入队（由 worker 标记 failed）", queue.get(weird.id) is not None)
 
+    # ---- 空队列阻塞领取 ----
+    # redis-py 6+ 在 BLPOP 到期时抛 TimeoutError 而不是返回 None，且该异常不继承内置
+    # TimeoutError。没兜住的话 worker 的领取线程会直接死掉，整个进程静默退出（exit 0）。
+    if backend == "redis":
+        idle = RedisQueue("", name=f"idle-{uuid.uuid4().hex[:6]}", client=queue.r)
+        t0 = time.monotonic()
+        try:
+            got = idle.claim(block_seconds=1)
+            raised = ""
+        except Exception as exc:  # noqa: BLE001
+            got, raised = None, f"{type(exc).__name__}: {exc}"
+        spent = time.monotonic() - t0
+        check(backend, "空队列阻塞领取返回 None（不抛异常）",
+              not raised and got is None and 0.8 <= spent <= 6,
+              f"{spent:.1f}s{(' ' + raised) if raised else ''}")
+
     # ---- purge ----
     keep = queue.enqueue("noop", {"keep_pending": True})
     _age(queue, done.id if done else job.id, days=30)

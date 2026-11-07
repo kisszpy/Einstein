@@ -203,7 +203,11 @@ fi
 
 # ---------------------------------------------------------------- 5. 同步摄入
 
-TMP_DIR=$(mktemp -d)
+# 临时目录用仓库内相对路径：Windows 的 cut 版 mktemp 会返回 C:\...\Temp/xxx 这种
+# 混合分隔符路径，删除守卫判定为非法路径，每个 run 都会漏一个目录。
+TMP_DIR="$ROOT/deploy/.smoke-tmp"
+rm -rf "$TMP_DIR"
+mkdir -p "$TMP_DIR"
 trap 'rm -rf "$TMP_DIR"' EXIT
 cat > "$TMP_DIR/travel.txt" <<'TXT'
 差旅报销流程说明
