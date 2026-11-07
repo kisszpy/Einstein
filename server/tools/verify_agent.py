@@ -129,7 +129,7 @@ def main() -> None:
     if not skip_live:
         print("\n== 端到端（真实模型）==")
 
-        def run_e2e() -> list[tuple[str, dict]]:
+        def run_e2e(task: str, tool_ids: list[str]) -> list[tuple[str, dict]]:
             """发起一次端到端运行并收集 SSE 事件。
 
             用 curl 子进程做传输：沙箱会间歇性掐断 python 的长连接
@@ -138,10 +138,7 @@ def main() -> None:
             import subprocess
             import tempfile
 
-            body = json.dumps({
-                "task": "创建项目「冒烟端到端」，写 hello.py 打印 1 到 10 的平方，运行验证后汇报。",
-                "tool_ids": ["project_create", "fs_write", "code_run"],
-            })
+            body = json.dumps({"task": task, "tool_ids": tool_ids})
             for attempt in range(1, 4):
                 with tempfile.NamedTemporaryFile("w+", suffix=".sse", delete=False, encoding="utf-8") as tf:
                     out_path = tf.name
@@ -173,7 +170,10 @@ def main() -> None:
                 print(f"    [retry {attempt}] 未收到 done（事件 {len(events)} 个，curl rc={proc.returncode}）")
             return events
 
-        events = run_e2e()
+        events = run_e2e(
+            "创建项目「冒烟端到端」，写 hello.py 打印 1 到 10 的平方，运行验证后汇报。",
+            ["project_create", "fs_write", "code_run"],
+        )
         names = [s["name"] for e, d in events if e == "step" for s in [d["step"]] if s["kind"] == "tool_call"]
         done = next((d for e, d in events if e == "done"), None)
         if not names or done is None:
@@ -189,6 +189,19 @@ def main() -> None:
             code, tree = call("GET", f"/api/projects/{done['project']}/tree")
             paths = [x["path"] for x in tree.get("entries", [])]
             check("端到端产物落盘", "hello.py" in paths, str(paths))
+
+        # 路由纪律：纯问答任务即使挂了全部工具，也不应建项目/写代码
+        events2 = run_e2e(
+            "直接回答：Redis 和 Memcached 做缓存各适合什么场景？只回答，不要创建项目、不要写代码、不要生成任何文件。",
+            ["project_create", "fs_write", "code_run"],
+        )
+        names2 = [s["name"] for e, d in events2 if e == "step" for s in [d["step"]] if s["kind"] == "tool_call"]
+        done2 = next((d for e, d in events2 if e == "done"), None)
+        check(
+            "路由纪律（问答不落工程）",
+            done2 is not None and "project_create" not in names2 and "code_run" not in names2,
+            f"calls={names2}",
+        )
 
     print(f"\n结果：{PASS} 通过 / {FAIL} 失败")
     sys.exit(1 if FAIL else 0)

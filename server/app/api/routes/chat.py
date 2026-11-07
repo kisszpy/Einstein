@@ -24,10 +24,16 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 SYSTEM_WITH_KB = (
     "你是一个严谨的问答助手。请优先依据下面提供的参考资料回答用户问题，"
     "并在引用到某条资料时在句末标注 [编号]。若资料不足以回答，请明确说明。\n\n"
+    "回答要求：第一句直接给结论，再分点展开；用小标题和短列表组织内容；"
+    "资料之外的推断要说明是你的判断；不知道就直说，不编造。\n\n"
     "=== 参考资料 ===\n{context}\n=== 参考资料 end ==="
 )
 
-SYSTEM_PLAIN = "你是一个乐于助人的中文问答助手，回答简洁准确。"
+SYSTEM_PLAIN = (
+    "你是一个乐于助人的中文问答助手。回答要求：第一句话直接回答问题，"
+    "再分点展开依据；用小标题和短列表组织内容，一句一个信息点，不写大段流水字；"
+    "事实与你的判断分开表述；不确定的内容明确说明，绝不编造数据或引用。"
+)
 
 
 class ChatMessage(BaseModel):
@@ -94,7 +100,7 @@ def _compose_system(
                     parts.append(block)
 
     if not parts:
-        parts = ["你是一个乐于助人的中文问答助手，回答简洁准确。"]
+        parts = [SYSTEM_PLAIN]
 
     if kb_hit:
         parts.append(

@@ -204,7 +204,7 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
 
         tools.append(StructuredTool.from_function(
             _safe(_project_create), name="project_create",
-            description=f"在当前工作区创建项目（脚手架：{'/'.join(sandbox.TEMPLATES)}），之后所有文件与代码操作都落在该项目里",
+            description=f"在当前工作区创建项目（脚手架：{'/'.join(sandbox.TEMPLATES)}）。仅当用户要文件交付（代码工程/文档/PPT）时才创建；纯问答不要建项目",
             args_schema=ProjectCreateArgs, coroutine=None))
 
     if "fs_write" in wanted:
@@ -217,7 +217,7 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
 
         tools.append(StructuredTool.from_function(
             _safe(_fs_write), name="fs_write",
-            description="把完整内容写入项目内文件（自动创建目录）。写代码、文档、配置都用它",
+            description="把完整内容写入项目内文件（自动创建目录）。用于需要落盘的交付物（代码/文档/PPT 数据）",
             args_schema=FsWriteArgs, coroutine=None))
 
     if "fs_read" in wanted:
@@ -250,7 +250,7 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
 
             tools.append(StructuredTool.from_function(
                 _safe(_code_run), name="code_run",
-                description="在项目目录内执行 Python/Node 代码并返回 stdout/stderr。写完代码应运行验证",
+                description="在项目目录内执行 Python/Node 代码并返回 stdout/stderr。仅用于精确计算、数据处理或验证写好的代码；普通问答和写作不要写代码",
                 args_schema=CodeRunArgs, coroutine=None))
 
     if "ppt_create" in wanted:
