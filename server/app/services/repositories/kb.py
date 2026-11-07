@@ -61,8 +61,54 @@ class KbRepository(Protocol):
     def add_chunks(self, chunks: list[Chunk]) -> None: ...
     def get_chunks(self, chunk_ids: list[str]) -> list[Chunk]: ...
     def list_chunks(self, kb_ids: list[str] | None = None, document_id: str | None = None) -> list[Chunk]: ...
+    # ---- 文档版本 ----
+    def add_version(
+        self, *, document_id: str, kb_id: str, version: int, content: str,
+        content_hash: str, chunk_count: int, source: str = "text", note: str = "",
+    ) -> dict:
+        row = {
+            "id": f"{document_id}-v{version}", "document_id": document_id, "kb_id": kb_id,
+            "version": version, "content": content, "content_hash": content_hash,
+            "chunk_count": chunk_count, "source": source, "note": note, "created_at": _now(),
+        }
+        with self._lock:
+            self.versions = [v for v in self.versions if v.get("id") != row["id"]]
+            self.versions.append(row)
+        return row
+
+    def list_versions(self, document_id: str) -> list[dict]:
+        rows = [v for v in self.versions if v.get("document_id") == document_id]
+        return sorted(rows, key=lambda v: v.get("version", 0), reverse=True)
+
+    def get_version(self, document_id: str, version: int) -> dict | None:
+        for v in self.versions:
+            if v.get("document_id") == document_id and v.get("version") == version:
+                return v
+        return None
+
+    def update_chunk(
+        self, chunk_id: str, *, text: str, vector: list[float], embedding_kind: str = "mock",
+    ) -> bool:
+        with self._lock:
+            for c in self.chunks:
+                if c.id == chunk_id:
+                    c.text = text
+                    c.vector = vector
+                    c.embedding_kind = embedding_kind
+                    return True
+        return False
+
     def delete_chunks_by_document(self, doc_id: str) -> int: ...
+    def update_chunk(
+        self, chunk_id: str, *, text: str, vector: list[float], embedding_kind: str = "mock",
+    ) -> bool: ...
     def count_chunks(self, kb_id: str) -> int: ...
+    def add_version(
+        self, *, document_id: str, kb_id: str, version: int, content: str,
+        content_hash: str, chunk_count: int, source: str = "text", note: str = "",
+    ) -> dict: ...
+    def list_versions(self, document_id: str) -> list[dict]: ...
+    def get_version(self, document_id: str, version: int) -> dict | None: ...
     def save(self) -> None: ...
 
 
@@ -78,6 +124,7 @@ class JsonKbRepository:
         self.kbs: dict[str, KnowledgeBase] = {}
         self.documents: dict[str, Document] = {}
         self.chunks: list[Chunk] = []
+        self.versions: list[dict] = []
         self._lock = threading.RLock()
         self._load()
 
@@ -106,6 +153,7 @@ class JsonKbRepository:
             Chunk(**{kk: vv for kk, vv in c.items() if kk in chunk_fields})
             for c in (payload.get("chunks") or [])
         ]
+        self.versions = list(payload.get("versions") or [])
 
     def save(self) -> None:
         from dataclasses import asdict
@@ -116,6 +164,7 @@ class JsonKbRepository:
                 "kbs": {k: asdict(v) for k, v in self.kbs.items()},
                 "documents": {k: asdict(v) for k, v in self.documents.items()},
                 "chunks": [asdict(c) for c in self.chunks],
+                "versions": self.versions,
             }
             tmp = self.path.with_suffix(self.path.suffix + ".tmp")
             tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -390,6 +439,46 @@ class SqlKbRepository:
         return max(removed, 0)
 
     # ---- 切片 ----
+    # ---- 文档版本 ----
+    def add_version(
+        self, *, document_id: str, kb_id: str, version: int, content: str,
+        content_hash: str, chunk_count: int, source: str = "text", note: str = "",
+    ) -> dict:
+        row = {
+            "id": f"{document_id}-v{version}", "document_id": document_id, "kb_id": kb_id,
+            "version": version, "content": content, "content_hash": content_hash,
+            "chunk_count": chunk_count, "source": source, "note": note, "created_at": _now(),
+        }
+        self.db.execute(
+            "INSERT INTO document_versions (id, document_id, kb_id, version, content,"
+            " content_hash, chunk_count, source, note, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT (id) DO UPDATE SET content = excluded.content,"
+            " content_hash = excluded.content_hash, chunk_count = excluded.chunk_count,"
+            " note = excluded.note",
+            (row["id"], document_id, kb_id, version, content, content_hash,
+             chunk_count, source, note, row["created_at"]),
+        )
+        return row
+
+    def list_versions(self, document_id: str) -> list[dict]:
+        rows = self.db.query(
+            "SELECT id, document_id, kb_id, version, content, content_hash, chunk_count,"
+            " source, note, created_at FROM document_versions WHERE document_id = ?"
+            " ORDER BY version DESC",
+            (document_id,),
+        )
+        return [dict(r) for r in rows]
+
+    def get_version(self, document_id: str, version: int) -> dict | None:
+        row = self.db.query_one(
+            "SELECT id, document_id, kb_id, version, content, content_hash, chunk_count,"
+            " source, note, created_at FROM document_versions"
+            " WHERE document_id = ? AND version = ?",
+            (document_id, version),
+        )
+        return dict(row) if row else None
+
     def add_chunks(self, chunks: list[Chunk]) -> None:
         if not chunks:
             return
@@ -436,6 +525,15 @@ class SqlKbRepository:
             list(chunk_ids),
         )
         return [self._chunk(r) for r in rows]
+
+    def update_chunk(
+        self, chunk_id: str, *, text: str, vector: list[float], embedding_kind: str = "mock",
+    ) -> bool:
+        affected = self.db.execute(
+            "UPDATE chunks SET text = ?, vector = ?, vector_kind = ? WHERE id = ?",
+            (text, vec_to_bytes(vector), embedding_kind, chunk_id),
+        )
+        return affected == 1
 
     def delete_chunks_by_document(self, doc_id: str) -> int:
         return max(self.db.execute("DELETE FROM chunks WHERE document_id = ?", (doc_id,)), 0)

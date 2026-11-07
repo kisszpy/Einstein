@@ -150,11 +150,31 @@ _MIGRATION_004 = [
     """,
 ]
 
+_MIGRATION_005 = [
+    "ALTER TABLE jobs ADD COLUMN progress TEXT NOT NULL DEFAULT '{}'",
+    """
+    CREATE TABLE IF NOT EXISTS document_versions (
+        id            TEXT PRIMARY KEY,
+        document_id   TEXT NOT NULL,
+        kb_id         TEXT NOT NULL,
+        version       INTEGER NOT NULL,
+        content       TEXT NOT NULL DEFAULT '',
+        content_hash  TEXT NOT NULL DEFAULT '',
+        chunk_count   INTEGER NOT NULL DEFAULT 0,
+        source        TEXT NOT NULL DEFAULT 'text',
+        note          TEXT NOT NULL DEFAULT '',
+        created_at    TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ver_doc ON document_versions(document_id, version)",
+]
+
 MIGRATIONS: list[tuple[int, list[str]]] = [
     (1, _MIGRATION_001),
     (2, _MIGRATION_002),
     (3, _MIGRATION_003),
     (4, _MIGRATION_004),
+    (5, _MIGRATION_005),
 ]
 
 _TYPE_TOKENS = {

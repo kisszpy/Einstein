@@ -166,14 +166,15 @@ class RedisQueue:
         self.r.zrem(self.k_processing, job_id)
         return self.get(job_id)
 
-    def fail(self, job_id: str, error: str) -> Job | None:
+    def fail(self, job_id: str, error: str, *, permanent: bool = False) -> Job | None:
         key = self.k_job(job_id)
         if not self.r.exists(key):
             return None
         states = self.r.hgetall(key)
         attempts = int(states.get("attempts") or 0)
         max_attempts = int(states.get("max_attempts") or 1)
-        status = PENDING if attempts < max_attempts else FAILED
+        retryable = not permanent and attempts < max_attempts
+        status = PENDING if retryable else FAILED
         self.r.hset(key, mapping={
             "status": status, "error": (error or "")[:2000], "worker_id": "",
             "lease_until": "", "updated_at": _now(),
@@ -182,6 +183,13 @@ class RedisQueue:
         if status == PENDING:
             self.r.rpush(self.k_pending, job_id)
         return self.get(job_id)
+
+    def set_progress(self, job_id: str, progress: dict) -> bool:
+        key = self.k_job(job_id)
+        if not self.r.exists(key):
+            return False
+        self.r.hset(key, mapping={"progress": dumps(progress), "updated_at": _now()})
+        return True
 
     def retry(self, job_id: str) -> Job | None:
         key = self.k_job(job_id)
@@ -211,6 +219,7 @@ class RedisQueue:
             error=states.get("error", ""), workspace_id=states.get("workspace_id", "default"),
             worker_id=states.get("worker_id", ""), lease_until=states.get("lease_until", ""),
             created_at=states.get("created_at", ""), updated_at=states.get("updated_at", ""),
+            progress=loads(states.get("progress")),
         )
 
     def list(

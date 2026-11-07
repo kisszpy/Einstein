@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.services.queue import Job, get_queue  # noqa: E402
+from app.services.queue.base import PermanentJobError  # noqa: E402
 from app.services.queue.handlers import HANDLERS  # noqa: E402
 
 
@@ -70,7 +71,8 @@ def execute(queue, job: Job) -> bool:  # noqa: ANN001
         return True
     except Exception as exc:  # noqa: BLE001 — 任何异常都转成任务失败，worker 不退出
         detail = f"{type(exc).__name__}: {exc}"
-        updated = queue.fail(job.id, detail)
+        # 格式不支持/文件损坏这类问题重试多少次都一样，直接判死
+        updated = queue.fail(job.id, detail, permanent=isinstance(exc, PermanentJobError))
         status = updated.status if updated else "?"
         print(f"[worker] {job.id} 失败 → {status}：{detail}", flush=True)
         traceback.print_exc()

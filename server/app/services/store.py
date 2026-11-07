@@ -131,6 +131,19 @@ class KBStore:
         """按 id 回表：向量索引命中后只取这几条（纯向量检索路径）。"""
         return self.repo.get_chunks(chunk_ids)
 
+    def update_chunk(
+        self, chunk_id: str, *, text: str, vector: list[float], embedding_kind: str = "mock",
+    ) -> bool:
+        ok = self.repo.update_chunk(
+            chunk_id, text=text, vector=vector, embedding_kind=embedding_kind
+        )
+        return ok
+
+    def delete_chunks_of_document(self, doc_id: str) -> int:
+        removed = self.repo.delete_chunks_by_document(doc_id)
+        self.repo.save()
+        return removed
+
     def chunks_of_kb(self, kb_id: str) -> list[Chunk]:
         return self.repo.list_chunks([kb_id])
 

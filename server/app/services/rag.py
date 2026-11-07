@@ -10,6 +10,7 @@
 """
 
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
@@ -22,7 +23,9 @@ from app.services.lexical import BM25
 from app.services.store import Chunk, Document, KBStore, get_store
 from app.services.vector import MemoryIndex, VectorIndexError, get_vector_index
 
-_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+DEFAULT_CHUNK_SIZE = 500
+DEFAULT_CHUNK_OVERLAP = 50
+DEFAULT_STRATEGY = "recursive"   # recursive | fixed | semantic（按 markdown 标题）
 
 RetrievalMode = Literal["vector", "lexical", "hybrid"]
 
@@ -51,23 +54,59 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
-async def ingest_document(
-    store: KBStore, kb_id: str, name: str, content: str,
-    *, source: str = "text", content_hash: str = "",
-) -> Document:
-    """切片 → 嵌入 → 入库。
+@dataclass
+class IngestResult:
+    document: Document
+    deduped: bool = False     # 内容与已有文档完全相同，没有重复建索引
+    version: int = 1
+    chunk_count: int = 0
 
-    切片 id 用 `{doc_id}-{seq}` 而不是全局计数：v0.1 用 `len(store.chunks)` 生成，
-    删过文档后编号会撞车，是隐性数据损坏。
+
+def content_digest(content: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _split(
+    content: str, *, strategy: str = DEFAULT_STRATEGY,
+    size: int = DEFAULT_CHUNK_SIZE, overlap: int = DEFAULT_CHUNK_OVERLAP,
+) -> list[str]:
+    """切片策略。
+
+    - recursive：按段落/句子边界递归切，保留语义完整（默认）
+    - fixed：定长硬切，适合表格/日志这类无段落结构的文本
+    - semantic：先按 markdown 标题切块，过长再递归细分，保住章节边界
     """
-    texts = _splitter.split_text(content)
-    if not texts:
-        texts = [content]
+    size = max(100, min(int(size), 4000))
+    overlap = max(0, min(int(overlap), size // 2))
+
+    if strategy == "fixed":
+        step = max(1, size - overlap)
+        return [
+            content[i:i + size] for i in range(0, len(content), step)
+            if content[i:i + size].strip()
+        ]
+
+    if strategy == "semantic":
+        blocks = re.split(r"\n(?=#{1,3} )", content)
+        out: list[str] = []
+        for block in blocks:
+            if len(block) <= size * 2:
+                out.append(block)
+            else:
+                out.extend(_split(block, strategy="recursive", size=size, overlap=overlap))
+        return [b.strip() for b in out if b.strip()] or [content]
+
+    splitter = RecursiveCharacterTextSplitter(chunk_size=size, chunk_overlap=overlap)
+    return splitter.split_text(content) or [content]
+
+
+async def _embed_and_store(
+    store: KBStore, doc: Document, kb_id: str, content: str, texts: list[str],
+) -> int:
+    """嵌入并写入切片，返回切片数。切片 id 用 `{doc_id}-{seq}`，删过文档也不会撞号。"""
     vectors, kind = await embed_texts(texts)
-
-    doc = store.add_document(kb_id, name, content, chunk_count=len(texts),
-                             source=source, content_hash=content_hash)
-
     chunks: list[Chunk] = []
     cursor = 0
     for seq, (text, vec) in enumerate(zip(texts, vectors, strict=True)):
@@ -84,7 +123,104 @@ async def ingest_document(
             )
         )
     store.add_chunks(chunks)
-    return doc
+    return len(chunks)
+
+
+def _drop_document_index(store: KBStore, doc_id: str) -> None:
+    """删掉一篇文档的切片与向量（重切片、删文档都要走）。"""
+    store.delete_chunks_of_document(doc_id)
+    try:
+        get_vector_index().delete_document(doc_id)
+    except VectorIndexError:
+        pass  # 索引不可用时以数据库为准，重建脚本会补
+
+
+async def ingest_document(
+    store: KBStore, kb_id: str, name: str, content: str,
+    *, source: str = "text", content_hash: str = "", dedupe: bool = True,
+    note: str = "", strategy: str = DEFAULT_STRATEGY,
+    chunk_size: int = DEFAULT_CHUNK_SIZE, chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+) -> IngestResult:
+    """切片 → 嵌入 → 入库，带内容去重与同名版本管理。
+
+    - 内容完全相同（sha256 一致）→ 直接返回已有文档，不重复嵌入
+    - 同一知识库内同名文档内容不同 → 生成新版本，旧内容快照进 document_versions
+    """
+    digest = content_hash or content_digest(content)
+
+    if dedupe:
+        same = store.find_document_by_hash(kb_id, digest)
+        if same is not None:
+            return IngestResult(same, deduped=True, version=same.version,
+                                chunk_count=same.chunk_count)
+
+    previous = next((d for d in store.documents_of_kb(kb_id) if d.name == name), None)
+    if previous is not None:
+        # 留档：把旧内容记进版本表，回滚时用
+        store.repo.add_version(
+            document_id=previous.id, kb_id=kb_id, version=previous.version,
+            content=previous.content, content_hash=previous.content_hash,
+            chunk_count=previous.chunk_count, source=previous.source,
+            note="被新版本替换",
+        )
+        _drop_document_index(store, previous.id)
+        texts = _split(content, strategy=strategy, size=chunk_size, overlap=chunk_overlap)
+        doc = store.update_document(
+            previous.id, content=content, content_hash=digest,
+            version=previous.version + 1, chunk_count=len(texts), source=source,
+        )
+        assert doc is not None
+        count = await _embed_and_store(store, doc, kb_id, content, texts)
+        # 新版本也留档，否则只能回滚到"上一版"，看不到每一版的内容
+        store.repo.add_version(
+            document_id=doc.id, kb_id=kb_id, version=doc.version, content=content,
+            content_hash=digest, chunk_count=count, source=source,
+            note=note or "更新入库",
+        )
+        store.save()
+        return IngestResult(doc, version=doc.version, chunk_count=count)
+
+    texts = _split(content, strategy=strategy, size=chunk_size, overlap=chunk_overlap)
+    doc = store.add_document(kb_id, name, content, chunk_count=len(texts),
+                             source=source, content_hash=digest)
+    store.repo.add_version(
+        document_id=doc.id, kb_id=kb_id, version=doc.version, content=content,
+        content_hash=digest, chunk_count=len(texts), source=source, note="首次入库",
+    )
+    count = await _embed_and_store(store, doc, kb_id, content, texts)
+    store.save()
+    return IngestResult(doc, version=doc.version, chunk_count=count)
+
+
+async def reindex_document(store: KBStore, doc_id: str) -> int:
+    """按当前切片策略重建一篇文档的切片与向量（版本号不变）。"""
+    doc = store.get_document(doc_id)
+    if doc is None:
+        raise ValueError(f"文档不存在：{doc_id}")
+    _drop_document_index(store, doc_id)
+    texts = _split(doc.content)
+    store.update_document(doc_id, chunk_count=len(texts))
+    doc = store.get_document(doc_id)
+    assert doc is not None
+    count = await _embed_and_store(store, doc, doc.kb_id, doc.content, texts)
+    store.save()
+    return count
+
+
+async def reembed_chunk(store: KBStore, chunk_id: str, text: str) -> Chunk | None:
+    """改一条切片的文本并重算向量（前端切片编辑器用）。"""
+    found = store.get_chunks([chunk_id])
+    if not found:
+        return None
+    vectors, kind = await embed_texts([text])
+    store.update_chunk(chunk_id, text=text, vector=vectors[0], embedding_kind=kind)
+    store.save()
+    try:
+        get_vector_index().upsert(store.get_chunks([chunk_id]))
+    except VectorIndexError:
+        pass
+    rows = store.get_chunks([chunk_id])
+    return rows[0] if rows else None
 
 
 async def search(

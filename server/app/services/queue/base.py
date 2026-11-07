@@ -26,6 +26,10 @@ STATUSES = (PENDING, RUNNING, DONE, FAILED)
 DEFAULT_LEASE_SECONDS = 300
 
 
+class PermanentJobError(RuntimeError):
+    """不该重试的失败（格式不支持、文件损坏、越权）。worker 直接标记 failed。"""
+
+
 @dataclass
 class Job:
     id: str
@@ -41,6 +45,7 @@ class Job:
     lease_until: str = ""
     created_at: str = ""
     updated_at: str = ""
+    progress: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -48,7 +53,7 @@ class Job:
             "payload": self.payload, "result": self.result, "attempts": self.attempts,
             "max_attempts": self.max_attempts, "error": self.error,
             "workspace_id": self.workspace_id, "created_at": self.created_at,
-            "updated_at": self.updated_at,
+            "updated_at": self.updated_at, "progress": self.progress,
         }
 
 
@@ -73,7 +78,11 @@ class JobQueue(Protocol):
 
     def complete(self, job_id: str, result: dict | None = None) -> Job | None: ...
 
-    def fail(self, job_id: str, error: str) -> Job | None: ...
+    def fail(self, job_id: str, error: str, *, permanent: bool = False) -> Job | None: ...
+
+    def set_progress(self, job_id: str, progress: dict) -> bool:
+        """记录执行进度（阶段 / 百分比 / 已完成数量），供前端轮询。"""
+        ...
 
     def get(self, job_id: str) -> Job | None: ...
 

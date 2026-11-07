@@ -26,7 +26,7 @@ from app.services.queue.base import (
 
 JOB_COLUMNS = (
     "id, kind, status, payload, result, attempts, max_attempts, error,"
-    " workspace_id, worker_id, lease_until, created_at, updated_at"
+    " workspace_id, worker_id, lease_until, created_at, updated_at, progress"
 )
 
 
@@ -60,8 +60,8 @@ class LocalQueue:
         )
         self.db.execute(
             "INSERT INTO jobs (id, kind, status, payload, result, attempts, max_attempts,"
-            " error, workspace_id, worker_id, lease_until, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, '{}', 0, ?, '', ?, '', '', ?, ?)",
+            " error, workspace_id, worker_id, lease_until, created_at, updated_at, progress)"
+            " VALUES (?, ?, ?, ?, '{}', 0, ?, '', ?, '', '', ?, ?, '{}')",
             (job.id, job.kind, PENDING, dumps(job.payload), job.max_attempts,
              job.workspace_id, now, now),
         )
@@ -113,18 +113,26 @@ class LocalQueue:
         )
         return self.get(job_id)
 
-    def fail(self, job_id: str, error: str) -> Job | None:
+    def fail(self, job_id: str, error: str, *, permanent: bool = False) -> Job | None:
         job = self.get(job_id)
         if job is None:
             return None
         # attempts 在 claim 时已 +1，这里只判断是否还能再来一次
-        status = PENDING if job.attempts < job.max_attempts else FAILED
+        retryable = not permanent and job.attempts < job.max_attempts
+        status = PENDING if retryable else FAILED
         self.db.execute(
             "UPDATE jobs SET status = ?, error = ?, worker_id = '', lease_until = '', updated_at = ?"
             " WHERE id = ?",
             (status, error[:2000], _now(), job_id),
         )
         return self.get(job_id)
+
+    def set_progress(self, job_id: str, progress: dict) -> bool:
+        affected = self.db.execute(
+            "UPDATE jobs SET progress = ?, updated_at = ? WHERE id = ?",
+            (dumps(progress), _now(), job_id),
+        )
+        return affected == 1
 
     def retry(self, job_id: str) -> Job | None:
         self.db.execute(
@@ -144,6 +152,7 @@ class LocalQueue:
             error=row["error"] or "", workspace_id=row["workspace_id"] or "default",
             worker_id=row["worker_id"] or "", lease_until=row["lease_until"] or "",
             created_at=row["created_at"], updated_at=row["updated_at"],
+            progress=loads(row.get("progress")),
         )
 
     def get(self, job_id: str) -> Job | None:
