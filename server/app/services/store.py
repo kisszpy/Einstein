@@ -134,9 +134,13 @@ class KBStore:
     def update_chunk(
         self, chunk_id: str, *, text: str, vector: list[float], embedding_kind: str = "mock",
     ) -> bool:
+        """改切片文本与向量。与其它写方法一致，落盘由 store 负责：
+        SQL 后端的 save() 是空操作，JSON 后端则在这里原子重写整个文件。"""
         ok = self.repo.update_chunk(
             chunk_id, text=text, vector=vector, embedding_kind=embedding_kind
         )
+        if ok:
+            self.repo.save()
         return ok
 
     def delete_chunks_of_document(self, doc_id: str) -> int:

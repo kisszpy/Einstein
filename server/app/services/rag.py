@@ -213,8 +213,7 @@ async def reembed_chunk(store: KBStore, chunk_id: str, text: str) -> Chunk | Non
     if not found:
         return None
     vectors, kind = await embed_texts([text])
-    store.update_chunk(chunk_id, text=text, vector=vectors[0], embedding_kind=kind)
-    store.save()
+    store.update_chunk(chunk_id, text=text, vector=vectors[0], embedding_kind=kind)  # 内部已落盘
     try:
         get_vector_index().upsert(store.get_chunks([chunk_id]))
     except VectorIndexError:

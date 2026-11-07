@@ -285,6 +285,45 @@ class JsonKbRepository:
     def count_chunks(self, kb_id: str) -> int:
         return sum(1 for c in self.chunks if c.kb_id == kb_id)
 
+    def update_chunk(
+        self, chunk_id: str, *, text: str, vector: list[float], embedding_kind: str = "mock",
+    ) -> bool:
+        """就地改文本与向量：切片编辑后不必整篇重建，检索能立刻命中新内容。"""
+        with self._lock:
+            for chunk in self.chunks:
+                if chunk.id == chunk_id:
+                    chunk.text = text
+                    chunk.vector = list(vector)
+                    chunk.embedding_kind = embedding_kind
+                    return True
+            return False
+
+    # ---- 文档版本 ----
+    def add_version(
+        self, *, document_id: str, kb_id: str, version: int, content: str,
+        content_hash: str, chunk_count: int, source: str = "text", note: str = "",
+    ) -> dict:
+        row = {
+            "id": f"{document_id}-v{version}", "document_id": document_id, "kb_id": kb_id,
+            "version": version, "content": content, "content_hash": content_hash,
+            "chunk_count": chunk_count, "source": source, "note": note, "created_at": _now(),
+        }
+        with self._lock:
+            # 同一版本重复写入按覆盖处理，与 SQL 的 ON CONFLICT (id) 保持一致
+            self.versions = [v for v in self.versions if v.get("id") != row["id"]]
+            self.versions.append(row)
+        return row
+
+    def list_versions(self, document_id: str) -> list[dict]:
+        rows = [v for v in self.versions if v.get("document_id") == document_id]
+        return sorted(rows, key=lambda v: v.get("version", 0), reverse=True)
+
+    def get_version(self, document_id: str, version: int) -> dict | None:
+        for row in self.versions:
+            if row.get("document_id") == document_id and row.get("version") == version:
+                return row
+        return None
+
 
 # ---------------------------------------------------------------- SQL 实现
 KB_COLUMNS = "id, workspace_id, name, description, visibility, created_at, updated_at"
