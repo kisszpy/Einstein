@@ -124,10 +124,5 @@ async def delete_kb(kb_id: str, ws: str = Depends(current_workspace)) -> dict:
     """删除知识库，连同其文档与切片一并清理。"""
     store = get_store()
     _require_kb(store, kb_id, ws)
-    doc_ids = {d.id for d in store.documents_of_kb(kb_id)}
-    store.kbs.pop(kb_id)
-    for doc_id in doc_ids:
-        store.documents.pop(doc_id, None)
-    store.chunks = [c for c in store.chunks if c.kb_id != kb_id]
-    store.save()
-    return {"ok": True, "removed_documents": len(doc_ids)}
+    removed = store.delete_kb(kb_id)
+    return {"ok": True, "removed_documents": removed}

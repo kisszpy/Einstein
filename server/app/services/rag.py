@@ -47,26 +47,39 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
-async def ingest_document(store: KBStore, kb_id: str, name: str, content: str) -> Document:
-    """切片 → 嵌入 → 入库。"""
+async def ingest_document(
+    store: KBStore, kb_id: str, name: str, content: str,
+    *, source: str = "text", content_hash: str = "",
+) -> Document:
+    """切片 → 嵌入 → 入库。
+
+    切片 id 用 `{doc_id}-{seq}` 而不是全局计数：v0.1 用 `len(store.chunks)` 生成，
+    删过文档后编号会撞车，是隐性数据损坏。
+    """
     texts = _splitter.split_text(content)
     if not texts:
         texts = [content]
     vectors, kind = await embed_texts(texts)
 
-    doc = store.add_document(kb_id, name, content, chunk_count=len(texts))
-    for text, vec in zip(texts, vectors, strict=True):
-        store.add_chunk(
+    doc = store.add_document(kb_id, name, content, chunk_count=len(texts),
+                             source=source, content_hash=content_hash)
+
+    chunks: list[Chunk] = []
+    cursor = 0
+    for seq, (text, vec) in enumerate(zip(texts, vectors, strict=True)):
+        start = content.find(text, cursor)
+        if start < 0:
+            start = cursor
+        end = start + len(text)
+        cursor = end
+        chunks.append(
             Chunk(
-                id=f"{doc.id}-{len(store.chunks)}",
-                kb_id=kb_id,
-                document_id=doc.id,
-                text=text,
-                vector=vec,
-                embedding_kind=kind,
+                id=f"{doc.id}-{seq}", kb_id=kb_id, document_id=doc.id, text=text,
+                vector=vec, embedding_kind=kind, seq=seq,
+                char_start=start, char_end=end, created_at=now_iso(),
             )
         )
-    store.save()
+    store.add_chunks(chunks)
     return doc
 
 
@@ -82,7 +95,9 @@ async def search(
         return []
     settings = get_settings()
     mode = mode or settings.retrieval_mode  # type: ignore[assignment]
-    candidates = [c for c in store.chunks if c.kb_id in kb_ids]
+    # 只取目标知识库的切片：SQL 后端下这是一次带索引的查询，
+    # 不会把其他知识库（甚至其他工作区）的向量读进内存。
+    candidates = store.list_chunks(kb_ids)
     if not candidates:
         return []
 
@@ -124,7 +139,7 @@ async def search(
         ordered = lex_ranked[:top_k]
 
     by_id = {c.id: c for c in candidates}
-    doc_names = {d.id: d.name for d in store.documents.values()}
+    doc_names = store.doc_names()
     hits: list[RetrievedChunk] = []
     for cid, score in ordered:
         c = by_id.get(cid)
