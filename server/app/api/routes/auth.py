@@ -68,7 +68,7 @@ async def login(req: Request, payload: dict) -> dict:
     username = str(payload.get("username", "")).strip()
     password = str(payload.get("password", ""))
     if not username or not password:
-        raise HTTPException(400, "请输入用户名与口令")
+        raise HTTPException(400, "请输入用户名与密码")
 
     wait = _throttled(username)
     if wait:
@@ -78,8 +78,8 @@ async def login(req: Request, payload: dict) -> dict:
     user = users.get_user_store().authenticate(username, password)
     if user is None:
         _note_failure(username)
-        _audit(username, 401, "用户名或口令错误")
-        raise HTTPException(401, "用户名或口令错误")
+        _audit(username, 401, "用户名或密码错误")
+        raise HTTPException(401, "用户名或密码错误")
 
     _clear_failures(username)
     store = users.get_user_store()
@@ -185,7 +185,7 @@ async def reset_password(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     users.get_user_store().save()
-    # 改口令后旧会话立即失效，避免口令泄露后仍未下线
+    # 改密码后旧会话立即失效，避免密码泄露后仍未下线
     sessions.get_session_store().revoke_user(target.id)
     sessions.get_session_store().save()
     return {"ok": True}

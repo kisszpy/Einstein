@@ -1,10 +1,10 @@
-"""控制台账号：用户、口令摘要、角色与工作区归属。
+"""控制台账号：用户、密码摘要、角色与工作区归属。
 
-口令用 PBKDF2-HMAC-SHA256（12 万轮 + 每用户随机盐）存摘要，不落明文；
+密码用 PBKDF2-HMAC-SHA256（12 万轮 + 每用户随机盐）存摘要，不落明文；
 比对走 `hmac.compare_digest`，避免时序侧信道。首次启动若库为空，种一个
-`admin / admin123` 的所有者账号，登录后应立刻改口令。
+`admin / admin123` 的所有者账号，登录后应立刻改密码。
 
-生产替换点：PostgreSQL `users` 表，口令迁移到 Argon2id，角色接入 RBAC 策略。
+生产替换点：PostgreSQL `users` 表，密码迁移到 Argon2id，角色接入 RBAC 策略。
 """
 
 import hashlib
@@ -66,7 +66,7 @@ class User:
     disabled: bool = False
 
     def to_public(self) -> dict:
-        """对外视图：绝不带口令摘要与盐。"""
+        """对外视图：绝不带密码摘要与盐。"""
         return {
             "id": self.id,
             "username": self.username,
@@ -130,7 +130,7 @@ class UserStore:
         if self.by_username(username) is not None:
             raise ValueError("用户名已存在")
         if len(password) < 6:
-            raise ValueError("口令至少 6 位")
+            raise ValueError("密码至少 6 位")
         if role not in ROLES:
             raise ValueError(f"角色只能是 {ROLES}")
         pw_hash, salt = hash_password(password)
@@ -149,7 +149,7 @@ class UserStore:
 
     def set_password(self, user: User, password: str) -> None:
         if len(password) < 6:
-            raise ValueError("口令至少 6 位")
+            raise ValueError("密码至少 6 位")
         user.password_hash, user.salt = hash_password(password)
 
     def update(self, user: User, **fields) -> User:

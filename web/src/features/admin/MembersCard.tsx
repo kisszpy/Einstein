@@ -88,7 +88,7 @@ export function MembersCard() {
   };
 
   const resetPassword = async (m: Member) => {
-    const pw = window.prompt(`为 ${m.username} 设置新口令（至少 6 位）`);
+    const pw = window.prompt(`为 ${m.username} 设置新密码（至少 6 位）`);
     if (!pw) return;
     const res = await fetch(`/api/users/${m.id}/password`, {
       method: "POST",
@@ -96,7 +96,7 @@ export function MembersCard() {
       body: JSON.stringify({ password: pw }),
     });
     const data = await res.json().catch(() => ({}));
-    window.alert(res.ok ? "口令已重置，该账号现有会话已失效" : data.detail ?? "重置失败");
+    window.alert(res.ok ? "密码已重置，该账号现有会话已失效" : data.detail ?? "重置失败");
   };
 
   const remove = async (m: Member) => {
@@ -141,7 +141,7 @@ export function MembersCard() {
             />
             <input
               className={inputCls}
-              placeholder="初始口令（至少 6 位）"
+              placeholder="初始密码（至少 6 位）"
               value={draft.password}
               onChange={(e) => setDraft({ ...draft, password: e.target.value })}
             />
@@ -227,7 +227,7 @@ export function MembersCard() {
                       onClick={() => void resetPassword(m)}
                       className="text-tertiary transition-colors duration-150 hover:text-primary"
                     >
-                      改口令
+                      改密码
                     </button>
                     <button
                       onClick={() => void toggleDisabled(m)}
