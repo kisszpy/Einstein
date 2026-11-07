@@ -4,3 +4,5 @@ Thumbs.db
 # 工作区
 .workbuddy/
 web/tsconfig.tsbuildinfo
+web/ui-sweep-results.json
+server/data/sweep_results.json

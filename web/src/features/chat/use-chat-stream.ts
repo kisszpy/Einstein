@@ -15,7 +15,15 @@ export function useChatStream() {
   const loadConversation = useCallback(async (id: string) => {
     if (isStreaming) return;
     const res = await fetch(`/api/conversations/${id}`);
-    if (!res.ok) return;
+    if (!res.ok) {
+      // 以前这里静默 return，用户点了历史会话毫无反应，误以为页面卡死
+      window.alert(
+        res.status === 404
+          ? "该会话不存在或已被删除。"
+          : `打开会话失败（HTTP ${res.status}），请稍后重试。`,
+      );
+      return;
+    }
     const data = (await res.json()) as {
       id: string;
       messages: Array<{ role: string; content: string }>;

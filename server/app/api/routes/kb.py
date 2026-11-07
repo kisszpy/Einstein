@@ -102,7 +102,10 @@ async def search_kb(req: SearchRequest, ws: str = Depends(current_workspace)) ->
     kb_ids = store.owned_kb_ids(ws, req.kb_ids)
     if not kb_ids:
         return []
-    hits = await search(store, kb_ids, req.query, req.top_k, mode=req.mode)  # type: ignore[arg-type]
+    try:
+        hits = await search(store, kb_ids, req.query, req.top_k, mode=req.mode)  # type: ignore[arg-type]
+    except RuntimeError as exc:  # 嵌入端点不可用：与入库一致，回 503 而不是 500
+        raise HTTPException(503, str(exc)) from exc
     return [
         {
             "chunk_id": h.chunk_id,

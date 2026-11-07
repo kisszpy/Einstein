@@ -12,7 +12,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
@@ -195,7 +195,10 @@ async def openapi_search(req: SearchRequest, key: ApiKey = Depends(require_api_k
     kb_ids = store.owned_kb_ids(key.workspace_id, list(req.kb_ids))
     if not kb_ids:
         return {"hits": [], "note": "没有可检索的知识库（或均不属于该密钥的工作区）"}
-    hits = await search(store, kb_ids, req.query, req.top_k, mode=req.mode)  # type: ignore[arg-type]
+    try:
+        hits = await search(store, kb_ids, req.query, req.top_k, mode=req.mode)  # type: ignore[arg-type]
+    except RuntimeError as exc:  # 嵌入端点不可用：回 503，避免 500 泄漏堆栈
+        raise HTTPException(503, str(exc)) from exc
     return {
         "hits": [
             {

@@ -160,8 +160,19 @@ class HistoryStore:
         try:
             payload = json.loads(STORE_PATH.read_text(encoding="utf-8"))
             store = cls()
+            # 消息在 JSON 里是 dict，必须反序列化成 StoredMessage，
+            # 否则读取会话详情时 m.role 会抛 AttributeError（500）。
             store.conversations = {
-                k: Conversation(**v) for k, v in payload.get("conversations", {}).items()
+                k: Conversation(
+                    **{
+                        **v,
+                        "messages": [
+                            m if isinstance(m, StoredMessage) else StoredMessage(**m)
+                            for m in (v.get("messages") or [])
+                        ],
+                    }
+                )
+                for k, v in payload.get("conversations", {}).items()
             }
             store.agent_runs = {
                 k: AgentRun(**v) for k, v in payload.get("agent_runs", {}).items()

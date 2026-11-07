@@ -32,6 +32,17 @@ const MODE_LABEL: Record<SearchMode, string> = {
   lexical: "词法",
 };
 
+/** 从失败响应里取出可读原因；后端详情是纯文本时给出兜底文案。 */
+async function readError(res: Response): Promise<string> {
+  try {
+    const data = (await res.json()) as { detail?: unknown };
+    if (typeof data?.detail === "string") return data.detail;
+  } catch {
+    /* 非 JSON 响应 */
+  }
+  return `请求失败（HTTP ${res.status}）`;
+}
+
 export function KbPage() {
   const [kbs, setKbs] = useState<KBItem[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -43,6 +54,7 @@ export function KbPage() {
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [mode, setMode] = useState<SearchMode>("hybrid");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const loadKbs = useCallback(async () => {
     const res = await fetch("/api/kb");
@@ -59,6 +71,7 @@ export function KbPage() {
   useEffect(() => {
     if (!selected) return;
     setHits(null);
+    setError(null);
     void fetch(`/api/kb/${selected}/documents`)
       .then((r) => r.json())
       .then(setDocs);
@@ -67,57 +80,87 @@ export function KbPage() {
   const createKb = async () => {
     if (!newKbName.trim()) return;
     setBusy(true);
-    await fetch("/api/kb", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newKbName.trim() }),
-    });
-    setNewKbName("");
-    await loadKbs();
-    setBusy(false);
+    setError(null);
+    try {
+      const res = await fetch("/api/kb", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newKbName.trim() }),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      setNewKbName("");
+      await loadKbs();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const addDoc = async () => {
     if (!selected || !docName.trim() || !docContent.trim()) return;
     setBusy(true);
-    await fetch(`/api/kb/${selected}/documents`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: docName.trim(), content: docContent }),
-    });
-    setDocName("");
-    setDocContent("");
-    setDocs(
-      await (await fetch(`/api/kb/${selected}/documents`)).json(),
-    );
-    await loadKbs();
-    setBusy(false);
+    setError(null);
+    try {
+      const res = await fetch(`/api/kb/${selected}/documents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: docName.trim(), content: docContent }),
+      });
+      // 嵌入服务不可用时后端回 503，必须把原因显示出来，不能静默清空输入
+      if (!res.ok) throw new Error(await readError(res));
+      setDocName("");
+      setDocContent("");
+      setDocs(await (await fetch(`/api/kb/${selected}/documents`)).json());
+      await loadKbs();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const uploadFile = async (file: File) => {
     if (!selected) return;
     setBusy(true);
-    const form = new FormData();
-    form.append("file", file);
-    await fetch(`/api/kb/${selected}/documents/upload`, {
-      method: "POST",
-      body: form,
-    });
-    setDocs(await (await fetch(`/api/kb/${selected}/documents`)).json());
-    await loadKbs();
-    setBusy(false);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`/api/kb/${selected}/documents/upload`, {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      setDocs(await (await fetch(`/api/kb/${selected}/documents`)).json());
+      await loadKbs();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const runSearch = async () => {
     if (!selected || !query.trim()) return;
     setBusy(true);
-    const res = await fetch("/api/kb/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kb_ids: [selected], query: query.trim(), top_k: 4, mode }),
-    });
-    setHits(await res.json());
-    setBusy(false);
+    setError(null);
+    try {
+      const res = await fetch("/api/kb/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kb_ids: [selected], query: query.trim(), top_k: 4, mode }),
+      });
+      if (!res.ok) {
+        setHits(null);
+        throw new Error(await readError(res));
+      }
+      setHits((await res.json()) as SearchHit[]);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false); // 无论成功失败都要复位，否则按钮永久 disabled
+    }
   };
 
   const removeKb = async (kb: KBItem) => {
@@ -193,6 +236,17 @@ export function KbPage() {
           </div>
         ) : (
           <div className="mx-auto max-w-[860px] space-y-6 px-8 py-8">
+            {error && (
+              <div className="flex items-start justify-between gap-3 rounded-lg border border-danger/40 bg-danger/10 px-3.5 py-2.5 text-[12.5px] text-danger">
+                <span className="min-w-0 break-words">{error}</span>
+                <button
+                  onClick={() => setError(null)}
+                  className="shrink-0 text-[11px] opacity-70 transition-opacity hover:opacity-100"
+                >
+                  关闭
+                </button>
+              </div>
+            )}
             {/* 添加文档 */}
             <Card className="p-5">
               <h3 className="text-[13px] font-medium">添加文档</h3>

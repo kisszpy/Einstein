@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 
@@ -22,7 +23,19 @@ PUBLIC_API_PATHS = {"/api/auth/login", "/api/health"}
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title=settings.app_name, debug=settings.debug)
+    # debug 固定为 False：Starlette 在 debug=True 时会把完整堆栈直接写进响应体，
+    # 泄漏绝对路径与依赖版本。服务端仍会由 uvicorn 打印完整 traceback。
+    app = FastAPI(title=settings.app_name, debug=False)
+
+    @app.exception_handler(Exception)
+    async def _unhandled_error(request: Request, exc: Exception) -> JSONResponse:
+        logging.getLogger("app.errors").exception(
+            "unhandled error on %s %s", request.method, request.url.path
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "服务器内部错误，请稍后重试或联系管理员"},
+        )
 
     @app.middleware("http")
     async def _auth_middleware(request: Request, call_next):
