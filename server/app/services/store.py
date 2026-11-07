@@ -70,6 +70,10 @@ class KBStore:
         removed = len(self.repo.list_documents(kb_id)) if hasattr(self.repo, "list_documents") else 0
         self.repo.delete_kb(kb_id)
         self.repo.save()
+        # 持久化向量索引必须跟着删，否则删库后仍能检索到已删内容
+        from app.services.vector import safe_delete_kb
+
+        safe_delete_kb(kb_id)
         return removed
 
     # ---------- 文档 ----------
@@ -96,6 +100,9 @@ class KBStore:
         """删除单篇文档并级联清理切片，返回被删切片数。"""
         removed = self.repo.delete_document(doc_id)
         self.repo.save()
+        from app.services.vector import safe_delete_document
+
+        safe_delete_document(doc_id)
         return removed
 
     def doc_names(self) -> dict[str, str]:
@@ -111,10 +118,18 @@ class KBStore:
     def add_chunks(self, chunks: list[Chunk]) -> None:
         self.repo.add_chunks(chunks)
         self.repo.save()
+        # 持久化向量索引双写：写库成功后同步索引，检索才能立刻命中
+        from app.services.vector import safe_upsert
+
+        safe_upsert(chunks)
 
     def list_chunks(self, kb_ids: list[str] | None = None, document_id: str | None = None) -> list[Chunk]:
         """按知识库直接取切片：检索热路径用它，避免把全库向量读进内存。"""
         return self.repo.list_chunks(kb_ids, document_id)
+
+    def get_chunks(self, chunk_ids: list[str]) -> list[Chunk]:
+        """按 id 回表：向量索引命中后只取这几条（纯向量检索路径）。"""
+        return self.repo.get_chunks(chunk_ids)
 
     def chunks_of_kb(self, kb_id: str) -> list[Chunk]:
         return self.repo.list_chunks([kb_id])

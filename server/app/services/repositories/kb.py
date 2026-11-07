@@ -59,6 +59,7 @@ class KbRepository(Protocol):
     def find_document_by_hash(self, kb_id: str, content_hash: str) -> Document | None: ...
     def delete_document(self, doc_id: str) -> int: ...
     def add_chunks(self, chunks: list[Chunk]) -> None: ...
+    def get_chunks(self, chunk_ids: list[str]) -> list[Chunk]: ...
     def list_chunks(self, kb_ids: list[str] | None = None, document_id: str | None = None) -> list[Chunk]: ...
     def delete_chunks_by_document(self, doc_id: str) -> int: ...
     def count_chunks(self, kb_id: str) -> int: ...
@@ -219,6 +220,12 @@ class JsonKbRepository:
         if document_id:
             rows = [c for c in rows if c.document_id == document_id]
         return list(rows)
+
+    def get_chunks(self, chunk_ids: list[str]) -> list[Chunk]:
+        if not chunk_ids:
+            return []
+        wanted = set(chunk_ids)
+        return [c for c in self.chunks if c.id in wanted]
 
     def delete_chunks_by_document(self, doc_id: str) -> int:
         with self._lock:
@@ -415,6 +422,18 @@ class SqlKbRepository:
             "SELECT id, kb_id, document_id, seq, text, char_start, char_end, vector,"
             f" vector_kind, created_at FROM chunks{clause} ORDER BY kb_id, document_id, seq",
             params,
+        )
+        return [self._chunk(r) for r in rows]
+
+    def get_chunks(self, chunk_ids: list[str]) -> list[Chunk]:
+        """按 id 回表：向量索引命中后只取这几条，避免把整库向量读进内存。"""
+        if not chunk_ids:
+            return []
+        marks = ", ".join("?" for _ in chunk_ids)
+        rows = self.db.query(
+            "SELECT id, kb_id, document_id, seq, text, char_start, char_end, vector,"
+            f" vector_kind, created_at FROM chunks WHERE id IN ({marks})",
+            list(chunk_ids),
         )
         return [self._chunk(r) for r in rows]
 
