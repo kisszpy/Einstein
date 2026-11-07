@@ -30,7 +30,10 @@ interface Props {
   onNewTask: () => void;
   query: string;
   onQuery: (value: string) => void;
+  /** 运行绑定的项目（下拉的值） */
   project: string;
+  /** 文件树/预览按钮指向的项目（浏览用，可与绑定不同） */
+  browseProject: string;
   projects: ProjectInfo[];
   onSelectProject: (id: string) => void;
   onCreateProject: () => void;
@@ -51,6 +54,7 @@ export function TaskSidebar({
   query,
   onQuery,
   project,
+  browseProject,
   projects,
   onSelectProject,
   onCreateProject,
@@ -153,7 +157,7 @@ export function TaskSidebar({
           <div className="flex items-center gap-0.5">
             <button
               onClick={onPreviewProject}
-              disabled={!project}
+              disabled={!browseProject}
               title="在右侧内置浏览器里打开项目"
               className="rounded p-1 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:opacity-40"
             >
@@ -161,7 +165,7 @@ export function TaskSidebar({
             </button>
             <button
               onClick={onRefreshTree}
-              disabled={!project}
+              disabled={!browseProject}
               title="刷新文件"
               className="rounded p-1 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:opacity-40"
             >
@@ -174,10 +178,10 @@ export function TaskSidebar({
             >
               <FolderPlus size={12.5} strokeWidth={1.9} />
             </button>
-            {project && (
+            {browseProject && (
               <>
                 <a
-                  href={`/api/projects/${encodeURIComponent(project)}/archive`}
+                  href={`/api/projects/${encodeURIComponent(browseProject)}/archive`}
                   title="下载整个项目（zip）"
                   className="rounded p-1 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary"
                 >
@@ -209,7 +213,7 @@ export function TaskSidebar({
           ))}
         </select>
 
-        {project && (
+        {browseProject && (
           <div className="mt-1">
             <button
               onClick={() => setTreeOpen((v) => !v)}
@@ -251,7 +255,7 @@ export function TaskSidebar({
                         <span className="truncate">{fileName(node.path)}</span>
                       </button>
                       <a
-                        href={`/api/projects/${encodeURIComponent(project)}/download?path=${encodeURIComponent(node.path)}`}
+                        href={`/api/projects/${encodeURIComponent(browseProject)}/download?path=${encodeURIComponent(node.path)}`}
                         title="下载"
                         className="shrink-0 rounded p-0.5 text-tertiary opacity-0 transition-opacity hover:text-brand group-hover:opacity-100"
                       >

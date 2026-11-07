@@ -72,7 +72,10 @@ export function AgentsPage() {
   const [kbs, setKbs] = useState<KbInfo[]>([]);
   const [selectedKbs, setSelectedKbs] = useState<string[]>([]);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
-  const [project, setProject] = useState("");
+  // 运行绑定项目：只有用户明确选择或任务产出时才设置；空 = 运行请求不带 project
+  const [boundProject, setBoundProject] = useState("");
+  // 文件树/预览指针：自动指向最近项目，纯浏览用，不影响运行
+  const [browseProject, setBrowseProject] = useState("");
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [runs, setRuns] = useState<AgentRunItem[]>([]);
   const [query, setQuery] = useState("");
@@ -143,23 +146,21 @@ export function AgentsPage() {
     }
   }, []);
 
-  const selectProject = useCallback(
+  const selectBrowse = useCallback(
     (pid: string) => {
-      setProject(pid);
+      setBrowseProject(pid);
       void loadTree(pid);
     },
     [loadTree],
   );
 
-  // 区分「自动选中」与「手动绑定」：自动选中只服务预览入口，
-  // 运行请求不带 project——文件落在哪由智能体按任务自己决定。
-  const projectAutoRef = useRef(false);
-  const pickProject = useCallback(
+  // 绑定 = 用户明确指定项目随运行发送；同时文件树跟过去
+  const bindProject = useCallback(
     (pid: string) => {
-      projectAutoRef.current = false;
-      selectProject(pid);
+      setBoundProject(pid);
+      if (pid) selectBrowse(pid);
     },
-    [selectProject],
+    [selectBrowse],
   );
 
   useEffect(() => {
@@ -174,24 +175,21 @@ export function AgentsPage() {
     void loadRuns();
   }, [loadProjects, loadRuns]);
 
-  // 还没选过项目就自动选最近更新的一个，预览入口不用干等用户手动选
+  // 文件树/预览自动指向最近更新的项目（纯浏览，不影响运行绑定）
   useEffect(() => {
-    if (project || projects.length === 0) return;
+    if (browseProject || projects.length === 0) return;
     const latest = [...projects].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
-    if (latest[0]?.id) {
-      projectAutoRef.current = true;
-      selectProject(latest[0].id);
-    }
-  }, [projects, project, selectProject]);
+    if (latest[0]?.id) selectBrowse(latest[0].id);
+  }, [projects, browseProject, selectBrowse]);
 
   const openFile = useCallback(
     (filePath: string, projectId?: string) => {
-      const pid = projectId || project;
+      const pid = projectId || browseProject;
       if (!pid) return;
       setPreview({ tab: tabForPath(filePath), project: pid, path: filePath, url: "" });
       if (window.innerWidth < 1500) setSidebarOpen(false);
     },
-    [project],
+    [browseProject],
   );
 
   const openProject = useCallback(
@@ -260,7 +258,7 @@ export function AgentsPage() {
             task: text,
             tool_ids: capabilityTools,
             kb_ids: selectedKbs,
-            project: projectAutoRef.current ? "" : project,
+            project: boundProject,
           }),
         });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
@@ -285,8 +283,8 @@ export function AgentsPage() {
             }
             case "done": {
               const d = raw as { project?: string; artifacts?: Artifact[] };
-              const pid = d.project || project;
-              if (d.project && d.project !== project) pickProject(d.project);
+              const pid = d.project || boundProject;
+              if (d.project && d.project !== boundProject) bindProject(d.project);
               else if (d.project) void loadTree(d.project);
               setPreviewToken((n) => n + 1);
               void loadProjects();
@@ -320,11 +318,11 @@ export function AgentsPage() {
       running,
       capabilityTools,
       selectedKbs,
-      project,
+      boundProject,
       loadProjects,
       loadRuns,
       loadTree,
-      selectProject,
+      bindProject,
       openFile,
     ],
   );
@@ -345,6 +343,7 @@ export function AgentsPage() {
 
   const newTask = () => {
     if (running) return;
+    setBoundProject(""); // 新任务不继承上一个任务的绑定
     setSubmitted("");
     setSteps([]);
     setArtifacts([]);
@@ -364,7 +363,7 @@ export function AgentsPage() {
     setError(null);
     setElapsed(null);
     setActiveRunId(item.id);
-    if (item.project && item.project !== project) pickProject(item.project);
+    if (item.project && item.project !== boundProject) bindProject(item.project);
   };
 
   const createProject = async () => {
@@ -378,16 +377,17 @@ export function AgentsPage() {
     if (res.ok) {
       const info = await res.json();
       await loadProjects();
-      pickProject(info.project);
+      bindProject(info.project);
     }
   };
 
   const deleteProject = async () => {
-    if (!project) return;
-    if (!window.confirm(`删除项目「${project}」及其全部文件？此操作不可恢复。`)) return;
-    await fetch(`/api/projects/${encodeURIComponent(project)}`, { method: "DELETE" });
-    projectAutoRef.current = false;
-    selectProject("");
+    const pid = browseProject;
+    if (!pid) return;
+    if (!window.confirm(`删除项目「${pid}」及其全部文件？此操作不可恢复。`)) return;
+    await fetch(`/api/projects/${encodeURIComponent(pid)}`, { method: "DELETE" });
+    if (boundProject === pid) setBoundProject("");
+    selectBrowse("");
     void loadProjects();
   };
 
@@ -432,8 +432,8 @@ export function AgentsPage() {
         setSelectedKbs((prev) => (prev.includes(id) ? prev.filter((k) => k !== id) : [...prev, id]))
       }
       projects={projects}
-      project={project}
-      onSelectProject={pickProject}
+      project={boundProject}
+      onSelectProject={bindProject}
       onCreateProject={() => void createProject()}
       autoFocus={empty}
     />
@@ -454,13 +454,14 @@ export function AgentsPage() {
           onNewTask={newTask}
           query={query}
           onQuery={setQuery}
-          project={project}
+          project={boundProject}
+          browseProject={browseProject}
           projects={projects}
-          onSelectProject={pickProject}
+          onSelectProject={bindProject}
           onCreateProject={() => void createProject()}
           onDeleteProject={() => void deleteProject()}
-          onRefreshTree={() => void loadTree(project)}
-          onPreviewProject={() => project && openProject(project)}
+          onRefreshTree={() => void loadTree(browseProject)}
+          onPreviewProject={() => browseProject && openProject(browseProject)}
           tree={tree}
           onOpenFile={(path) => openFile(path)}
         />
@@ -480,22 +481,22 @@ export function AgentsPage() {
           <div className="min-w-0 flex-1">
             <div className="truncate text-[13px] font-medium text-primary">{title}</div>
             <div className="truncate text-[11px] text-tertiary">
-              {project ? `项目 · ${project}` : "未绑定项目"} · {caps.length} 项能力
+              {boundProject ? `项目 · ${boundProject}` : "未绑定项目（由智能体按任务决定）"} · {caps.length} 项能力
               {selectedKbs.length > 0 && ` · ${selectedKbs.length} 个知识库`}
             </div>
           </div>
 
           <div className="flex shrink-0 items-center gap-1">
             <button
-              onClick={() => project && openProject(project)}
-              disabled={!project}
+              onClick={() => browseProject && openProject(browseProject)}
+              disabled={!browseProject}
               className="rounded-md px-2 py-1 text-[12px] text-secondary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:opacity-40"
             >
               预览
             </button>
             <button
-              onClick={() => (preview ? setPreview(null) : project && openProject(project))}
-              disabled={!project}
+              onClick={() => (preview ? setPreview(null) : browseProject && openProject(browseProject))}
+              disabled={!browseProject}
               title={preview ? "收起预览面板" : "打开预览面板"}
               className="rounded-md p-1.5 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:opacity-40"
             >
@@ -552,7 +553,7 @@ export function AgentsPage() {
                   artifacts={artifacts}
                   running={running}
                   error={error}
-                  project={project}
+                  project={browseProject}
                   elapsedMs={elapsed}
                   onOpenFile={(path) => openFile(path)}
                   onRerun={() => void run(submitted)}
