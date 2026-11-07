@@ -129,9 +129,20 @@ _MIGRATION_002 = [
     "CREATE INDEX IF NOT EXISTS idx_run_session ON agent_runs(session_id, turn)",
 ]
 
+# 003：任务队列的租约与执行者
+#
+# 为什么要租约：worker 进程被 kill / 机器重启时，任务会永远卡在 running。
+# 租约到期后由任意 worker 回收成 pending，最多重试 max_attempts 次。
+_MIGRATION_003 = [
+    "ALTER TABLE jobs ADD COLUMN lease_until TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE jobs ADD COLUMN worker_id TEXT NOT NULL DEFAULT ''",
+    "CREATE INDEX IF NOT EXISTS idx_job_lease ON jobs(status, lease_until)",
+]
+
 MIGRATIONS: list[tuple[int, list[str]]] = [
     (1, _MIGRATION_001),
     (2, _MIGRATION_002),
+    (3, _MIGRATION_003),
 ]
 
 _TYPE_TOKENS = {

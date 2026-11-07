@@ -14,6 +14,7 @@ from app.api import deps
 from app.api.routes import agent, auth, browse, chat, conversations, experts, health, kb, mcp, skills
 from app.api.routes import eval as eval_routes
 from app.api.routes import observability, openapi, platform, projects
+from app.api.routes import jobs
 from app.core.config import get_settings
 from app.services import audit, metrics, tickets
 
@@ -112,6 +113,7 @@ def create_app() -> FastAPI:
     app.include_router(kb.router, prefix="/api")
     app.include_router(agent.router, prefix="/api")
     app.include_router(conversations.router, prefix="/api")
+    app.include_router(jobs.router, prefix="/api")
     app.include_router(skills.router, prefix="/api")
     app.include_router(experts.router, prefix="/api")
     app.include_router(mcp.router, prefix="/api")
