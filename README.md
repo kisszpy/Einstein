@@ -1,0 +1,173 @@
+# Einstein
+
+自托管的知识库 + 智能体平台：把散落的文档变成可检索、可调用、可计量的能力，同时提供
+控制台与 OpenAI 兼容的开放接口。
+
+- **知识库**：多格式摄取（PDF / Word / Excel / PPT / CSV / HTML / Markdown / 网页），
+  sha256 去重、文档版本与回滚、切片预览与编辑、异步摄取队列
+- **检索**：向量 + BM25 混合召回（RRF 融合），向量层可切 numpy 暴力检索或 Milvus HNSW
+- **智能体**：LangGraph 驱动的多步工具调用，多轮会话、过程与产物可见
+- **开放平台**：`/v1` 兼容 OpenAI 协议，按工作区隔离、API Key 与审计
+- **数据层**：JSON 文件 / SQLite / PostgreSQL 三后端同一套代码，向量层 memory / Milvus，
+  队列 local / Redis，全部由环境变量切换
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| `README.md` | 起步、配置、验收、排障（本文） |
+| [docs/API参考.md](docs/API参考.md) | 93 个接口的路径、参数、请求体字段、鉴权与 SSE 协议（由代码生成） |
+| [docs/运维手册.md](docs/运维手册.md) | 部署拓扑、巡检、备份恢复、升级、性能基线、故障手册 |
+
+## 架构
+
+```
+                    ┌────────────────────────────┐
+  浏览器 ──── 80 ──▶ │ web (nginx)                │
+                    │  · 静态资源 + SPA 回落      │
+                    │  · /api 反代（SSE 不缓冲）  │
+                    └───────────┬────────────────┘
+                                │
+                    ┌───────────▼────────────────┐
+                    │ backend (FastAPI)          │
+                    │  控制台 API /api · 开放 /v1 │
+                    └──┬──────────┬──────────┬───┘
+                       │          │          │
+              ┌────────▼──┐  ┌────▼─────┐  ┌─▼──────────┐
+              │ PostgreSQL│  │  Redis   │  │  Milvus    │
+              │ 业务数据   │  │  任务队列 │  │  向量索引   │
+              └───────────┘  └────┬─────┘  └────────────┘
+                                  │
+                          ┌───────▼────────┐
+                          │ worker (独立)  │  摄取 / 重嵌入 / 重建索引
+                          └────────────────┘
+```
+
+## 快速开始
+
+### 一条命令（生产组合）
+
+```bash
+cp deploy/.env.example deploy/.env     # 填 LLM 与嵌入端点
+docker compose -f deploy/docker-compose.prod.yml up -d --build
+# 打开 http://localhost ，默认账号 admin / admin123（登录后立刻改密码）
+```
+
+起完想确认整条链路真的通，跑编排冒烟（建库 → 摄入 → 检索 → 流式对话）：
+
+```bash
+bash deploy/smoke_compose.sh --no-build      # 加 --down 跑完停栈，--infra-only 只验基础设施
+```
+
+### 本地开发（不需要容器也能跑）
+
+```bash
+# 后端
+cd server
+python -m venv .venv && .venv/Scripts/activate      # Windows
+pip install -r requirements.txt
+cp .env.example .env                                 # 指向本地模型端点
+uvicorn app.main:app --reload --port 8000
+
+# 前端（另一个终端）
+cd web
+npm install
+npm run dev                                          # http://localhost:5173，/api 反代到 8000
+```
+
+只跑 JSON 文件后端时不需要数据库：默认 `APP_STORE_BACKEND=json`，所有数据落在 `server/data/`。
+
+### 从开发后端切到生产组合
+
+```bash
+cd deploy && docker compose up -d                    # pg 5433 / redis 6380 / milvus 19530
+cd ../server
+python tools/check_infra.py --deep                   # 三件套连通性 + 真实读写
+python tools/migrate_json_to_db.py --backend postgres # 迁移知识库/会话/配置域（幂等）
+```
+
+然后在 `server/.env` 打开：
+
+```
+APP_STORE_BACKEND=postgres
+APP_VECTOR_BACKEND=milvus
+APP_QUEUE_BACKEND=redis
+```
+
+队列需要独立进程消费：`python -m app.workers.worker --concurrency 2`。
+
+## 配置
+
+所有配置走环境变量（前缀 `APP_`），也可写在 `server/.env`。
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `APP_STORE_BACKEND` | `json` | `json` / `sqlite` / `postgres` |
+| `APP_SQLITE_PATH` | `data/einstein.db` | sqlite 文件位置 |
+| `APP_POSTGRES_DSN` | `postgresql://einstein:einstein@127.0.0.1:5433/einstein` | PG 连接串 |
+| `APP_VECTOR_BACKEND` | `memory` | `memory`（numpy）/ `milvus` |
+| `APP_MILVUS_URI` | `http://127.0.0.1:19530` | Milvus 地址 |
+| `APP_MILVUS_COLLECTION` | `einstein_chunks` | 集合名，换嵌入模型时换名或 `--drop` |
+| `APP_QUEUE_BACKEND` | `local` | `local`（DB 表）/ `redis` |
+| `APP_REDIS_URL` | `redis://127.0.0.1:6380/0` | Redis 连接串 |
+| `APP_LLM_BASE_URL` | `http://localhost:8080/v1` | OpenAI 兼容端点 |
+| `APP_LLM_MODEL` | `qwen3.6-27b` | 对话模型 |
+| `APP_EMBEDDING_BASE_URL` | `http://localhost:8081/v1` | 嵌入端点 |
+| `APP_EMBEDDING_MODEL` | `qwen3-embedding-8b` | 嵌入模型 |
+| `APP_RETRIEVAL_MODE` | `hybrid` | `vector` / `lexical` / `hybrid` |
+| `APP_RRF_K` | `60` | RRF 融合平滑常数 |
+| `APP_AGENT_CODE_EXEC` | `true` | 关掉后智能体不注册代码执行工具 |
+| `APP_DEBUG` | `false` | 生产务必保持 false（否则异常会吐堆栈） |
+| `APP_GITHUB_TOKEN` | 空 | 技能市场浏览，提额度用 |
+
+## 验收脚本
+
+都在 `server/tools/`，可单独跑，也被 CI 引用：
+
+| 脚本 | 覆盖 |
+|---|---|
+| `check_infra.py --deep` | PG / Redis / Milvus / LLM / 嵌入的真实读写 |
+| `verify_store_backends.py` | 知识库域 JSON / SQLite / PG 三后端 36 条 |
+| `verify_history_backends.py` | 会话域三后端 69 条 |
+| `verify_state_backends.py` | 8 个配置域三后端 + 并发写 |
+| `verify_vector_index.py` | memory / Milvus 检索一致性 |
+| `verify_queue.py` | local / Redis 队列（含并发抢单、租约回收） |
+| `verify_ingest.py` | 摄取全链路：格式 / 去重 / 版本 / 回滚 / 切片编辑 / 异步任务 |
+| `verify_contracts.py` | 每个协议的所有后端实现是否齐全（防「只在某个后端漏方法」） |
+| `gen_api_doc.py --check` | `docs/API参考.md` 与路由是否同步 |
+| `full_sweep.py --skip-live` | 91 条接口巡检（契约 + 安全边界） |
+| `web/ui-sweep.cjs` | 10 个前端路由 58 条页面断言 |
+
+编排层另有两个入口：
+
+| 脚本 | 用途 |
+|---|---|
+| `deploy/smoke_compose.sh` | 起容器 → 健康检查 → 建库/摄入/检索/对话全链路冒烟 |
+| `sdk/smoke_client.py` | 用 SDK 跑同样的业务路径，验证对外接口对第三方可用 |
+
+## 目录
+
+```
+server/
+  app/api/routes/   控制台与开放 API
+  app/services/     领域服务（rag / agent / store / queue / vector / state ...）
+  app/db/           Database 抽象、迁移、域模型
+  app/workers/      队列 worker 进程
+  tools/            验收、迁移、重建、备份脚本
+web/                React 18 + TS + Vite + Tailwind v4
+deploy/             docker-compose（开发 / 生产）、.env 模板、编排冒烟
+docs/               设计、进度、测试报告、运维手册、API 参考
+sdk/                Python 客户端（无第三方依赖）
+```
+
+## 排障
+
+- **登录后所有接口 401**：前端代理没生效。开发下确认 `web/vite.config.ts` 的 `/api` 指向 8000；
+  容器下确认 nginx 的 `proxy_pass http://backend:8000`。
+- **回答不流式、一次性全出来**：nginx 少了 `proxy_buffering off`（`web/nginx.conf` 已配）。
+- **入库报 503**：嵌入端点不可用。`python tools/check_infra.py --skip-llm` 单独验嵌入。
+- **Milvus 检索为空**：集合可能是空建的。`python tools/rebuild_vector_index.py --drop` 回灌。
+- **Windows 上 uvicorn 退出码 127**：端口被占用，先 `netstat -ano | findstr :8000` 杀掉旧进程。
+- **`create_admin` 不存在**：管理员在首次启动时自动创建（admin / admin123），无需手动建。
+
+更多运维细节见 [docs/运维手册.md](docs/运维手册.md)。

@@ -1,0 +1,172 @@
+# 生产编排：一条命令起完整栈（web + backend + worker + pg + redis + milvus）。
+#
+#   cp deploy/.env.example deploy/.env   # 填 LLM / 嵌入端点
+#   docker compose -f deploy/docker-compose.prod.yml up -d --build
+#   首次启动自动创建管理员 admin / admin123（登录后请立刻改密码）
+#
+# 与开发用的 docker-compose.yml 的区别：这里数据库不映射到宿主机、后端跑生产存储组合、
+# worker 独立进程、前端由 nginx 托管并反代 /api。
+
+name: einstein
+
+x-backend-env: &backend-env
+  APP_STORE_BACKEND: postgres
+  APP_VECTOR_BACKEND: milvus
+  APP_QUEUE_BACKEND: redis
+  APP_POSTGRES_DSN: postgresql://einstein:${POSTGRES_PASSWORD:-einstein}@postgres:5432/einstein
+  APP_REDIS_URL: redis://redis:6379/0
+  APP_MILVUS_URI: http://milvus:19530
+  APP_MILVUS_COLLECTION: einstein_chunks
+  APP_LLM_BASE_URL: ${APP_LLM_BASE_URL:-http://host.docker.internal:8080/v1}
+  APP_LLM_API_KEY: ${APP_LLM_API_KEY:-not-needed}
+  APP_LLM_MODEL: ${APP_LLM_MODEL:-qwen3.6-27b}
+  APP_EMBEDDING_BASE_URL: ${APP_EMBEDDING_BASE_URL:-http://host.docker.internal:8081/v1}
+  APP_EMBEDDING_MODEL: ${APP_EMBEDDING_MODEL:-qwen3-embedding-8b}
+  APP_DEBUG: "false"
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: einstein
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-einstein}
+      POSTGRES_DB: einstein
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U einstein -d einstein"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: *logging
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.18
+    restart: unless-stopped
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls=http://0.0.0.0:2379 --data-dir=/etcd
+    volumes:
+      - etcddata:/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    logging: *logging
+
+  minio:
+    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-minioadmin}
+    command: minio server /minio_data --console-address ":9001"
+    volumes:
+      - miniodata:/minio_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    logging: *logging
+
+  milvus:
+    image: milvusdb/milvus:v2.5.15
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    volumes:
+      - milvusdata:/var/lib/milvus
+    depends_on:
+      etcd:
+        condition: service_started
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 5
+    logging: *logging
+
+  backend:
+    build:
+      context: ../server
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+    volumes:
+      - appdata:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    logging: *logging
+
+  worker:
+    build:
+      context: ../server
+    restart: unless-stopped
+    command: ["python", "-m", "app.workers.worker", "--concurrency", "${WORKER_CONCURRENCY:-2}", "--block"]
+    environment:
+      <<: *backend-env
+    volumes:
+      - appdata:/app/data
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    logging: *logging
+
+  web:
+    build:
+      context: ../web
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-80}:80"
+    logging: *logging
+
+volumes:
+  pgdata:
+  redisdata:
+  etcddata:
+  miniodata:
+  milvusdata:
+  appdata:
