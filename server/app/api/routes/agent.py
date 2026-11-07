@@ -4,7 +4,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -51,6 +51,18 @@ async def list_runs(ws: str = Depends(current_workspace)) -> list[dict]:
         }
         for r in history.list_agent_runs(ws)
     ]
+
+
+@router.delete("/runs/{run_id}")
+async def delete_run(run_id: str, ws: str = Depends(current_workspace)) -> dict:
+    """删除一条任务记录（仅限当前工作区）。"""
+    history = get_history_store()
+    run = history.get_agent_run(run_id)
+    if run is None or run.workspace_id != ws:
+        raise HTTPException(status_code=404, detail="run not found")
+    history.delete_agent_run(run_id)
+    history.save()
+    return {"ok": True}
 
 
 async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:

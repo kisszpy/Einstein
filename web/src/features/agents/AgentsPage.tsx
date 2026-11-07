@@ -391,6 +391,14 @@ export function AgentsPage() {
     void loadProjects();
   };
 
+  const deleteRun = async (run: AgentRunItem) => {
+    if (!window.confirm(`删除任务「${run.task.slice(0, 30)}${run.task.length > 30 ? "…" : ""}」的记录？此操作不可恢复。`)) return;
+    const res = await fetch(`/api/agent/runs/${encodeURIComponent(run.id)}`, { method: "DELETE" });
+    if (!res.ok) return;
+    setRuns((prev) => prev.filter((r) => r.id !== run.id));
+    if (run.id === activeRunId) newTask();
+  };
+
   // 有新内容就贴底
   useEffect(() => {
     const el = scrollRef.current;
@@ -451,6 +459,7 @@ export function AgentsPage() {
           runs={runs}
           activeRunId={activeRunId}
           onSelectRun={selectRun}
+          onDeleteRun={(run) => void deleteRun(run)}
           onNewTask={newTask}
           query={query}
           onQuery={setQuery}

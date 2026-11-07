@@ -110,6 +110,12 @@ class HistoryStore:
             rows = [r for r in rows if r.workspace_id == workspace_id]
         return sorted(rows, key=lambda r: r.created_at, reverse=True)
 
+    def get_agent_run(self, run_id: str) -> AgentRun | None:
+        return self.agent_runs.get(run_id)
+
+    def delete_agent_run(self, run_id: str) -> bool:
+        return self.agent_runs.pop(run_id, None) is not None
+
     # ---- 持久化 ----
     def save(self) -> None:
         DATA_DIR.mkdir(exist_ok=True)

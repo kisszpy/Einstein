@@ -27,6 +27,7 @@ interface Props {
   runs: AgentRunItem[];
   activeRunId: string | null;
   onSelectRun: (run: AgentRunItem) => void;
+  onDeleteRun: (run: AgentRunItem) => void;
   onNewTask: () => void;
   query: string;
   onQuery: (value: string) => void;
@@ -50,6 +51,7 @@ export function TaskSidebar({
   runs,
   activeRunId,
   onSelectRun,
+  onDeleteRun,
   onNewTask,
   query,
   onQuery,
@@ -119,30 +121,45 @@ export function TaskSidebar({
                 const calls = run.steps.filter((s) => s.kind === "tool_call").length;
                 const active = run.id === activeRunId;
                 return (
-                  <button
+                  <div
                     key={run.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => onSelectRun(run)}
+                    onKeyDown={(e) => e.key === "Enter" && onSelectRun(run)}
                     className={cn(
-                      "block w-full rounded-lg px-2 py-1.5 text-left transition-colors duration-150",
+                      "group flex w-full cursor-pointer items-center gap-1 rounded-lg px-2 py-1.5 text-left transition-colors duration-150",
                       active ? "bg-surface-3" : "hover:bg-hover",
                     )}
                   >
-                    <span
-                      className={cn(
-                        "block truncate text-[12.5px] leading-5",
-                        active ? "text-primary" : "text-secondary",
-                      )}
+                    <div className="min-w-0 flex-1">
+                      <span
+                        className={cn(
+                          "block truncate text-[12.5px] leading-5",
+                          active ? "text-primary" : "text-secondary",
+                        )}
+                      >
+                        {run.task}
+                      </span>
+                      <span className="mt-0.5 flex items-center gap-1 text-[11px] text-tertiary">
+                        <span className="truncate">{relativeTime(run.created_at)}</span>
+                        {calls > 0 && <span>· {calls} 步</span>}
+                        {run.artifacts && run.artifacts.length > 0 && (
+                          <span>· {run.artifacts.length} 产物</span>
+                        )}
+                      </span>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteRun(run);
+                      }}
+                      title="删除任务"
+                      className="shrink-0 rounded p-1 text-tertiary opacity-0 transition-all duration-150 hover:bg-danger/10 hover:text-danger focus:opacity-100 group-hover:opacity-100"
                     >
-                      {run.task}
-                    </span>
-                    <span className="mt-0.5 flex items-center gap-1 text-[11px] text-tertiary">
-                      <span className="truncate">{relativeTime(run.created_at)}</span>
-                      {calls > 0 && <span>· {calls} 步</span>}
-                      {run.artifacts && run.artifacts.length > 0 && (
-                        <span>· {run.artifacts.length} 产物</span>
-                      )}
-                    </span>
-                  </button>
+                      <Trash2 size={12.5} strokeWidth={1.9} />
+                    </button>
+                  </div>
                 );
               })}
             </div>
