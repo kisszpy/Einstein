@@ -244,13 +244,21 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
         if get_settings().agent_code_exec:
 
             def _code_run(code: str = "", path: str = "", language: str = "python", timeout: int = 60) -> str:
-                project = need_project()
+                if ctx.project:
+                    project = ctx.project
+                else:
+                    # 无绑定项目时的临时沙盒：纯计算不污染任何用户项目
+                    try:
+                        sandbox.project_dir(ws, "_scratch")
+                    except sandbox.SandboxError:
+                        sandbox.create_project(ws, "_scratch", description="智能体临时计算沙盒（自动创建）")
+                    project = "_scratch"
                 result = code_exec.run_code(ws, project, code, path, language, timeout)
                 return sandbox.dumps(result)
 
             tools.append(StructuredTool.from_function(
                 _safe(_code_run), name="code_run",
-                description="在项目目录内执行 Python/Node 代码并返回 stdout/stderr。仅用于精确计算、数据处理或验证写好的代码；普通问答和写作不要写代码",
+                description="执行 Python/Node 代码并返回 stdout/stderr。仅用于精确计算、数据处理或验证写好的代码；普通问答和写作不要写代码。无项目时自动落在临时沙盒，不会影响用户项目",
                 args_schema=CodeRunArgs, coroutine=None))
 
     if "ppt_create" in wanted:

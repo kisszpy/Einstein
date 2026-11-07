@@ -151,6 +151,17 @@ export function AgentsPage() {
     [loadTree],
   );
 
+  // 区分「自动选中」与「手动绑定」：自动选中只服务预览入口，
+  // 运行请求不带 project——文件落在哪由智能体按任务自己决定。
+  const projectAutoRef = useRef(false);
+  const pickProject = useCallback(
+    (pid: string) => {
+      projectAutoRef.current = false;
+      selectProject(pid);
+    },
+    [selectProject],
+  );
+
   useEffect(() => {
     void fetch("/api/agent/tools")
       .then((r) => r.json())
@@ -167,7 +178,10 @@ export function AgentsPage() {
   useEffect(() => {
     if (project || projects.length === 0) return;
     const latest = [...projects].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
-    if (latest[0]?.id) selectProject(latest[0].id);
+    if (latest[0]?.id) {
+      projectAutoRef.current = true;
+      selectProject(latest[0].id);
+    }
   }, [projects, project, selectProject]);
 
   const openFile = useCallback(
@@ -246,7 +260,7 @@ export function AgentsPage() {
             task: text,
             tool_ids: capabilityTools,
             kb_ids: selectedKbs,
-            project,
+            project: projectAutoRef.current ? "" : project,
           }),
         });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
@@ -272,7 +286,7 @@ export function AgentsPage() {
             case "done": {
               const d = raw as { project?: string; artifacts?: Artifact[] };
               const pid = d.project || project;
-              if (d.project && d.project !== project) selectProject(d.project);
+              if (d.project && d.project !== project) pickProject(d.project);
               else if (d.project) void loadTree(d.project);
               setPreviewToken((n) => n + 1);
               void loadProjects();
@@ -350,7 +364,7 @@ export function AgentsPage() {
     setError(null);
     setElapsed(null);
     setActiveRunId(item.id);
-    if (item.project && item.project !== project) selectProject(item.project);
+    if (item.project && item.project !== project) pickProject(item.project);
   };
 
   const createProject = async () => {
@@ -364,7 +378,7 @@ export function AgentsPage() {
     if (res.ok) {
       const info = await res.json();
       await loadProjects();
-      selectProject(info.project);
+      pickProject(info.project);
     }
   };
 
@@ -372,6 +386,7 @@ export function AgentsPage() {
     if (!project) return;
     if (!window.confirm(`删除项目「${project}」及其全部文件？此操作不可恢复。`)) return;
     await fetch(`/api/projects/${encodeURIComponent(project)}`, { method: "DELETE" });
+    projectAutoRef.current = false;
     selectProject("");
     void loadProjects();
   };
@@ -418,7 +433,7 @@ export function AgentsPage() {
       }
       projects={projects}
       project={project}
-      onSelectProject={selectProject}
+      onSelectProject={pickProject}
       onCreateProject={() => void createProject()}
       autoFocus={empty}
     />
@@ -441,7 +456,7 @@ export function AgentsPage() {
           onQuery={setQuery}
           project={project}
           projects={projects}
-          onSelectProject={selectProject}
+          onSelectProject={pickProject}
           onCreateProject={() => void createProject()}
           onDeleteProject={() => void deleteProject()}
           onRefreshTree={() => void loadTree(project)}

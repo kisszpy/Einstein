@@ -170,8 +170,8 @@ def list_projects(workspace_id: str) -> list[dict]:
     root = workspace_root(workspace_id)
     out: list[dict] = []
     for p in sorted(root.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-        if not p.is_dir():
-            continue
+        if not p.is_dir() or p.name.startswith("_"):
+            continue  # 下划线开头的是内部沙盒（如 _scratch），不对用户展示
         stat = p.stat()
         out.append(
             {
