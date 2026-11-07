@@ -75,7 +75,16 @@ npm install
 npm run dev                                          # http://localhost:5173，/api 反代到 8000
 ```
 
-只跑 JSON 文件后端时不需要数据库：默认 `APP_STORE_BACKEND=json`，所有数据落在 `server/data/`。
+`server/.env.example` 默认指向**生产组合**（postgres + milvus + redis），所以本地开发前先起依赖：
+
+```bash
+cd deploy && docker compose up -d       # pg 5433 / redis 6380 / milvus 19530
+cd ../server && python tools/check_infra.py --deep
+```
+
+想完全零依赖跑（不装任何数据库，数据落 `server/data/` 的 json 文件），把 `.env` 里那三行换成
+注释掉的 `json / memory / local` 即可。**切后端必须重启后端与 worker，并同步迁移数据**——
+否则会出现"接口写 PG、后台任务写 SQLite"这种半套状态。
 
 ### 从开发后端切到生产组合
 
