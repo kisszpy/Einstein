@@ -3,24 +3,29 @@ uvicorn[standard]>=0.32
 pydantic>=2.10
 pydantic-settings>=2.6
 
-# LangChain 体系
-langchain>=0.3
+# LangChain / LangGraph
 langchain-core>=0.3
-langchain-milvus>=0.2
+langchain-openai>=0.3
+langchain-text-splitters>=0.3
 langgraph>=0.2
+langgraph-checkpoint>=2.0   # 中断恢复（S2.5）
 
-# 存储
-psycopg[binary]>=3.2        # PostgreSQL（SQLAlchemy 2.x 在 M0 后期引入）
-pymilvus>=2.5               # Milvus SDK（内含 milvus-lite）
+# 存储与检索
+psycopg[binary]>=3.2        # PostgreSQL 客户端（原生 SQL，不引 ORM）
+pymilvus>=2.5               # Milvus SDK（注意：milvus-lite 不支持 Windows，必须容器）
 redis>=5.2
+numpy>=2.0                  # 批量余弦检索
 
-# 模型接入（llama.cpp OpenAI 兼容端点 / 云端模型同接口）
+# 模型接入（llama.cpp / 云端 OpenAI 兼容端点）
 openai>=1.57
 
-# 工具
-python-multipart>=0.0.18    # 文件上传
+# 文档解析与产物
+python-multipart>=0.0.18
 python-dotenv>=1.0
 pypdf>=6.0
 python-docx>=1.1
+openpyxl>=3.1               # xlsx 摄取
+python-pptx>=1.0            # pptx 摄取与生成
+beautifulsoup4>=4.12        # html 摄取
 mcp>=2.0
 jieba>=0.42

@@ -8,7 +8,8 @@ class Settings(BaseSettings):
 
     # 应用
     app_name: str = "Einstein API"
-    debug: bool = True
+    # 默认关闭：debug=True 时 Starlette 会忽略自定义异常处理器直接吐堆栈（泄漏服务器路径）
+    debug: bool = False
 
     # 模型接入（llama.cpp OpenAI 兼容端点）
     llm_base_url: str = "http://localhost:8080/v1"
@@ -29,11 +30,19 @@ class Settings(BaseSettings):
     skill_market_topics: str = "agent-skills"  # 逗号分隔的 GitHub topic，用于市场浏览
     skill_market_registry_urls: str = ""       # 逗号分隔的自建市场索引（JSON）
 
-    # 存储
-    postgres_dsn: str = "postgresql+psycopg://postgres:postgres@localhost:5432/aiplatform"
-    milvus_uri: str = "http://localhost:19530"  # 开发期可改为 milvus-lite 本地文件路径
-    milvus_collection: str = "chunks"
-    redis_url: str = "redis://localhost:6379/0"
+    # 存储后端：json（零依赖，兼容 v0.1 数据）| sqlite（单机事务）| postgres（生产）
+    store_backend: str = "json"
+    sqlite_path: str = "data/einstein.db"
+    postgres_dsn: str = "postgresql://einstein:einstein@127.0.0.1:5433/einstein"
+
+    # 向量后端：memory（numpy 暴力检索）| milvus（生产）
+    vector_backend: str = "memory"
+    milvus_uri: str = "http://127.0.0.1:19530"
+    milvus_collection: str = "einstein_chunks"
+
+    # 队列后端：local（DB 持久化 + asyncio worker）| redis
+    queue_backend: str = "local"
+    redis_url: str = "redis://127.0.0.1:6380/0"
 
 
 @lru_cache

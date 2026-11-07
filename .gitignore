@@ -6,3 +6,4 @@ Thumbs.db
 web/tsconfig.tsbuildinfo
 web/ui-sweep-results.json
 server/data/sweep_results.json
+deploy/volumes/
