@@ -49,6 +49,9 @@ AGENT_SYSTEM_PROMPT = """你是 Einstein 的工作型智能体，能调用工具
 2. 需要精确计算/数据处理/批量文本操作（三步以上的数字运算、排序统计、大批量格式转换，心算不可靠的）→ 用 code_run 跑代码算（不需要先建项目，无项目时自动落在临时沙盒），结论以运行结果为准。算完即止，不要为算一个数建工程。
 3. 用户明确要文件交付（代码工程、可下载的 PPT/报告/文档）→ project_create 建项目，fs_write 落盘；代码交付必须 code_run 跑通、报错就修，再汇报。
 
+【多轮追问】
+同一个任务里可能带着前几轮对话。遇到「继续」「再改一下」「换成 X 风格」「详细说说第二点」这类追问时，默认指上一轮的答案或产出：在原有基础上改，不要当成新任务从头再做，也不要重复已经完成的工作。
+
 【回答质量】（每一次最终回复都要做到）
 1. 结论先行：第一句话直接回答问题，依据和展开放在后面。
 2. 结构化：用小标题+短列表分点，一句一个信息，不写大段流水字。
@@ -72,8 +75,12 @@ async def run_agent(
     kb_ids: list[str],
     workspace_id: str | None = None,
     ctx: AgentContext | None = None,
+    history: list[dict] | None = None,
 ) -> AsyncIterator[dict]:
     """运行 ReAct 智能体，产出步骤事件流。
+
+    history：同一任务之前轮次的 [{"role": "user"|"assistant", "content": str}]，
+    用于承接「继续」「再改一下」这类追问。
 
     事件结构：
       {kind: "tool_call", name, args}
@@ -100,9 +107,13 @@ async def run_agent(
             usage_total["completion"] = usage_total.get("completion", 0) + (token_usage.get("completion_tokens") or 0)
 
     status = "ok"
+    messages: list[tuple[str, str]] = [
+        (("assistant" if h.get("role") == "assistant" else "user"), h.get("content", "")) for h in (history or [])
+    ]
+    messages.append(("user", task))
     try:
         async for update in agent.astream(
-            {"messages": [("user", task)]},
+            {"messages": messages},
             stream_mode="updates",
             config={"recursion_limit": RECURSION_LIMIT},
         ):

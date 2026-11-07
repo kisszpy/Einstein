@@ -18,16 +18,16 @@ import {
   dayBucket,
   fileName,
   relativeTime,
-  type AgentRunItem,
   type ProjectInfo,
+  type TaskSession,
   type TreeNode,
 } from "../types";
 
 interface Props {
-  runs: AgentRunItem[];
-  activeRunId: string | null;
-  onSelectRun: (run: AgentRunItem) => void;
-  onDeleteRun: (run: AgentRunItem) => void;
+  sessions: TaskSession[];
+  activeSessionId: string | null;
+  onSelectSession: (session: TaskSession) => void;
+  onDeleteSession: (session: TaskSession) => void;
   onNewTask: () => void;
   query: string;
   onQuery: (value: string) => void;
@@ -48,10 +48,10 @@ interface Props {
 const GROUP_ORDER = ["今天", "昨天", "近 7 天", "更早"];
 
 export function TaskSidebar({
-  runs,
-  activeRunId,
-  onSelectRun,
-  onDeleteRun,
+  sessions,
+  activeSessionId,
+  onSelectSession,
+  onDeleteSession,
   onNewTask,
   query,
   onQuery,
@@ -70,14 +70,16 @@ export function TaskSidebar({
 
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const matched = runs.filter((r) => !q || r.task.toLowerCase().includes(q));
-    const map = new Map<string, AgentRunItem[]>();
-    for (const run of matched) {
-      const key = dayBucket(run.created_at);
-      map.set(key, [...(map.get(key) ?? []), run]);
+    const matched = sessions.filter(
+      (s) => !q || s.title.toLowerCase().includes(q) || s.runs.some((r) => r.task.toLowerCase().includes(q)),
+    );
+    const map = new Map<string, TaskSession[]>();
+    for (const session of matched) {
+      const key = dayBucket(session.created_at);
+      map.set(key, [...(map.get(key) ?? []), session]);
     }
     return GROUP_ORDER.filter((k) => map.has(k)).map((k) => [k, map.get(k)!] as const);
-  }, [runs, query]);
+  }, [sessions, query]);
 
   return (
     <aside className="flex w-[264px] shrink-0 flex-col border-r border-line bg-surface-2">
@@ -117,16 +119,17 @@ export function TaskSidebar({
           <div key={title} className="mb-1">
             <p className="px-2 py-1.5 text-[11px] font-medium text-tertiary">{title}</p>
             <div className="space-y-px">
-              {items.map((run) => {
-                const calls = run.steps.filter((s) => s.kind === "tool_call").length;
-                const active = run.id === activeRunId;
+              {items.map((session) => {
+                const calls = session.steps;
+                const active = session.id === activeSessionId;
+                const turns = session.runs.length;
                 return (
                   <div
-                    key={run.id}
+                    key={session.id}
                     role="button"
                     tabIndex={0}
-                    onClick={() => onSelectRun(run)}
-                    onKeyDown={(e) => e.key === "Enter" && onSelectRun(run)}
+                    onClick={() => onSelectSession(session)}
+                    onKeyDown={(e) => e.key === "Enter" && onSelectSession(session)}
                     className={cn(
                       "group flex w-full cursor-pointer items-center gap-1 rounded-lg px-2 py-1.5 text-left transition-colors duration-150",
                       active ? "bg-surface-3" : "hover:bg-hover",
@@ -139,22 +142,21 @@ export function TaskSidebar({
                           active ? "text-primary" : "text-secondary",
                         )}
                       >
-                        {run.task}
+                        {session.title}
                       </span>
                       <span className="mt-0.5 flex items-center gap-1 text-[11px] text-tertiary">
-                        <span className="truncate">{relativeTime(run.created_at)}</span>
+                        <span className="truncate">{relativeTime(session.updated_at)}</span>
+                        {turns > 1 && <span>· {turns} 轮</span>}
                         {calls > 0 && <span>· {calls} 步</span>}
-                        {run.artifacts && run.artifacts.length > 0 && (
-                          <span>· {run.artifacts.length} 产物</span>
-                        )}
+                        {session.artifacts > 0 && <span>· {session.artifacts} 产物</span>}
                       </span>
                     </div>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        onDeleteRun(run);
+                        onDeleteSession(session);
                       }}
-                      title="删除任务"
+                      title={turns > 1 ? `删除任务（含 ${turns} 轮对话）` : "删除任务"}
                       className="shrink-0 rounded p-1 text-tertiary opacity-0 transition-all duration-150 hover:bg-danger/10 hover:text-danger focus:opacity-100 group-hover:opacity-100"
                     >
                       <Trash2 size={12.5} strokeWidth={1.9} />

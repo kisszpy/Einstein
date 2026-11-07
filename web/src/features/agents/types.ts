@@ -65,6 +65,50 @@ export interface AgentRunItem {
   created_at: string;
   project?: string;
   artifacts?: Artifact[];
+  /** 同一任务的追问共享同一个 session_id */
+  session_id?: string;
+  turn?: number;
+}
+
+/** 侧栏里的「任务」= 一个会话（可能包含多轮追问） */
+export interface TaskSession {
+  id: string;
+  /** 首轮提问，作为任务标题 */
+  title: string;
+  /** 按时间正序排列的所有轮次 */
+  runs: AgentRunItem[];
+  created_at: string;
+  updated_at: string;
+  project?: string;
+  steps: number;
+  artifacts: number;
+}
+
+/** 把扁平的 run 列表按会话聚合，最近活跃的排在前面 */
+export function groupSessions(runs: AgentRunItem[]): TaskSession[] {
+  const map = new Map<string, AgentRunItem[]>();
+  for (const run of runs) {
+    const key = run.session_id || run.id;
+    map.set(key, [...(map.get(key) ?? []), run]);
+  }
+  const sessions: TaskSession[] = [];
+  for (const [id, list] of map) {
+    const ordered = [...list].sort((a, b) => a.created_at.localeCompare(b.created_at));
+    const first = ordered[0];
+    const last = ordered[ordered.length - 1];
+    if (!first || !last) continue;
+    sessions.push({
+      id,
+      title: first.task,
+      runs: ordered,
+      created_at: first.created_at,
+      updated_at: last.created_at,
+      project: [...ordered].reverse().find((r) => r.project)?.project,
+      steps: ordered.reduce((n, r) => n + r.steps.filter((s) => s.kind === "tool_call").length, 0),
+      artifacts: ordered.reduce((n, r) => n + (r.artifacts?.length ?? 0), 0),
+    });
+  }
+  return sessions.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
 }
 
 export const TOOL_LABELS: Record<string, string> = {

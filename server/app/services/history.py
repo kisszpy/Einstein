@@ -47,6 +47,9 @@ class AgentRun:
     workspace_id: str = "default"
     project: str = ""
     artifacts: list[dict] = field(default_factory=list)
+    # 同一任务的后续追问共享 session_id；turn 从 1 开始递增
+    session_id: str = ""
+    turn: int = 1
 
 
 @dataclass
@@ -88,6 +91,7 @@ class HistoryStore:
     def add_agent_run(
         self, task: str, tool_ids: list[str], steps: list[dict], answer: str, status: str,
         workspace_id: str = "default", project: str = "", artifacts: list[dict] | None = None,
+        session_id: str = "", turn: int = 1,
     ) -> AgentRun:
         run = AgentRun(
             id=uuid.uuid4().hex[:12],
@@ -100,6 +104,8 @@ class HistoryStore:
             workspace_id=workspace_id,
             project=project,
             artifacts=artifacts or [],
+            session_id=session_id,
+            turn=turn,
         )
         self.agent_runs[run.id] = run
         return run
@@ -115,6 +121,28 @@ class HistoryStore:
 
     def delete_agent_run(self, run_id: str) -> bool:
         return self.agent_runs.pop(run_id, None) is not None
+
+    @staticmethod
+    def session_key(run: AgentRun) -> str:
+        """会话 id：老数据没有 session_id 时用它自己的 id。"""
+        return run.session_id or run.id
+
+    def list_session_runs(self, session_id: str, workspace_id: str | None = None) -> list[AgentRun]:
+        """取一个会话的全部轮次，按时间正序（含把自身 id 当会话 id 的老数据）。"""
+        rows = [
+            r for r in self.agent_runs.values()
+            if r.id == session_id or self.session_key(r) == session_id
+        ]
+        if workspace_id:
+            rows = [r for r in rows if r.workspace_id == workspace_id]
+        return sorted(rows, key=lambda r: (r.created_at, r.turn))
+
+    def delete_session(self, session_id: str, workspace_id: str | None = None) -> int:
+        """删除整个会话（所有轮次），返回删除条数。"""
+        targets = [r.id for r in self.list_session_runs(session_id, workspace_id)]
+        for rid in targets:
+            self.agent_runs.pop(rid, None)
+        return len(targets)
 
     # ---- 持久化 ----
     def save(self) -> None:

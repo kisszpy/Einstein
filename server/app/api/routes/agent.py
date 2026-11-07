@@ -23,6 +23,8 @@ class AgentRunRequest(BaseModel):
     tool_ids: list[str] = []
     kb_ids: list[str] = []
     project: str = ""
+    # 追问时带上所属会话 id；为空表示新任务（服务端分配）
+    session_id: str = ""
 
 
 def _sse(event: str, data: dict) -> str:
@@ -48,6 +50,8 @@ async def list_runs(ws: str = Depends(current_workspace)) -> list[dict]:
             "created_at": r.created_at,
             "project": r.project,
             "artifacts": r.artifacts,
+            "session_id": history.session_key(r),
+            "turn": r.turn,
         }
         for r in history.list_agent_runs(ws)
     ]
@@ -55,20 +59,33 @@ async def list_runs(ws: str = Depends(current_workspace)) -> list[dict]:
 
 @router.delete("/runs/{run_id}")
 async def delete_run(run_id: str, ws: str = Depends(current_workspace)) -> dict:
-    """删除一条任务记录（仅限当前工作区）。"""
+    """删除一个任务会话（含所有追问轮次）。参数可以是会话 id 或任一轮次的 run id。"""
     history = get_history_store()
-    run = history.get_agent_run(run_id)
-    if run is None or run.workspace_id != ws:
+    runs = history.list_session_runs(run_id, ws)
+    if not runs:
         raise HTTPException(status_code=404, detail="run not found")
-    history.delete_agent_run(run_id)
+    deleted = history.delete_session(run_id, ws)
     history.save()
-    return {"ok": True}
+    return {"ok": True, "deleted": deleted}
 
 
 async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
+    history = get_history_store()
+    # 会话：追问沿用同一会话，新任务分配新 id
+    session_id = req.session_id or uuid.uuid4().hex[:12]
+    prior_runs = history.list_session_runs(session_id, ws) if req.session_id else []
     run_id = uuid.uuid4().hex
-    print(f"[agent-stream] {run_id} start task={req.task[:40]!r}", flush=True)
-    yield _sse("meta", {"run_id": run_id})
+    print(
+        f"[agent-stream] {run_id} start session={session_id} turn={len(prior_runs) + 1} task={req.task[:40]!r}",
+        flush=True,
+    )
+    yield _sse("meta", {"run_id": run_id, "session_id": session_id, "turn": len(prior_runs) + 1})
+    # 把最近几轮问答带给模型（每轮答案截断，防止本地模型上下文被撑爆）
+    lc_history: list[dict] = []
+    for r in prior_runs[-3:]:
+        lc_history.append({"role": "user", "content": r.task})
+        if r.answer:
+            lc_history.append({"role": "assistant", "content": r.answer[:1500]})
     try:
         # 只允许检索当前工作区的知识库；项目名给定时必须已存在
         kb_ids = get_store().owned_kb_ids(ws, req.kb_ids)
@@ -97,7 +114,9 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
 
         async def _pump() -> None:
             try:
-                async for step in run_agent(req.task, req.tool_ids, kb_ids, ws, ctx):
+                async for step in run_agent(
+                    req.task, req.tool_ids, kb_ids, ws, ctx, history=lc_history
+                ):
                     await queue.put(step)
             except Exception as exc:  # noqa: BLE001 — 异常也走队列，保持事件序
                 await queue.put(exc)
@@ -138,11 +157,18 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
         yield _sse("answer_start", {})
         for piece in chunk_text(final_text):
             yield _sse("delta", {"text": piece})
-        yield _sse("done", {"run_id": run_id, "project": ctx.project, "artifacts": artifacts})
+        yield _sse(
+            "done",
+            {
+                "run_id": run_id,
+                "session_id": session_id,
+                "project": ctx.project,
+                "artifacts": artifacts,
+            },
+        )
         print(f"[agent-stream] {run_id} done steps={len(steps)}", flush=True)
 
-        # 持久化运行历史
-        history = get_history_store()
+        # 持久化运行历史（同一会话的多轮）
         history.add_agent_run(
             task=req.task,
             tool_ids=req.tool_ids,
@@ -152,6 +178,8 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
             workspace_id=ws,
             project=ctx.project,
             artifacts=artifacts,
+            session_id=session_id,
+            turn=len(prior_runs) + 1,
         )
         history.save()
     except Exception as exc:  # noqa: BLE001 — 统一转 SSE error 事件

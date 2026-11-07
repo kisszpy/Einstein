@@ -16,14 +16,25 @@ import { TaskSidebar } from "./components/TaskSidebar";
 import { Composer } from "./components/Composer";
 import { AssistantTurn } from "./components/AssistantTurn";
 import {
+  groupSessions,
   type AgentRunItem,
   type AgentStep,
   type Artifact,
   type KbInfo,
   type ProjectInfo,
+  type TaskSession,
   type ToolInfo,
   type TreeNode,
 } from "./types";
+
+/** 已归档的一轮问答（同一任务内的历史轮次） */
+interface TurnView {
+  task: string;
+  steps: AgentStep[];
+  answer: string;
+  artifacts: Artifact[];
+  error: string | null;
+}
 
 const PANEL_WIDTH_KEY = "einstein.agent.panelWidth";
 const SIDEBAR_KEY = "einstein.agent.sidebarOpen";
@@ -87,7 +98,10 @@ export function AgentsPage() {
   const [answer, setAnswer] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  /** 当前任务的会话 id：追问沿用，新任务清空（由服务端分配） */
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  /** 同一任务里已完成的更早轮次 */
+  const [turns, setTurns] = useState<TurnView[]>([]);
   const [elapsed, setElapsed] = useState<number | null>(null);
   const startedAtRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -238,8 +252,11 @@ export function AgentsPage() {
     async (taskText: string) => {
       const text = taskText.trim();
       if (!text || running) return;
+      // 上一轮已有内容 → 归档到历史，让追问落在同一个任务里形成多轮
+      if (submitted && (answer || steps.length > 0 || error)) {
+        setTurns((prev) => [...prev, { task: submitted, steps, answer, artifacts, error }]);
+      }
       setSubmitted(text);
-      setActiveRunId(null);
       setSteps([]);
       setArtifacts([]);
       setAnswer("");
@@ -259,12 +276,19 @@ export function AgentsPage() {
             tool_ids: capabilityTools,
             kb_ids: selectedKbs,
             project: boundProject,
+            session_id: sessionId ?? "",
           }),
         });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
         await readSseStream(res.body, (event, raw) => {
           switch (event) {
+            case "meta": {
+              // 服务端分配/回显会话 id，后续追问沿用它
+              const { session_id } = raw as { session_id?: string };
+              if (session_id) setSessionId(session_id);
+              break;
+            }
             case "step": {
               const { step } = raw as { step: AgentStep };
               setSteps((prev) => [...prev, step]);
@@ -316,6 +340,12 @@ export function AgentsPage() {
     },
     [
       running,
+      submitted,
+      steps,
+      answer,
+      artifacts,
+      error,
+      sessionId,
       capabilityTools,
       selectedKbs,
       boundProject,
@@ -344,26 +374,41 @@ export function AgentsPage() {
   const newTask = () => {
     if (running) return;
     setBoundProject(""); // 新任务不继承上一个任务的绑定
+    setSessionId(null);
+    setTurns([]);
     setSubmitted("");
     setSteps([]);
     setArtifacts([]);
     setAnswer("");
     setError(null);
     setElapsed(null);
-    setActiveRunId(null);
     setTask("");
   };
 
-  const selectRun = (item: AgentRunItem) => {
+  /** 打开一个任务会话：更早的轮次进历史，最后一轮作为当前轮展示 */
+  const selectSession = (session: TaskSession) => {
     if (running) return;
-    setSubmitted(item.task);
-    setSteps(item.steps ?? []);
-    setAnswer(item.answer ?? "");
-    setArtifacts(item.artifacts ?? []);
+    const list = session.runs;
+    const last = list[list.length - 1];
+    if (!last) return;
+    setSessionId(session.id);
+    setTurns(
+      list.slice(0, -1).map((r) => ({
+        task: r.task,
+        steps: r.steps ?? [],
+        answer: r.answer ?? "",
+        artifacts: r.artifacts ?? [],
+        error: null,
+      })),
+    );
+    setSubmitted(last.task);
+    setSteps(last.steps ?? []);
+    setAnswer(last.answer ?? "");
+    setArtifacts(last.artifacts ?? []);
     setError(null);
     setElapsed(null);
-    setActiveRunId(item.id);
-    if (item.project && item.project !== boundProject) bindProject(item.project);
+    const pid = last.project || session.project;
+    if (pid && pid !== boundProject) bindProject(pid);
   };
 
   const createProject = async () => {
@@ -391,12 +436,14 @@ export function AgentsPage() {
     void loadProjects();
   };
 
-  const deleteRun = async (run: AgentRunItem) => {
-    if (!window.confirm(`删除任务「${run.task.slice(0, 30)}${run.task.length > 30 ? "…" : ""}」的记录？此操作不可恢复。`)) return;
-    const res = await fetch(`/api/agent/runs/${encodeURIComponent(run.id)}`, { method: "DELETE" });
+  const deleteSession = async (session: TaskSession) => {
+    const label = session.title.slice(0, 30) + (session.title.length > 30 ? "…" : "");
+    const extra = session.runs.length > 1 ? `（含 ${session.runs.length} 轮对话）` : "";
+    if (!window.confirm(`删除任务「${label}」${extra}？此操作不可恢复。`)) return;
+    const res = await fetch(`/api/agent/runs/${encodeURIComponent(session.id)}`, { method: "DELETE" });
     if (!res.ok) return;
-    setRuns((prev) => prev.filter((r) => r.id !== run.id));
-    if (run.id === activeRunId) newTask();
+    setRuns((prev) => prev.filter((r) => (r.session_id || r.id) !== session.id));
+    if (session.id === sessionId) newTask();
   };
 
   // 有新内容就贴底
@@ -406,7 +453,9 @@ export function AgentsPage() {
     el.scrollTo({ top: el.scrollHeight, behavior: running ? "auto" : "smooth" });
   }, [steps, answer, artifacts, running]);
 
-  const empty = !submitted && steps.length === 0 && !answer && !error;
+  const sessions = useMemo(() => groupSessions(runs), [runs]);
+
+  const empty = turns.length === 0 && !submitted && steps.length === 0 && !answer && !error;
 
   useEffect(() => {
     if (!empty) return;
@@ -420,7 +469,7 @@ export function AgentsPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [empty]);
 
-  const title = submitted ? submitted : "新任务";
+  const title = turns[0]?.task ?? (submitted || "新任务");
 
   const composer = (
     <Composer
@@ -456,10 +505,10 @@ export function AgentsPage() {
         )}
       >
         <TaskSidebar
-          runs={runs}
-          activeRunId={activeRunId}
-          onSelectRun={selectRun}
-          onDeleteRun={(run) => void deleteRun(run)}
+          sessions={sessions}
+          activeSessionId={sessionId}
+          onSelectSession={selectSession}
+          onDeleteSession={(session) => void deleteSession(session)}
           onNewTask={newTask}
           query={query}
           onQuery={setQuery}
@@ -549,24 +598,53 @@ export function AgentsPage() {
           <>
             <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
               <div className="mx-auto w-full max-w-[848px] px-6 pb-4 pt-6">
-                {/* 用户消息 */}
-                <div className="mb-5 flex justify-end">
-                  <div className="max-w-[85%] whitespace-pre-wrap rounded-[16px] rounded-tr-[6px] bg-surface-3 px-4 py-2.5 text-[14px] leading-[22px] text-primary">
-                    {submitted}
+                {/* 同一任务的历史轮次：完整的问答对，形成连续对话 */}
+                {turns.map((turn, index) => (
+                  <div
+                    key={`${index}-${turn.task.slice(0, 16)}`}
+                    className="mb-7 border-b border-line/70 pb-7 last:mb-6 last:border-0 last:pb-0"
+                  >
+                    <div className="mb-5 flex justify-end">
+                      <div className="max-w-[85%] whitespace-pre-wrap rounded-[16px] rounded-tr-[6px] bg-surface-3 px-4 py-2.5 text-[14px] leading-[22px] text-primary">
+                        {turn.task}
+                      </div>
+                    </div>
+                    <AssistantTurn
+                      steps={turn.steps}
+                      answer={turn.answer}
+                      artifacts={turn.artifacts}
+                      running={false}
+                      error={turn.error}
+                      project={browseProject}
+                      elapsedMs={null}
+                      onOpenFile={(path) => openFile(path)}
+                      onRerun={() => void run(turn.task)}
+                    />
                   </div>
-                </div>
+                ))}
 
-                <AssistantTurn
-                  steps={steps}
-                  answer={answer}
-                  artifacts={artifacts}
-                  running={running}
-                  error={error}
-                  project={browseProject}
-                  elapsedMs={elapsed}
-                  onOpenFile={(path) => openFile(path)}
-                  onRerun={() => void run(submitted)}
-                />
+                {/* 当前轮 */}
+                {submitted && (
+                  <>
+                    <div className="mb-5 flex justify-end">
+                      <div className="max-w-[85%] whitespace-pre-wrap rounded-[16px] rounded-tr-[6px] bg-surface-3 px-4 py-2.5 text-[14px] leading-[22px] text-primary">
+                        {submitted}
+                      </div>
+                    </div>
+
+                    <AssistantTurn
+                      steps={steps}
+                      answer={answer}
+                      artifacts={artifacts}
+                      running={running}
+                      error={error}
+                      project={browseProject}
+                      elapsedMs={elapsed}
+                      onOpenFile={(path) => openFile(path)}
+                      onRerun={() => void run(submitted)}
+                    />
+                  </>
+                )}
               </div>
             </div>
 
