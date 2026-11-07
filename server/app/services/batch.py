@@ -19,10 +19,10 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from app.services.parsers import SUPPORTED_EXTENSIONS
+from app.services.parsers import MAX_BYTES as SINGLE_FILE_MAX, SUPPORTED_EXTENSIONS
 
-MAX_BATCH_FILES = 500                                # 单批文件数上限
-MAX_BATCH_BYTES = 2 * 1024 * 1024 * 1024             # 单批解压/累计大小上限（防 zip 炸弹）
+MAX_BATCH_FILES = 0                                  # 单批文件数上限；0 = 不限制
+MAX_BATCH_BYTES = 0                                  # 单批解压/累计大小上限；0 = 不限制
 MAX_NAME_LEN = 200                                   # 文档名上限，避免超长相对路径
 
 # 目录名黑名单：版本库、依赖、编辑器缓存、系统回收站
@@ -124,16 +124,18 @@ def extract_zip(
             if mode == 0o120000:  # 符号链接
                 skipped.append(SkippedItem(rel, "符号链接已跳过"))
                 continue
-            if len(items) >= max_files:
+            if max_files and len(items) >= max_files:
                 skipped.append(SkippedItem(rel, f"超出单批 {max_files} 个文件上限"))
                 continue
-            if info.file_size > max_bytes:
-                skipped.append(SkippedItem(rel, "单文件过大"))
+            # 单文件上限跟解析器一致（50MB）：解出来也解析不了，不如提前挡掉
+            if info.file_size > SINGLE_FILE_MAX:
+                skipped.append(SkippedItem(rel, "单文件过大（超过 50MB）"))
                 continue
-            total += info.file_size
-            if total > max_bytes:
-                skipped.append(SkippedItem(rel, "解压后总大小超过上限"))
-                continue
+            if max_bytes:
+                total += info.file_size
+                if total > max_bytes:
+                    skipped.append(SkippedItem(rel, "解压后总大小超过上限"))
+                    continue
             target = dest / f"{len(items):05d}{Path(rel).suffix.lower()}"
             with zf.open(info) as fh, target.open("wb") as out:
                 while chunk := fh.read(1024 * 1024):
@@ -183,18 +185,53 @@ def scan_directory(
                 if not (skip_unsupported and reason.startswith("不支持")):
                     skipped.append(SkippedItem(rel, reason))
                 continue
-            if len(items) >= max_files:
+            if max_files and len(items) >= max_files:
                 skipped.append(SkippedItem(rel, f"超出单批 {max_files} 个文件上限"))
                 continue
             size = entry.stat(follow_symlinks=False).st_size
-            total += size
-            if total > max_bytes:
-                skipped.append(SkippedItem(rel, "累计大小超过上限"))
+            if size > SINGLE_FILE_MAX:
+                skipped.append(SkippedItem(rel, "单文件过大（超过 50MB）"))
                 continue
+            if max_bytes:
+                total += size
+                if total > max_bytes:
+                    skipped.append(SkippedItem(rel, "累计大小超过上限"))
+                    continue
             items.append(BatchItem(Path(entry.path), rel, size))
 
     walk(root, 0)
     return items, skipped
+
+
+def purge_stale_batches(root: Path, *, max_age_hours: float = 6.0) -> int:
+    """清掉超时未被回收的批次暂存目录，返回删除的目录数。
+
+    一次批量上传会拆成多个分片任务共用 `batch-xxx` 目录，谁都判断不了
+    「我是不是最后一个」，所以按时间兜底：目录里最新文件的 mtime 早于
+    阈值就整个删掉。删除失败（被占用/无权限）留给下次启动再试。
+    """
+    import shutil
+    import time
+
+    if not root.is_dir():
+        return 0
+    cutoff = time.time() - max(0.1, max_age_hours) * 3600
+    removed = 0
+    for entry in root.glob("batch-*"):
+        if not entry.is_dir():
+            continue
+        try:
+            newest = entry.stat().st_mtime
+            for child in entry.iterdir():
+                newest = max(newest, child.stat().st_mtime)
+        except OSError:
+            continue
+        if newest >= cutoff:
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+        if not entry.exists():
+            removed += 1
+    return removed
 
 
 def resolve_allowed_root(raw: str, allowed_roots: list[str]) -> Path:

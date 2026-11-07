@@ -95,10 +95,12 @@ def _ingest_payload(result) -> dict:  # noqa: ANN001 — IngestResult
     }
 
 
-async def _save_upload(upload: UploadFile, target: Path, limit: int) -> int:
-    """分块落盘，守住单文件 50MB 与整批剩余额度（limit），超了立刻删残片。"""
+async def _save_upload(
+    upload: UploadFile, target: Path, limit: int = 0, *, hard_cap: int = MAX_BYTES
+) -> int:
+    """分块落盘。limit=0 表示整批不限；hard_cap 是单文件硬上限（zip 包允许更大）。"""
     size = 0
-    cap = min(limit, MAX_BYTES)
+    cap = min(limit, hard_cap) if limit else hard_cap
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("wb") as fh:
         while chunk := await upload.read(1024 * 1024):
@@ -106,11 +108,53 @@ async def _save_upload(upload: UploadFile, target: Path, limit: int) -> int:
             if size > cap:
                 fh.close()
                 target.unlink(missing_ok=True)
-                if cap < MAX_BYTES:
+                if limit and limit < hard_cap:
                     raise HTTPException(413, "本批累计大小超过上限，请分批导入")
-                raise HTTPException(413, f"文件超过 {MAX_BYTES // 1024 // 1024}MB 上限")
+                raise HTTPException(413, f"文件超过 {cap // 1024 // 1024}MB 上限")
             fh.write(chunk)
     return size
+
+
+def _enqueue_shards(
+    items: list, *, kb_id: str, ws: str, source: str, delete_after: bool,
+    strategy: str, chunk_size: int, chunk_overlap: int, shard: int,
+    max_attempts: int = 3,
+) -> list[dict]:
+    """按 shard 切片入队。
+
+    一个任务只会被一个 worker 槽消费，整批塞一个任务时并发度恒为 1；
+    切开后 worker 有多少槽就能并行跑多少片，这才是批量导入的实际吞吐来源。
+    """
+    queue = get_queue()
+    step = max(1, shard)
+    jobs: list[dict] = []
+    for start in range(0, len(items), step):
+        part = items[start:start + step]
+        job = queue.enqueue(
+            "kb.ingest_batch",
+            {
+                "kb_id": kb_id,
+                "items": [{"path": str(i.path), "name": i.name} for i in part],
+                "source": source,
+                "delete_after": delete_after,
+                "strategy": strategy,
+                "chunk_size": chunk_size,
+                "chunk_overlap": chunk_overlap,
+            },
+            workspace_id=ws,
+            max_attempts=max_attempts,
+        )
+        jobs.append({
+            "job_id": job.id, "files": len(part),
+            "bytes": sum(i.size for i in part), "status": job.status,
+        })
+        # 入队即写初始进度：否则前端聚合的分母要等每个任务被领走才知道，
+        # 百分比会先高后低来回跳
+        queue.set_progress(job.id, {
+            "stage": "排队中", "percent": 0, "done": 0, "total": len(part),
+            "current": "", "ok": 0, "failed": 0, "failed_items": [],
+        })
+    return jobs
 
 
 def _cleanup_dir(path: Path) -> None:
@@ -267,8 +311,8 @@ async def upload_documents_batch(
     _require_kb(store, kb_id, ws)
 
     settings = get_settings()
-    max_files = max(1, settings.import_batch_max_files)
-    max_bytes = max(1, settings.import_batch_max_mb) * 1024 * 1024
+    max_files = settings.import_batch_max_files      # 0 = 不限制
+    max_bytes = settings.import_batch_max_mb * 1024 * 1024  # 0 = 不限制
 
     batch_id = uuid.uuid4().hex[:12]
     staging = UPLOAD_DIR / f"batch-{batch_id}"
@@ -286,7 +330,10 @@ async def upload_documents_batch(
                 skipped.append(batch_io.SkippedItem(only.filename or "包", "仅支持 zip，请重新压缩"))
             else:
                 archive = staging / "archive.zip"
-                size = await _save_upload(only, archive, max_bytes)
+                # 一个包里可以装很多小文件，所以包本身允许到 4GB，解压后按单文件 50MB 卡
+                size = await _save_upload(
+                    only, archive, max_bytes, hard_cap=4 * 1024 * 1024 * 1024
+                )
                 try:
                     items, skipped = batch_io.extract_zip(
                         archive, staging, max_files=max_files, max_bytes=max_bytes,
@@ -307,14 +354,14 @@ async def upload_documents_batch(
         if reason:
             skipped.append(batch_io.SkippedItem(rel, reason))
             continue
-        if len(items) >= max_files:
+        if max_files and len(items) >= max_files:
             skipped.append(batch_io.SkippedItem(rel, f"超出单批 {max_files} 个文件上限"))
             continue
-        if total_bytes >= max_bytes:
+        if max_bytes and total_bytes >= max_bytes:
             skipped.append(batch_io.SkippedItem(rel, "累计大小超过上限"))
             continue
         target = staging / f"{len(items):05d}{Path(rel).suffix.lower()}"
-        size = await _save_upload(upload, target, max_bytes - total_bytes)
+        size = await _save_upload(upload, target, max_bytes - total_bytes if max_bytes else 0)
         total_bytes += size
         items.append(batch_io.BatchItem(target, rel, size))
 
@@ -323,30 +370,26 @@ async def upload_documents_batch(
         detail = "；".join(f"{s.name}（{s.reason}）" for s in skipped[:5]) or "没有可取的文件"
         raise HTTPException(400, f"没有可导入的文件：{detail}")
 
-    job = get_queue().enqueue(
-        "kb.ingest_batch",
-        {
-            "kb_id": kb_id,
-            "items": [{"path": str(i.path), "name": i.name} for i in items],
-            "source": "zip" if from_archive else "upload",
-            "delete_after": True,
-            "strategy": strategy,
-            "chunk_size": chunk_size,
-            "chunk_overlap": chunk_overlap,
-        },
-        workspace_id=ws,
-        max_attempts=3,
+    jobs = _enqueue_shards(
+        items, kb_id=kb_id, ws=ws,
+        source="zip" if from_archive else "upload",
+        delete_after=True,
+        strategy=strategy, chunk_size=chunk_size, chunk_overlap=chunk_overlap,
+        shard=settings.import_batch_shard, max_attempts=3,
     )
     return {
         "batch_id": batch_id,
-        "job_id": job.id,
-        "status": job.status,
+        "job_id": jobs[0]["job_id"],           # 兼容：单分片时就是全部
+        "job_ids": [j["job_id"] for j in jobs],
+        "jobs": jobs,
+        "shards": len(jobs),
+        "status": jobs[0]["status"],
         "files": len(items),
         "bytes": total_bytes,
         "skipped": [s.as_dict() for s in skipped[:50]],
         "skipped_count": len(skipped),
         "backend": settings.queue_backend,
-        "poll": f"/api/jobs/{job.id}",
+        "poll": f"/api/jobs/{jobs[0]['job_id']}",
     }
 
 
@@ -371,37 +414,33 @@ async def import_directory(
 
     items, skipped = batch_io.scan_directory(
         root, recursive=req.recursive,
-        max_files=max(1, settings.import_batch_max_files),
-        max_bytes=max(1, settings.import_batch_max_mb) * 1024 * 1024,
+        max_files=settings.import_batch_max_files,
+        max_bytes=settings.import_batch_max_mb * 1024 * 1024,
     )
     if not items:
         detail = "；".join(f"{s.name}（{s.reason}）" for s in skipped[:5]) or "目录为空"
         raise HTTPException(400, f"没有可导入的文件：{detail}")
 
-    job = get_queue().enqueue(
-        "kb.ingest_batch",
-        {
-            "kb_id": kb_id,
-            "items": [{"path": str(i.path), "name": i.name} for i in items],
-            "source": "dir",
-            "delete_after": False,   # 源目录的文件不能删
-            "strategy": req.strategy,
-            "chunk_size": req.chunk_size,
-            "chunk_overlap": req.chunk_overlap,
-        },
-        workspace_id=ws,
-        max_attempts=2,
+    jobs = _enqueue_shards(
+        items, kb_id=kb_id, ws=ws, source="dir",
+        delete_after=False,   # 源目录的文件不能删
+        strategy=req.strategy, chunk_size=req.chunk_size,
+        chunk_overlap=req.chunk_overlap,
+        shard=settings.import_batch_shard, max_attempts=2,
     )
     return {
-        "job_id": job.id,
-        "status": job.status,
+        "job_id": jobs[0]["job_id"],
+        "job_ids": [j["job_id"] for j in jobs],
+        "jobs": jobs,
+        "shards": len(jobs),
+        "status": jobs[0]["status"],
         "root": str(root),
         "files": len(items),
         "bytes": sum(i.size for i in items),
         "skipped": [s.as_dict() for s in skipped[:50]],
         "skipped_count": len(skipped),
         "backend": settings.queue_backend,
-        "poll": f"/api/jobs/{job.id}",
+        "poll": f"/api/jobs/{jobs[0]['job_id']}",
     }
 
 

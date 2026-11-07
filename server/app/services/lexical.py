@@ -3,11 +3,15 @@
 为什么需要它：向量检索擅长语义相近，但对**专有名词、术语缩写、公式编号**
 这类精确匹配较弱；BM25 恰好相反。两者用 RRF 融合能互补。
 
-实现是内存倒排 + 每次查询现算（开发期数据量小，几十到几千切片都够用）；
-生产替换点：Milvus 2.5 全文检索 / Elasticsearch，接口保持不变。
+实现是内存倒排；生产替换点：Milvus 2.5 全文检索 / Elasticsearch，接口保持不变。
+
+分词结果是这里最贵的一步（千级切片约 1 秒），所以按 chunk_id 缓存 tf：
+切片文本变了 hash 就对不上，自动重算；未变的直接复用。删除切片留下的
+孤儿条目会在缓存涨到上限时整体清掉。
 """
 
 import re
+import threading
 from collections import Counter
 
 import jieba
@@ -21,6 +25,11 @@ _STOPWORDS = {
 
 _PUNCT = re.compile(r"^[\W_]+$", re.UNICODE)
 _initialized = False
+
+# chunk_id -> (文本 hash, 词频, 长度)；只缓存分词结果，几万条量级内存可忽略
+_TF_CACHE: dict[str, tuple[int, Counter[str], int]] = {}
+_TF_CACHE_MAX = 200_000
+_cache_lock = threading.Lock()
 
 
 def _ensure_init() -> None:
@@ -42,10 +51,32 @@ def tokenize(text: str) -> list[str]:
     return tokens
 
 
+def _term_freq(doc_id: str, text: str, *, cache: bool) -> tuple[Counter[str], int]:
+    """取一篇的 (词频, 长度)；命中缓存时跳过分词。"""
+    if not cache:
+        tokens = tokenize(text)
+        return Counter(tokens), len(tokens)
+    stamp = hash(text)
+    with _cache_lock:
+        hit = _TF_CACHE.get(doc_id)
+    if hit is not None and hit[0] == stamp:
+        return hit[1], hit[2]
+    tokens = tokenize(text)
+    tf = Counter(tokens)
+    with _cache_lock:
+        if len(_TF_CACHE) >= _TF_CACHE_MAX:
+            _TF_CACHE.clear()
+        _TF_CACHE[doc_id] = (stamp, tf, len(tokens))
+    return tf, len(tokens)
+
+
 class BM25:
     """Okapi BM25，k1/b 取常用默认值。"""
 
-    def __init__(self, docs: list[tuple[str, str]], k1: float = 1.5, b: float = 0.75):
+    def __init__(
+        self, docs: list[tuple[str, str]], k1: float = 1.5, b: float = 0.75,
+        *, cache: bool = True,
+    ):
         self.k1 = k1
         self.b = b
         self.doc_ids: list[str] = []
@@ -54,11 +85,10 @@ class BM25:
         df: Counter[str] = Counter()
 
         for doc_id, text in docs:
-            tokens = tokenize(text)
-            tf = Counter(tokens)
+            tf, length = _term_freq(doc_id, text, cache=cache)
             self.doc_ids.append(doc_id)
             self.term_freqs.append(tf)
-            self.doc_lens.append(len(tokens))
+            self.doc_lens.append(length)
             for term in tf:
                 df[term] += 1
 

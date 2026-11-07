@@ -106,6 +106,11 @@ APP_QUEUE_BACKEND=redis
 
 队列需要独立进程消费：`python -m app.workers.worker --concurrency 2`。
 
+批量导入的并行度由两者共同决定：一次导入按 `APP_IMPORT_BATCH_SHARD`（默认 50 个文件）
+切成若干队列任务，worker 有多少槽就同时跑多少片。所以「导入一个大目录」的耗时约等于
+`文件数 × 单篇耗时 ÷ 并发数`，想快就加 `--concurrency`（受嵌入端点承载能力限制，
+本地单卡建议 2~4，压太高反而全是超时重试）。
+
 ## 配置
 
 所有配置走环境变量（前缀 `APP_`），也可写在 `server/.env`。
@@ -120,8 +125,9 @@ APP_QUEUE_BACKEND=redis
 | `APP_MILVUS_COLLECTION` | `einstein_chunks` | 集合名，换嵌入模型时换名或 `--drop` |
 | `APP_QUEUE_BACKEND` | `local` | `local`（DB 表）/ `redis` |
 | `APP_REDIS_URL` | `redis://127.0.0.1:6380/0` | Redis 连接串 |
-| `APP_IMPORT_BATCH_MAX_FILES` | `500` | 单批导入文件数上限 |
-| `APP_IMPORT_BATCH_MAX_MB` | `2048` | 单批累计大小上限（MB） |
+| `APP_IMPORT_BATCH_MAX_FILES` | `0`（不限） | 单批导入文件数上限，公网部署建议设 `2000` |
+| `APP_IMPORT_BATCH_MAX_MB` | `0`（不限） | 单批累计大小上限（MB），公网部署建议设 `4096` |
+| `APP_IMPORT_BATCH_SHARD` | `50` | 每 N 个文件切一个队列任务，决定批量导入的并行粒度 |
 | `APP_LOCAL_IMPORT_ROOTS` | 空（禁用） | 允许导入的服务端目录，逗号分隔绝对路径 |
 | `APP_LLM_BASE_URL` | `http://localhost:8080/v1` | OpenAI 兼容端点 |
 | `APP_LLM_MODEL` | `qwen3.6-27b` | 对话模型 |

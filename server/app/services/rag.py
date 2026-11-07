@@ -257,8 +257,11 @@ async def search(
         if not candidates:
             return []
     else:
-        # 词法/混合：BM25 必须在目标库全量文本上建索引
-        candidates = store.list_chunks(kb_ids)
+        # 词法/混合：BM25 必须在目标库全量文本上建索引。
+        # 只有内存向量后端需要向量列（要用它现算余弦），Milvus 走 ANN 索引，
+        # 把 4096 维浮点一起读出来纯属白读——几千条就是几十 MB。
+        need_vec = settings.vector_backend == "memory"
+        candidates = store.list_chunks(kb_ids, with_vector=need_vec)
         if not candidates:
             return []
         if qvec is not None:
@@ -266,6 +269,9 @@ async def search(
                 vec_hits = index.search(kb_ids, qvec, width, chunks=candidates)
             except VectorIndexError as exc:
                 print(f"[rag] 向量索引不可用，降级内存打散：{exc}", flush=True)
+                if not need_vec:
+                    # 降级路径才需要向量，补一次带向量的查询
+                    candidates = store.list_chunks(kb_ids, with_vector=True)
                 vec_hits = MemoryIndex.score(candidates, qvec, width)
 
     by_id = {c.id: c for c in candidates}

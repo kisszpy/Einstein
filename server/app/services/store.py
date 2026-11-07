@@ -123,9 +123,15 @@ class KBStore:
 
         safe_upsert(chunks)
 
-    def list_chunks(self, kb_ids: list[str] | None = None, document_id: str | None = None) -> list[Chunk]:
-        """按知识库直接取切片：检索热路径用它，避免把全库向量读进内存。"""
-        return self.repo.list_chunks(kb_ids, document_id)
+    def list_chunks(
+        self, kb_ids: list[str] | None = None, document_id: str | None = None,
+        *, with_vector: bool = True,
+    ) -> list[Chunk]:
+        """按知识库直接取切片：检索热路径用它，避免把全库向量读进内存。
+
+        with_vector=False 用于词法检索——BM25 只要文本，带向量会白读几十 MB。
+        """
+        return self.repo.list_chunks(kb_ids, document_id, with_vector=with_vector)
 
     def get_chunks(self, chunk_ids: list[str]) -> list[Chunk]:
         """按 id 回表：向量索引命中后只取这几条（纯向量检索路径）。"""

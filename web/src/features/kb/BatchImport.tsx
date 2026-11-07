@@ -12,7 +12,6 @@ const SKIP_DIRS = new Set([
   "__MACOSX", ".git", ".svn", "node_modules", ".venv", "venv",
   "__pycache__", ".idea", ".vscode", ".pytest_cache", ".mypy_cache",
 ]);
-const MAX_FILES = 500;
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
 
 interface Picked {
@@ -63,6 +62,16 @@ interface Props {
   onFinished: () => void;
 }
 
+/** 批量接口返回：大批量会拆成多个任务并行跑（job_ids） */
+interface BatchResponse {
+  job_id: string;
+  job_ids?: string[];
+  jobs?: Array<{ job_id: string; files: number }>;
+  shards?: number;
+  files?: number;
+  skipped?: Skipped[];
+}
+
 const ext = (name: string) => {
   const i = name.lastIndexOf(".");
   return i >= 0 ? name.slice(i).toLowerCase() : "";
@@ -93,10 +102,6 @@ function classify(files: Array<{ file: File; path: string }>) {
     const reason = skipReason(item.path, item.file.size);
     if (reason) {
       skipped.push({ name: item.path, reason });
-      continue;
-    }
-    if (picked.length >= MAX_FILES) {
-      skipped.push({ name: item.path, reason: `超出单批 ${MAX_FILES} 个文件上限` });
       continue;
     }
     picked.push(item);
@@ -136,8 +141,8 @@ export function BatchImport({ kbId, onFinished }: Props) {
   const [picked, setPicked] = useState<Picked[]>([]);
   const [skipped, setSkipped] = useState<Skipped[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [job, setJob] = useState<JobView | null>(null);
+  const [jobIds, setJobIds] = useState<string[]>([]);
+  const [jobs, setJobs] = useState<JobView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [dirPath, setDirPath] = useState("");
   const [dirOpen, setDirOpen] = useState(false);
@@ -149,15 +154,15 @@ export function BatchImport({ kbId, onFinished }: Props) {
     dirInput.current?.setAttribute("directory", "");
   }, []);
 
-  const running = jobId !== null;
+  const running = jobIds.length > 0;
   const totalBytes = picked.reduce((sum, p) => sum + p.file.size, 0);
 
   const take = useCallback((items: Array<{ file: File; path: string }>, extra: Skipped[] = []) => {
     const { picked: ok, skipped: bad } = classify(items);
-    setPicked((prev) => [...prev, ...ok].slice(0, MAX_FILES));
+    setPicked((prev) => [...prev, ...ok]);
     setSkipped((prev) => [...prev, ...extra, ...bad]);
     setError(null);
-    setJob(null);
+    setJobs([]);
   }, []);
 
   const onPick = (list: FileList | null) => {
@@ -198,7 +203,7 @@ export function BatchImport({ kbId, onFinished }: Props) {
   const submit = async () => {
     if (picked.length === 0) return;
     setError(null);
-    setJob(null);
+    setJobs([]);
     const form = new FormData();
     // 两个字段各自的顺序要保持一一对应（后端按索引配对）
     for (const item of picked) {
@@ -211,10 +216,10 @@ export function BatchImport({ kbId, onFinished }: Props) {
         const data = (await res.json().catch(() => null)) as { detail?: string } | null;
         throw new Error(data?.detail || `上传失败（HTTP ${res.status}）`);
       }
-      const data = (await res.json()) as { job_id: string; skipped?: Skipped[] };
+      const data = (await res.json()) as BatchResponse;
       if (data.skipped?.length) setSkipped((prev) => [...prev, ...(data.skipped ?? [])]);
       setPicked([]);
-      setJobId(data.job_id);
+      setJobIds(data.job_ids?.length ? data.job_ids : [data.job_id]);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -223,7 +228,7 @@ export function BatchImport({ kbId, onFinished }: Props) {
   const importDir = async () => {
     if (!dirPath.trim()) return;
     setError(null);
-    setJob(null);
+    setJobs([]);
     try {
       const res = await fetch(`/api/kb/${kbId}/documents/dir`, {
         method: "POST",
@@ -234,31 +239,37 @@ export function BatchImport({ kbId, onFinished }: Props) {
         const data = (await res.json().catch(() => null)) as { detail?: string } | null;
         throw new Error(data?.detail || `导入失败（HTTP ${res.status}）`);
       }
-      const data = (await res.json()) as { job_id: string; files: number; skipped?: Skipped[] };
+      const data = (await res.json()) as BatchResponse;
       setSkipped(data.skipped ?? []);
-      setJobId(data.job_id);
+      setJobIds(data.job_ids?.length ? data.job_ids : [data.job_id]);
     } catch (err) {
       setError((err as Error).message);
     }
   };
 
-  // 轮询任务进度；done/failed 后停表并让父级刷新
+  // 多任务并行：每轮把所有分片的进度一起拉回来，全部到终态才停表
   useEffect(() => {
-    if (!jobId) return;
+    if (jobIds.length === 0) return;
     let alive = true;
     let timer: number | undefined;
     const tick = async () => {
       try {
-        const res = await fetch(`/api/jobs/${jobId}`);
+        const views = await Promise.all(
+          jobIds.map(async (id) => {
+            const res = await fetch(`/api/jobs/${id}`);
+            return res.ok ? ((await res.json()) as JobView) : null;
+          }),
+        );
         if (!alive) return;
-        if (res.ok) {
-          const data = (await res.json()) as JobView;
-          setJob(data);
-          if (data.status === "done" || data.status === "failed") {
-            setJobId(null);
-            onFinished();
-            return;
-          }
+        const got = views.filter((v): v is JobView => v !== null);
+        if (got.length) setJobs(got);
+        const settled =
+          got.length === jobIds.length &&
+          got.every((v) => v.status === "done" || v.status === "failed");
+        if (settled) {
+          setJobIds([]);
+          onFinished();
+          return;
         }
       } catch {
         /* 网络抖动忽略，下一轮再试 */
@@ -270,12 +281,26 @@ export function BatchImport({ kbId, onFinished }: Props) {
       alive = false;
       if (timer) window.clearTimeout(timer);
     };
-  }, [jobId, onFinished]);
+  }, [jobIds, onFinished]);
 
-  const progress = job?.progress;
-  const percent = progress?.percent ?? (job?.status === "done" ? 100 : 0);
-  const result = job?.status === "done" ? job.result : undefined;
-  const failedItems = result?.failed_items ?? progress?.failed_items ?? [];
+  const sum = (pick: (j: JobView) => number | undefined) =>
+    jobs.reduce((acc, j) => acc + (pick(j) ?? 0), 0);
+  const total = sum((j) => j.progress?.total ?? j.result?.total);
+  const done = sum((j) => j.progress?.done);
+  const okCount = sum((j) => j.result?.ok ?? j.progress?.ok);
+  const failedCount = sum((j) => j.result?.failed ?? j.progress?.failed);
+  const dedupedCount = sum((j) => j.result?.deduped);
+  const runningShards = jobs.filter((j) => j.status === "running" || j.status === "queued").length;
+  const finishedAll =
+    jobs.length > 0 && jobs.every((j) => j.status === "done" || j.status === "failed");
+  const failedJob = jobs.find((j) => j.status === "failed");
+  const percent = total
+    ? Math.min(100, Math.floor((done * 100) / total))
+    : finishedAll ? 100 : 0;
+  const failedItems = jobs.flatMap(
+    (j) => j.result?.failed_items ?? j.progress?.failed_items ?? [],
+  );
+  const currentName = jobs.find((j) => j.progress?.current)?.progress?.current;
 
   return (
     <div className="space-y-3">
@@ -310,7 +335,7 @@ export function BatchImport({ kbId, onFinished }: Props) {
           </Button>
         </div>
         <p className="mt-2.5 text-[11.5px] text-tertiary">
-          支持 PDF / Word / Excel / PPT / CSV / HTML / Markdown / TXT · 单批 {MAX_FILES} 个文件 ·
+          支持 PDF / Word / Excel / PPT / CSV / HTML / Markdown / TXT · 不限文件数 · 单文件 ≤ 50MB ·
           目录结构会保留为文档名
         </p>
         <input
@@ -335,7 +360,7 @@ export function BatchImport({ kbId, onFinished }: Props) {
             if (file) {
               setPicked([{ file, path: file.name }]);
               setSkipped([]);
-              setJob(null);
+              setJobs([]);
               setError(null);
             }
             e.target.value = "";
@@ -379,15 +404,13 @@ export function BatchImport({ kbId, onFinished }: Props) {
       )}
 
       {/* 进度 */}
-      {(running || job) && (
+      {(running || jobs.length > 0) && (
         <div className="rounded-lg border border-line bg-surface-1 px-3.5 py-3">
           <div className="flex items-center justify-between gap-3 text-[12.5px]">
             <span className="min-w-0 truncate text-secondary">
-              {job?.status === "failed"
-                ? "任务失败"
-                : result
-                  ? `完成：成功 ${result.ok ?? 0}${result.failed ? ` · 失败 ${result.failed}` : ""}${result.deduped ? ` · 去重命中 ${result.deduped}` : ""}`
-                  : `${progress?.stage || "排队中"}${progress?.current ? ` · ${progress.current}` : ""}`}
+              {finishedAll
+                ? `完成：成功 ${okCount}${failedCount ? ` · 失败 ${failedCount}` : ""}${dedupedCount ? ` · 去重命中 ${dedupedCount}` : ""}`
+                : `导入 ${done}/${total || "?"}${jobs.length > 1 ? ` · ${Math.min(runningShards || 1, jobs.length)}/${jobs.length} 组并行` : ""}${currentName ? ` · ${currentName}` : ""}`}
             </span>
             <span className="shrink-0 tabular-nums text-tertiary">{percent}%</span>
           </div>
@@ -395,13 +418,13 @@ export function BatchImport({ kbId, onFinished }: Props) {
             <div
               className={cn(
                 "h-full rounded-full transition-[width] duration-300",
-                job?.status === "failed" ? "bg-danger" : "bg-brand",
+                finishedAll && okCount === 0 && failedCount > 0 ? "bg-danger" : "bg-brand",
               )}
               style={{ width: `${Math.max(2, percent)}%` }}
             />
           </div>
-          {job?.status === "failed" && job.error && (
-            <p className="mt-2 break-words text-[11.5px] text-danger">{job.error}</p>
+          {failedJob?.error && (
+            <p className="mt-2 break-words text-[11.5px] text-danger">{failedJob.error}</p>
           )}
           {failedItems.length > 0 && (
             <ul className="mt-2 space-y-0.5 text-[11.5px] text-danger/90">

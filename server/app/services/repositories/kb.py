@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
 
@@ -60,7 +61,10 @@ class KbRepository(Protocol):
     def delete_document(self, doc_id: str) -> int: ...
     def add_chunks(self, chunks: list[Chunk]) -> None: ...
     def get_chunks(self, chunk_ids: list[str]) -> list[Chunk]: ...
-    def list_chunks(self, kb_ids: list[str] | None = None, document_id: str | None = None) -> list[Chunk]: ...
+    def list_chunks(
+        self, kb_ids: list[str] | None = None, document_id: str | None = None,
+        *, with_vector: bool = True,
+    ) -> list[Chunk]: ...
     # ---- 文档版本 ----
     def add_version(
         self, *, document_id: str, kb_id: str, version: int, content: str,
@@ -261,14 +265,21 @@ class JsonKbRepository:
         with self._lock:
             self.chunks.extend(chunks)
 
-    def list_chunks(self, kb_ids: list[str] | None = None, document_id: str | None = None) -> list[Chunk]:
+    def list_chunks(
+        self, kb_ids: list[str] | None = None, document_id: str | None = None,
+        *, with_vector: bool = True,
+    ) -> list[Chunk]:
         rows = self.chunks
         if kb_ids is not None:
             allowed = set(kb_ids)
             rows = [c for c in rows if c.kb_id in allowed]
         if document_id:
             rows = [c for c in rows if c.document_id == document_id]
-        return list(rows)
+        if with_vector:
+            return list(rows)
+        # 内存后端本来也只是一次引用，但契约要一致：不给向量就返回空列表，
+        # 免得调用方以为"拿到了向量"却只在 SQL 后端拿到。
+        return [replace(c, vector=[]) for c in rows]
 
     def get_chunks(self, chunk_ids: list[str]) -> list[Chunk]:
         if not chunk_ids:
@@ -535,7 +546,10 @@ class SqlKbRepository:
             rows,
         )
 
-    def list_chunks(self, kb_ids: list[str] | None = None, document_id: str | None = None) -> list[Chunk]:
+    def list_chunks(
+        self, kb_ids: list[str] | None = None, document_id: str | None = None,
+        *, with_vector: bool = True,
+    ) -> list[Chunk]:
         where, params = [], []
         if kb_ids is not None:
             if not kb_ids:
@@ -546,9 +560,12 @@ class SqlKbRepository:
             where.append("document_id = ?")
             params.append(document_id)
         clause = f" WHERE {' AND '.join(where)}" if where else ""
+        # 词法检索不需要向量：4096 维 float 一条 16KB，几千条就是几十 MB 的白读
+        cols = "id, kb_id, document_id, seq, text, char_start, char_end, vector_kind, created_at"
+        if with_vector:
+            cols = cols.replace("vector_kind", "vector, vector_kind")
         rows = self.db.query(
-            "SELECT id, kb_id, document_id, seq, text, char_start, char_end, vector,"
-            f" vector_kind, created_at FROM chunks{clause} ORDER BY kb_id, document_id, seq",
+            f"SELECT {cols} FROM chunks{clause} ORDER BY kb_id, document_id, seq",
             params,
         )
         return [self._chunk(r) for r in rows]

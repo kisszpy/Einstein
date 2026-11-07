@@ -48,8 +48,15 @@ class Settings(BaseSettings):
     # 服务端目录导入等于「让服务读本机任意文件」，默认关闭。
     # 配置成逗号分隔的绝对路径后，只允许导入这些目录（及其子目录）下的文件。
     local_import_roots: str = ""
-    import_batch_max_files: int = 500      # 单批文件数上限（超出部分跳过）
-    import_batch_max_mb: int = 2048        # 单批累计大小上限（MB）
+
+    # 单批上限：0 = 不限制（整目录一次导入）。公网部署建议设个上限防 zip 炸弹。
+    import_batch_max_files: int = 0        # 文件数上限；0 = 不限
+    import_batch_max_mb: int = 0           # 累计大小上限（MB）；0 = 不限
+    # 每 N 个文件切一个任务。一个任务只能被一个 worker 槽消费，
+    # 所以大批量要切小片，配合 --concurrency 才能真正并行。
+    import_batch_shard: int = 50
+    # 批次暂存目录的保留时长：超过这个时间还没被任务回收就整目录删掉
+    import_staging_ttl_hours: float = 6.0
 
     @property
     def import_roots(self) -> list[str]:

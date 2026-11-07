@@ -28,6 +28,20 @@ def _noop(job: Job) -> dict:
     return {"echo": job.payload}
 
 
+def _discard(path) -> bool:  # noqa: ANN001 — Path，但延迟导入避免顶部负担
+    """删暂存文件；删不掉返回 False（磁盘占用要能被统计出来，不能静默吞掉）。
+
+    注意只删本任务自己的文件：一次批量上传会拆成多个分片任务共用同一个
+    batch-xxx 目录，谁都不许 rmtree 整个目录，否则会把别的分片还没处理的
+    文件一起删掉。
+    """
+    try:
+        path.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
 @register("kb.ingest")
 def _kb_ingest(job: Job) -> dict:
     """异步摄取一条上传的文档：解析 → 去重 → 切片 → 嵌入 → 入库。
@@ -142,17 +156,15 @@ def _kb_ingest_batch(job: Job) -> dict:
     store = get_store()
     if store.repo.get_kb(kb_id) is None:
         for item in items:
-            if delete_after:
-                try:
-                    Path(item.get("path") or "").unlink()
-                except OSError:
-                    pass
+            if delete_after and (item or {}).get("path"):
+                _discard(Path(item["path"]))
         raise PermanentJobError(f"知识库 {kb_id} 已被删除，放弃入库")
 
     total = len(items)
     ok = 0
     deduped = 0
     chunks = 0
+    stale = 0          # 删不掉的暂存文件数：磁盘占用要有账可查
     failed: list[dict] = []
     documents: list[dict] = []
     retryable = 0
@@ -178,19 +190,13 @@ def _kb_ingest_batch(job: Job) -> dict:
             content = parse_document(src.read_bytes(), name)
         except ParseError as exc:
             failed.append({"name": name, "error": str(exc)})
-            if delete_after:
-                try:
-                    src.unlink()
-                except OSError:
-                    pass
+            if delete_after and not _discard(src):
+                stale += 1
             continue
         if not content.strip():
             failed.append({"name": name, "error": "解析结果为空"})
-            if delete_after:
-                try:
-                    src.unlink()
-                except OSError:
-                    pass
+            if delete_after and not _discard(src):
+                stale += 1
             continue
 
         try:
@@ -211,11 +217,8 @@ def _kb_ingest_batch(job: Job) -> dict:
                 "id": result.document.id, "name": result.document.name,
                 "chunk_count": result.chunk_count, "deduped": result.deduped,
             })
-        if delete_after:
-            try:
-                src.unlink()
-            except OSError:
-                pass
+        if delete_after and not _discard(src):
+            stale += 1
 
     if ok == 0 and retryable:
         raise RuntimeError(failed[-1]["error"] if failed else "批量导入失败")
@@ -224,10 +227,18 @@ def _kb_ingest_batch(job: Job) -> dict:
         "stage": "完成", "percent": 100, "done": total, "total": total,
         "current": "", "ok": ok, "failed": len(failed), "failed_items": failed[:20],
     })
+    if stale:
+        # 删不掉通常是权限/占用（Windows 上很常见）。留个明确日志，
+        # 否则 uploads 目录会悄悄涨到几个 G。
+        print(
+            f"[worker] 批次 {job.id} 有 {stale} 个暂存文件删除失败，"
+            f"目录需人工清理：{Path(items[0].get('path', '')).parent if items else '?'}",
+            flush=True,
+        )
     return {
         "kb_id": kb_id, "total": total, "ok": ok, "deduped": deduped,
         "failed": len(failed), "failed_items": failed[:20],
-        "chunks": chunks, "documents": documents,
+        "chunks": chunks, "documents": documents, "stale_files": stale,
     }
 
 

@@ -122,6 +122,19 @@ def create_app() -> FastAPI:
     app.include_router(platform.router, prefix="/api")
     # 对外开放 API：/v1/...（Bearer 鉴权，与 /api 控制台面分开）
     app.include_router(openapi.router)
+
+    # 启动时回收过期的批次暂存目录：分片任务删不掉别人还没处理的文件，
+    # 批次目录只能靠时间兜底清理（Windows 上文件被占用时尤其容易残留）
+    try:
+        from app.services import batch as batch_io
+
+        removed = batch_io.purge_stale_batches(
+            kb.UPLOAD_DIR, max_age_hours=settings.import_staging_ttl_hours
+        )
+        if removed:
+            print(f"[startup] 清理过期批次暂存目录 {removed} 个", flush=True)
+    except Exception as exc:  # noqa: BLE001 — 清理失败不能挡住启动
+        print(f"[startup] 清理批次暂存目录失败：{exc}", flush=True)
     return app
 
 

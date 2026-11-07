@@ -129,7 +129,19 @@ def run_forever(queue, *, concurrency: int, poll: float, block: bool, max_jobs: 
                     continue
                 stop.wait(poll)
                 continue
-            execute(queue, job)
+            # 单条任务出任何状况都不能让槽退出：槽悄悄少一个，吞吐就掉了，
+            # 而且外层 join 一返回整个 worker 就以 exit 0 结束，没人会发现。
+            try:
+                execute(queue, job)
+            except SystemExit as exc:
+                print(f"[worker] 槽 {idx} 被中断（{exc}），继续后续任务", flush=True)
+                continue
+            except BaseException as exc:  # noqa: BLE001 — 兜底，保证槽存活
+                print(
+                    f"[worker] 槽 {idx} 执行异常（{type(exc).__name__}: {exc}），继续",
+                    flush=True,
+                )
+                continue
             with lock:
                 counter["done"] += 1
                 if max_jobs and counter["done"] >= max_jobs:
@@ -140,6 +152,9 @@ def run_forever(queue, *, concurrency: int, poll: float, block: bool, max_jobs: 
         t.start()
     for t in threads:
         t.join()
+    if not stop.is_set():
+        # 走到这里说明所有槽都意外结束了但没人要求停：如实报出来，别静默退出
+        print("[worker] 全部槽已退出，但未收到停止信号，可能是环境拦截了文件操作", flush=True)
     return counter["done"]
 
 
