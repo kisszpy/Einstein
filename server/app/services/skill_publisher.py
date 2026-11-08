@@ -29,7 +29,13 @@ def skills_dir(workspace_id: str) -> Path:
 
 
 def _frontmatter(skill: Skill, description: str) -> str:
-    lines = ["---", f"name: {slug_of(skill)}", f"description: {description}"]
+    # description 用 JSON 双引号标量：GitHub 技能的描述里普遍含「: 」等
+    # YAML 特殊序列，裸写会解析失败（mapping values are not allowed here）
+    lines = [
+        "---",
+        f"name: {slug_of(skill)}",
+        f"description: {json.dumps(description, ensure_ascii=False)}",
+    ]
     if skill.tools:
         lines.append(f"allowed-tools: {' '.join(skill.tools)}")
     lines.append("---")
