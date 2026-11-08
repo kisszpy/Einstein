@@ -109,6 +109,19 @@ def _resolve_mounts(ws: str, req: AgentRunRequest) -> tuple[str, list[str], floa
             default_skill_ids = list(expert.skill_ids)
 
     skill_ids = list(dict.fromkeys([*req.skill_ids, *default_skill_ids]))
+
+    # PPT 类任务自动钉装 slidep 版式技能：本地模型极少主动渐进披露去读
+    # SKILL.md，不钉装则 DSL 语法与设计规范根本不进上下文——质量与
+    # 「不用脚本手搓」的合规都塌。钉装 = SKILL.md 全文强制装载。
+    task_text = req.task or ""
+    if any(k in task_text for k in ("PPT", "ppt", "幻灯", "演示文稿", "slide", "deck", "Slides")):
+        from app.services.skills import get_skill_store
+
+        for sk in get_skill_store().list_skills(ws):
+            if sk.enabled and sk.name == "slidep 演示文稿设计" and sk.id not in skill_ids:
+                skill_ids.append(sk.id)
+                break
+
     pinned = skill_publisher.pinned_slugs(ws, skill_ids)
     return persona, pinned, temperature
 
