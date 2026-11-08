@@ -16,7 +16,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
-from app.services.capabilities import code_exec, deck, ppt, sandbox, web
+from app.services.capabilities import code_exec, deck, ppt, sandbox, slidep, web
 
 # 能力分组（前端展示 / 默认勾选用）
 CAPABILITIES = [
@@ -48,8 +48,8 @@ CAPABILITIES = [
         "id": "ppt",
         "name": "演示文稿",
         "icon": "presentation",
-        "description": "把结构化内容渲染成带主题版式的 16:9 PPT",
-        "tools": ["ppt_create"],
+        "description": "slidep DSL 逐页生成高质量 16:9 PPT（Flexbox 布局+自动校验），或 ppt_create 快速出稿",
+        "tools": ["slide_upsert", "slide_lint", "ppt_create"],
         "default": True,
     },
 ]
@@ -143,6 +143,20 @@ class CodeRunArgs(BaseModel):
 
 class Slide(BaseModel):
     model_config = {"extra": "allow"}
+
+
+class SlideUpsertArgs(BaseModel):
+    pptx_path: str = Field(description="项目内 PPTX 相对路径，如 deck/产品发布.pptx（不存在会自动创建）")
+    dsl_file: str = Field(default="", description="项目内 DSL 文件相对路径（首选，如 slides/01.slide）")
+    dsl: str = Field(default="", description="内联 DSL 字符串（与 dsl_file 二选一）")
+    page_index: int = Field(default=-1, description="-1=追加新页；>=0 替换该页（0-based）")
+
+
+class SlideLintArgs(BaseModel):
+    pptx_path: str = Field(description="项目内 PPTX 相对路径（作为校验上下文）")
+    dsl_file: str = Field(default="", description="项目内 DSL 文件相对路径")
+    dsl: str = Field(default="", description="内联 DSL 字符串（与 dsl_file 二选一）")
+    page_index: int = Field(default=0, description="0-based 页码上下文")
 
 
 class PptCreateArgs(BaseModel):
@@ -281,6 +295,52 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
                 _safe(_code_run), name="code_run",
                 description="执行 Python/Node 代码并返回 stdout/stderr。仅用于精确计算、数据处理或验证写好的代码；普通问答和写作不要写代码。无项目时自动落在临时沙盒，不会影响用户项目",
                 args_schema=CodeRunArgs, coroutine=None))
+
+    if "slide_upsert" in wanted:
+        def _slide_common(req: "SlideUpsertArgs | SlideLintArgs") -> tuple[Path, str]:
+            project = need_project()
+            root = sandbox.project_dir(ws, project)
+            out = sandbox.resolve_in(root, req.pptx_path)
+            if req.dsl_file:
+                dsl_path = sandbox.resolve_in(root, req.dsl_file)
+                dsl = dsl_path.read_text(encoding="utf-8")
+            elif req.dsl:
+                dsl = req.dsl
+            else:
+                raise sandbox.SandboxError("dsl_file 与 dsl 至少提供一个")
+            return out, dsl
+
+        def _slide_upsert(pptx_path: str, dsl_file: str = "", dsl: str = "", page_index: int = -1) -> str:
+            out, text = _slide_common(SlideUpsertArgs(
+                pptx_path=pptx_path, dsl_file=dsl_file, dsl=dsl, page_index=page_index))
+            out.parent.mkdir(parents=True, exist_ok=True)
+            result = slidep.upsert(out, text, page_index)
+            if result.get("ok"):
+                ctx.note_artifact(pptx_path, "pptx")
+            return sandbox.dumps(result)
+
+        def _slide_lint(pptx_path: str, dsl_file: str = "", dsl: str = "", page_index: int = 0) -> str:
+            out, text = _slide_common(SlideLintArgs(
+                pptx_path=pptx_path, dsl_file=dsl_file, dsl=dsl, page_index=page_index))
+            return sandbox.dumps(slidep.lint(out, text, page_index))
+
+        tools.append(StructuredTool.from_function(
+            _safe(_slide_upsert), name="slide_upsert",
+            description=(
+                "把一页 slidep DSL 编译成 PPT 页并插入/替换到项目内 PPTX（不存在自动创建）。"
+                "DSL 是 JSX 风格：<Slide width={1280} height={720}> 里用 Box/Text 等组件、"
+                "内联 style 写版式，支持 Flexbox 自动布局。生成高质量 PPT 的标准路径："
+                "先 fs_write 每页 DSL 到 slides/NN.slide，再逐页 upsert + lint 校验修复"
+            ),
+            args_schema=SlideUpsertArgs, coroutine=None))
+
+        tools.append(StructuredTool.from_function(
+            _safe(_slide_lint), name="slide_lint",
+            description=(
+                "对一页 slidep DSL 做本地布局校验（文本溢出/组件重叠/零尺寸等）。"
+                "upsert 后必须 lint：diagnostics 有 error 时修 DSL 再 upsert 同一页，直到无 error"
+            ),
+            args_schema=SlideLintArgs, coroutine=None))
 
     if "ppt_create" in wanted:
         def _ppt_create(
