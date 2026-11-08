@@ -7,6 +7,7 @@ import json
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.services.state import blob
@@ -93,6 +94,9 @@ class Skill:
     files: list[dict] = field(default_factory=list)  # [{path, size}]
     installed_at: str = ""
     updated_at: str = ""
+    # ---- 版本管理（semver + 快照回滚） ----
+    version: str = "0.1.0"
+    versions: list[dict] = field(default_factory=list)  # [{version, description, system_prompt, tools, commit, saved_at, note}]
 
 
 class SkillStore:
@@ -158,6 +162,51 @@ class SkillStore:
             return False
         del self.skills[skill_id]
         return True
+
+    # ---- 版本管理 ----
+    MAX_VERSIONS = 20
+
+    def snapshot(self, skill_id: str, note: str = "") -> dict | None:
+        """把当前内容固化为一个新版本（patch 递增），返回快照记录。"""
+        skill = self.skills.get(skill_id)
+        if skill is None:
+            return None
+        parts = skill.version.split("-")[0].split(".")
+        while len(parts) < 3:
+            parts.append("0")
+        try:
+            patch = int(parts[2]) + 1
+        except ValueError:
+            patch = 1
+        parts[2] = str(patch)
+        skill.version = ".".join(parts)
+        entry = {
+            "version": skill.version,
+            "name": skill.name,
+            "description": skill.description,
+            "system_prompt": skill.system_prompt,
+            "tools": list(skill.tools),
+            "commit": skill.commit,
+            "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "note": note,
+        }
+        skill.versions = (skill.versions + [entry])[-self.MAX_VERSIONS:]
+        return entry
+
+    def rollback(self, skill_id: str, version: str) -> Skill | None:
+        """回滚到指定版本：恢复内容并追加一条回滚记录（版本号继续递增）。"""
+        skill = self.skills.get(skill_id)
+        if skill is None:
+            return None
+        snap = next((v for v in skill.versions if v.get("version") == version), None)
+        if snap is None:
+            return None
+        skill.name = snap.get("name", skill.name)
+        skill.description = snap.get("description", skill.description)
+        skill.system_prompt = snap.get("system_prompt", skill.system_prompt)
+        skill.tools = list(snap.get("tools", []))
+        self.snapshot(skill_id, note=f"回滚自 {version}")
+        return skill
 
     # ---- 持久化 ----
     def save(self) -> None:

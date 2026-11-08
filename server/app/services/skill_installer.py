@@ -587,3 +587,89 @@ def install(
     created = store.upsert(skill)
     store.save()
     return store.get(skill_id) or skill, created
+
+
+# ---------- zip 导入导出（本地技能包互通） ----------
+
+
+def export_zip(skill: Skill) -> bytes:
+    """把技能（元数据 + 全部文件）打包为 zip，返回字节流。"""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    root = SKILLS_DIR / skill.id
+    meta = {
+        "id": skill.id,
+        "name": skill.name,
+        "description": skill.description,
+        "system_prompt": skill.system_prompt,
+        "tools": skill.tools,
+        "version": skill.version,
+        "source": skill.source,
+        "source_url": skill.source_url,
+        "repo": skill.repo,
+        "ref": skill.ref,
+        "author": skill.author,
+        "license": skill.license,
+    }
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("skill.json", json.dumps(meta, ensure_ascii=False, indent=2))
+        if root.exists():
+            for path in sorted(root.rglob("*")):
+                if path.is_file():
+                    zf.write(path, path.relative_to(root).as_posix())
+    return buf.getvalue()
+
+
+MAX_IMPORT_BYTES = 50 * 1024 * 1024  # zip 解压后总大小上限（防炸弹）
+
+
+def import_zip(data: bytes, store: SkillStore, workspace_id: str) -> Skill:
+    """从 zip 导入技能：skill.json 元数据 + 其余文件原样落盘。"""
+    import io
+    import zipfile
+
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as exc:
+        raise SkillInstallError("不是有效的 zip 文件") from exc
+    try:
+        total = sum(info.file_size for info in zf.infolist())
+        if total > MAX_IMPORT_BYTES:
+            raise SkillInstallError("zip 解压后超过 50MB 上限")
+        raw = zf.read("skill.json") if "skill.json" in zf.namelist() else None
+        if raw is None:
+            raise SkillInstallError("zip 缺少 skill.json 元数据（请先导出再迁移）")
+        meta = json.loads(raw.decode("utf-8"))
+        skill = store.add(
+            name=str(meta.get("name") or "导入技能")[:80],
+            description=str(meta.get("description") or "")[:400],
+            system_prompt=str(meta.get("system_prompt") or "")[:MAX_PROMPT_CHARS],
+            tools=[str(t) for t in meta.get("tools", [])],
+            workspace_id=workspace_id,
+        )
+        skill.source = "zip"
+        skill.source_url = str(meta.get("source_url") or "")
+        skill.repo = str(meta.get("repo") or "")
+        skill.version = str(meta.get("version") or "0.1.0")
+        skill.installed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        root = (SKILLS_DIR / skill.id).resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        manifest: list[dict] = []
+        for name in zf.namelist():
+            if name == "skill.json" or name.endswith("/"):
+                continue
+            dest = (root / name).resolve()
+            if root not in dest.parents:
+                continue  # 路径穿越保护
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            content = zf.read(name)
+            dest.write_bytes(content)
+            manifest.append({"path": name, "size": len(content)})
+        skill.files = sorted(manifest, key=lambda item: item["path"])
+        store.save()
+        return skill
+    finally:
+        zf.close()

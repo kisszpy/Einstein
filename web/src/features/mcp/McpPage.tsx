@@ -22,6 +22,8 @@ interface McpServer {
   last_error: string;
   refreshed_at: string;
   connection: string;
+  approved_tools?: string[];
+  has_env?: boolean;
 }
 
 const EMPTY_FORM = {
@@ -112,6 +114,16 @@ export function McpPage() {
   const remove = async (s: McpServer) => {
     if (!window.confirm(`删除 MCP 服务器「${s.name}」？其工具将不再对智能体可见。`)) return;
     await fetch(`/api/mcp/servers/${s.id}`, { method: "DELETE" });
+    await load();
+  };
+
+  /** 工具审批：把工具加入/移出白名单；白名单非空后只有名单内工具可被调用 */
+  const approveTool = async (s: McpServer, tool: string, approved: boolean) => {
+    await fetch(`/api/mcp/servers/${s.id}/tools/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool, approved }),
+    });
     await load();
   };
 
@@ -224,18 +236,46 @@ export function McpPage() {
                     {s.refreshed_at && (
                       <p className="mt-1 text-xs text-tertiary">工具同步于 {s.refreshed_at} UTC</p>
                     )}
+                    {s.has_env && (
+                      <p className="mt-1 text-xs text-tertiary">
+                        已配置凭证（加密落盘，不可回显）
+                      </p>
+                    )}
                     {s.tools.length > 0 && (
                       <div className="mt-1.5 flex flex-wrap gap-1">
-                        {s.tools.map((t) => (
-                          <span
-                            key={t.name}
-                            className="rounded bg-surface-3 px-1.5 py-0.5 text-xs text-secondary"
-                            title={t.description}
-                          >
-                            {t.name}
-                          </span>
-                        ))}
+                        {s.tools.map((t) => {
+                          // 白名单为空 = 全部放行；非空后只有名单内工具可用
+                          const approved =
+                            !s.approved_tools?.length || s.approved_tools.includes(t.name);
+                          return (
+                            <button
+                              key={t.name}
+                              onClick={() => void approveTool(s, t.name, !approved)}
+                              title={
+                                approved
+                                  ? "已放行，点击移出白名单（收紧审批）"
+                                  : "未审批，点击加入白名单"
+                              }
+                              className={cn(
+                                "rounded px-1.5 py-0.5 text-xs transition-colors duration-150",
+                                approved
+                                  ? "bg-brand-soft text-brand"
+                                  : "bg-surface-3 text-tertiary line-through",
+                              )}
+                            >
+                              {t.name}
+                            </button>
+                          );
+                        })}
                       </div>
+                    )}
+                    {s.tools.length > 0 && (
+                      <p className="mt-1 text-[11px] text-tertiary">
+                        点工具名切换审批状态
+                        {(s.approved_tools?.length ?? 0) > 0
+                          ? ` · 白名单 ${s.approved_tools?.length}/${s.tools.length}`
+                          : " · 当前全部放行"}
+                      </p>
                     )}
                   </div>
                   <div className="flex shrink-0 items-center gap-1">

@@ -169,12 +169,36 @@ _MIGRATION_005 = [
     "CREATE INDEX IF NOT EXISTS idx_ver_doc ON document_versions(document_id, version)",
 ]
 
+# 006：S2.3 检索质量 —— 父子切片（chunks.parent_seq）+ 评测历史（eval_runs）
+_MIGRATION_006 = [
+    "ALTER TABLE chunks ADD COLUMN parent_seq INTEGER",
+    """
+    CREATE TABLE IF NOT EXISTS eval_runs (
+        id     TEXT PRIMARY KEY,
+        set_id TEXT NOT NULL,
+        kb_id  TEXT NOT NULL,
+        mode   TEXT NOT NULL DEFAULT 'default',
+        report TEXT NOT NULL,
+        ran_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_eval_runs_set ON eval_runs(set_id, ran_at)",
+]
+
+# 007：S2.5 对话体验 —— 会话归档/置顶
+_MIGRATION_007 = [
+    "ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+]
+
 MIGRATIONS: list[tuple[int, list[str]]] = [
     (1, _MIGRATION_001),
     (2, _MIGRATION_002),
     (3, _MIGRATION_003),
     (4, _MIGRATION_004),
     (5, _MIGRATION_005),
+    (6, _MIGRATION_006),
+    (7, _MIGRATION_007),
 ]
 
 _TYPE_TOKENS = {

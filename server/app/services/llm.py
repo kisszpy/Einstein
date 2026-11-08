@@ -13,7 +13,7 @@ from langchain_openai import ChatOpenAI
 from openai import AsyncOpenAI
 
 from app.core.config import get_settings
-from app.services import metrics
+from app.services import metrics, ratelimit
 
 
 def get_chat_model() -> ChatOpenAI:
@@ -48,6 +48,20 @@ def _client() -> AsyncOpenAI:
     )
 
 
+def _endpoints() -> list[tuple[str, str, str]]:
+    """主端点在前、降级链在后：[(base_url, api_key, model)]。
+
+    fallback 格式 `base_url::model::api_key`，分号分隔多条。解析失败的条目跳过。
+    """
+    settings = get_settings()
+    out = [(settings.llm_base_url, settings.llm_api_key, settings.llm_model)]
+    for raw in (settings.llm_fallbacks or "").split(";"):
+        parts = [p.strip() for p in raw.split("::") if p.strip()]
+        if len(parts) >= 2:
+            out.append((parts[0], parts[2] if len(parts) > 2 else settings.llm_api_key, parts[1]))
+    return out
+
+
 async def stream_chat(
     messages: list[BaseMessage], temperature: float = 0.7
 ) -> AsyncIterator[tuple[str, str]]:
@@ -58,17 +72,28 @@ async def stream_chat(
     前端渲染为可折叠的「思考过程」块。调用指标在流结束时落库。
     """
     settings = get_settings()
-    client = _client()
     t0 = time.perf_counter()
     usage: dict | None = None
     try:
-        stream = await client.chat.completions.create(
-            model=settings.llm_model,
-            messages=_lc_to_openai_messages(messages),
-            stream=True,
-            temperature=temperature,
-            stream_options={"include_usage": True},
-        )
+        stream = None
+        # 降级链：连接阶段失败（端点宕机/超时）依次试下一个；流开始后不再切换
+        last_exc: Exception | None = None
+        for base_url, api_key, model in _endpoints():
+            client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=180, max_retries=1)
+            try:
+                stream = await client.chat.completions.create(
+                    model=model,
+                    messages=_lc_to_openai_messages(messages),
+                    stream=True,
+                    temperature=temperature,
+                    stream_options={"include_usage": True},
+                )
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                continue
+        if stream is None:
+            raise last_exc  # type: ignore[misc]
         async for chunk in stream:
             if getattr(chunk, "usage", None):
                 usage = {
@@ -93,6 +118,9 @@ async def stream_chat(
         if usage:
             import json as _json
 
+            ratelimit.record_tokens(
+                usage["prompt_tokens"] + usage["completion_tokens"]
+            )
             yield "usage", _json.dumps(usage, ensure_ascii=False)
     except Exception:
         metrics.record_llm(
@@ -135,6 +163,9 @@ async def complete(
                 "prompt_tokens": resp.usage.prompt_tokens,
                 "completion_tokens": resp.usage.completion_tokens,
             }
+            ratelimit.record_tokens(
+                usage["prompt_tokens"] + usage["completion_tokens"]
+            )
         metrics.record_llm(
             kind=kind,
             model=settings.llm_model,

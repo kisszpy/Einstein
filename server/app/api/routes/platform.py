@@ -4,6 +4,7 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.api.deps import allowed_workspaces, current_admin, current_user, current_workspace
@@ -75,6 +76,31 @@ async def create_workspace(
             "created_at": ws.created_at, "usage": _usage_of(ws.id)}
 
 
+class InviteCreate(BaseModel):
+    role: str = "member"       # member | viewer（邀请不发管理员）
+    max_uses: int = 10
+
+
+@router.post("/workspaces/{ws_id}/invites")
+async def create_invite(
+    ws_id: str, req: InviteCreate, admin: users.User = Depends(current_admin)
+) -> dict:
+    """生成邀请码：新用户或存量用户凭码加入工作区（角色即码上的角色）。"""
+    if workspaces.get_workspace_store().get(ws_id) is None:
+        raise HTTPException(404, "工作区不存在")
+    try:
+        return workspaces.create_invite(ws_id, req.role, max(1, req.max_uses))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/workspaces/{ws_id}/invites")
+async def list_invites(
+    ws_id: str, admin: users.User = Depends(current_admin)
+) -> list[dict]:
+    return workspaces.list_invites(ws_id)
+
+
 @router.patch("/workspaces/{ws_id}")
 async def patch_workspace(
     ws_id: str, req: WorkspacePatch, admin: users.User = Depends(current_admin)
@@ -143,8 +169,66 @@ async def revoke_api_key(key_id: str, ws: str = Depends(current_workspace)) -> d
 
 
 @router.get("/audit")
-async def list_audit(limit: int = 100, ws: str = Depends(current_workspace)) -> dict:
+async def list_audit(
+    limit: int = 100,
+    action: str | None = None,
+    user_id: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    ws: str = Depends(current_workspace),
+) -> dict:
+    """审计筛选：按路径动作 / 调用方 Key / 时间窗过滤。"""
+    entries = audit.list_entries(limit=2000, workspace_id=ws)
+    def _match(e: dict) -> bool:
+        if action and action.lower() not in str(e.get("path", "")).lower():
+            return False
+        if user_id and e.get("key_id") != user_id:
+            return False
+        ts = str(e.get("ts") or "")
+        if since and ts < since:
+            return False
+        if until and ts[: len(until)] > until:
+            return False
+        return True
+    filtered = [e for e in entries if _match(e)]
     return {
         "summary": audit.summary(ws),
-        "entries": audit.list_entries(limit=limit, workspace_id=ws),
+        "entries": filtered[: max(1, limit)],
+        "total_filtered": len(filtered),
     }
+
+
+@router.get("/audit/export.csv")
+async def export_audit(
+    action: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    ws: str = Depends(current_workspace),
+) -> Response:
+    """导出筛选后的审计为 CSV（审计合规场景）。"""
+    import csv
+    import io
+
+    entries = audit.list_entries(limit=2000, workspace_id=ws)
+    def _match(e: dict) -> bool:
+        if action and action.lower() not in str(e.get("path", "")).lower():
+            return False
+        ts = str(e.get("ts") or "")
+        if since and ts < since:
+            return False
+        if until and ts[: len(until)] > until:
+            return False
+        return True
+    rows = [e for e in entries if _match(e)]
+    buf = io.StringIO()
+    fields = ["ts", "workspace_id", "key_name", "method", "path", "status",
+              "duration_ms", "tokens_in", "tokens_out", "detail"]
+    writer = csv.DictWriter(buf, fieldnames=fields)
+    writer.writeheader()
+    for e in rows:
+        writer.writerow({k: e.get(k, "") for k in fields})
+    return Response(
+        content=buf.getvalue().encode("utf-8-sig"),   # BOM 让 Excel 直接打开不乱码
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=audit-{ws}.csv"},
+    )

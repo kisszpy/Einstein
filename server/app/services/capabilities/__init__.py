@@ -62,11 +62,29 @@ class AgentContext:
     workspace_id: str
     project: str = ""
     artifacts: list[dict] = field(default_factory=list)
+    # 人工确认：本会话已批准过的敏感工具（如 code_run）。未批准时调用会抛
+    # ApprovalRequired，引擎转为 approval_required 事件暂停任务。
+    approved_tools: set = field(default_factory=set)
 
     def note_artifact(self, rel_path: str, kind: str) -> None:
         entry = {"path": rel_path, "kind": kind}
         if entry not in self.artifacts:
             self.artifacts.append(entry)
+
+
+class ApprovalRequired(Exception):
+    """敏感工具未经批准就被调用：携带工具名与参数，由引擎转成暂停事件。"""
+
+    def __init__(self, tool: str, args: dict) -> None:
+        self.tool = tool
+        self.args = args
+        super().__init__(f"工具 {tool} 需要人工批准")
+
+
+def _approval_tools() -> set[str]:
+    """需要人工批准的工具名集合（APP_AGENT_APPROVAL_TOOLS，逗号分隔；空=关闭）。"""
+    raw = (get_settings().agent_approval_tools or "").strip()
+    return {t.strip() for t in raw.split(",") if t.strip()}
 
 
 def _artifact_kind(path: str) -> str:
@@ -244,6 +262,9 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
         if get_settings().agent_code_exec:
 
             def _code_run(code: str = "", path: str = "", language: str = "python", timeout: int = 60) -> str:
+                # 人工确认门：配置了审批且本会话未批准 code_run 时暂停任务
+                if "code_run" in _approval_tools() and "code_run" not in ctx.approved_tools:
+                    raise ApprovalRequired("code_run", {"code": code[:400], "language": language})
                 if ctx.project:
                     project = ctx.project
                 else:

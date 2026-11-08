@@ -65,6 +65,19 @@ class HistoryStore:
     def list_conversations(self, workspace_id: str | None = None) -> list[Conversation]:
         return self.repo.list_conversations(workspace_id)
 
+    def rename_conversation(self, conversation_id: str, title: str) -> Conversation | None:
+        return self.repo.rename_conversation(conversation_id, title)
+
+    def set_conversation_flags(
+        self, conversation_id: str, *, archived: bool | None = None, pinned: bool | None = None,
+    ) -> Conversation | None:
+        return self.repo.set_conversation_flags(conversation_id, archived=archived, pinned=pinned)
+
+    def search_conversations(
+        self, workspace_id: str, query: str, include_archived: bool = False,
+    ) -> list[Conversation]:
+        return self.repo.search_conversations(workspace_id, query, include_archived)
+
     def get_conversation(self, conversation_id: str) -> Conversation | None:
         return self.repo.get_conversation(conversation_id)
 

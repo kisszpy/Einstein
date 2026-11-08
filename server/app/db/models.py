@@ -50,6 +50,9 @@ class Chunk:
     char_start: int = 0
     char_end: int = 0
     created_at: str = ""
+    # 父子切片策略：本片是第几个父片的孩子（None = 非父子切片）。
+    # 检索命中孩子片后，把同父兄弟片的文本拼回去当上下文。
+    parent_seq: int | None = None
 
 
 # ---------------------------------------------------------------- 会话域
@@ -72,6 +75,8 @@ class Conversation:
     message_count: int = 0
     messages: list[StoredMessage] = field(default_factory=list)
     workspace_id: str = DEFAULT_WS
+    archived: bool = False   # 归档后不出现在默认列表，搜索仍可命中
+    pinned: bool = False     # 置顶：列表排在最前
 
 
 @dataclass

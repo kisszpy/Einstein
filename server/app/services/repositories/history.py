@@ -39,6 +39,13 @@ class HistoryRepository(Protocol):
         workspace_id: str = "default",
     ) -> Conversation: ...
     def list_conversations(self, workspace_id: str | None = None) -> list[Conversation]: ...
+    def rename_conversation(self, conversation_id: str, title: str) -> Conversation | None: ...
+    def set_conversation_flags(
+        self, conversation_id: str, *, archived: bool | None = None, pinned: bool | None = None,
+    ) -> Conversation | None: ...
+    def search_conversations(
+        self, workspace_id: str, query: str, include_archived: bool = False,
+    ) -> list[Conversation]: ...
     def get_conversation(self, conversation_id: str) -> Conversation | None: ...
     def delete_conversation(self, conversation_id: str) -> bool: ...
     def add_agent_run(
@@ -132,6 +139,47 @@ class JsonHistoryRepository:
         out = [replace(c, messages=[], message_count=len(c.messages)) for c in rows]
         return sorted(out, key=lambda c: c.updated_at, reverse=True)
 
+    def rename_conversation(self, conversation_id: str, title: str) -> Conversation | None:
+        with self._lock:
+            conv = self.conversations.get(conversation_id)
+            if conv is None:
+                return None
+            conv.title = title
+            conv.updated_at = _now()
+            self.save()
+            return conv
+
+    def set_conversation_flags(
+        self, conversation_id: str, *, archived: bool | None = None, pinned: bool | None = None,
+    ) -> Conversation | None:
+        with self._lock:
+            conv = self.conversations.get(conversation_id)
+            if conv is None:
+                return None
+            if archived is not None:
+                conv.archived = archived
+            if pinned is not None:
+                conv.pinned = pinned
+            self.save()
+            return conv
+
+    def search_conversations(
+        self, workspace_id: str, query: str, include_archived: bool = False,
+    ) -> list[Conversation]:
+        q = query.strip().lower()
+        hits: list[Conversation] = []
+        with self._lock:
+            for conv in self.conversations.values():
+                if workspace_id and conv.workspace_id != workspace_id:
+                    continue
+                if conv.archived and not include_archived:
+                    continue
+                in_title = q in conv.title.lower()
+                in_msg = any(q in m.content.lower() for m in conv.messages)
+                if in_title or in_msg:
+                    hits.append(replace(conv, messages=[], message_count=len(conv.messages)))
+        return sorted(hits, key=lambda c: (not c.pinned, c.updated_at), reverse=True)
+
     def get_conversation(self, conversation_id: str) -> Conversation | None:
         return self.conversations.get(conversation_id)
 
@@ -196,7 +244,7 @@ class JsonHistoryRepository:
 
 
 # ---------------------------------------------------------------- SQL 实现
-CONV_COLUMNS = "id, title, workspace_id, created_at, updated_at"
+CONV_COLUMNS = "id, title, workspace_id, created_at, updated_at, archived, pinned"
 RUN_COLUMNS = (
     "id, session_id, turn, task, tool_ids, steps, answer, status,"
     " workspace_id, project, artifacts, created_at"
@@ -224,6 +272,7 @@ class SqlHistoryRepository:
             id=row["id"], title=row["title"] or "", created_at=row["created_at"],
             updated_at=row["updated_at"], workspace_id=row["workspace_id"] or "default",
             message_count=int(row.get("message_count") or 0),
+            archived=bool(row.get("archived")), pinned=bool(row.get("pinned")),
         )
 
     @staticmethod
@@ -289,9 +338,54 @@ class SqlHistoryRepository:
             where, params = " WHERE c.workspace_id = ?", (workspace_id,)
         rows = self.db.query(
             f"SELECT c.id, c.title, c.workspace_id, c.created_at, c.updated_at,"
+            f" c.archived, c.pinned,"
             f" (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count"
-            f" FROM conversations c{where} ORDER BY c.updated_at DESC",
+            f" FROM conversations c{where} ORDER BY c.pinned DESC, c.updated_at DESC",
             params,
+        )
+        return [self._conv(r) for r in rows]
+
+    def rename_conversation(self, conversation_id: str, title: str) -> Conversation | None:
+        affected = self.db.execute(
+            "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+            (title, _now(), conversation_id),
+        )
+        return self.get_conversation(conversation_id) if affected else None
+
+    def set_conversation_flags(
+        self, conversation_id: str, *, archived: bool | None = None, pinned: bool | None = None,
+    ) -> Conversation | None:
+        sets, params = [], []
+        if archived is not None:
+            sets.append("archived = ?")
+            params.append(1 if archived else 0)
+        if pinned is not None:
+            sets.append("pinned = ?")
+            params.append(1 if pinned else 0)
+        if not sets:
+            return self.get_conversation(conversation_id)
+        self.db.execute(
+            f"UPDATE conversations SET {', '.join(sets)} WHERE id = ?",
+            (*params, conversation_id),
+        )
+        return self.get_conversation(conversation_id)
+
+    def search_conversations(
+        self, workspace_id: str, query: str, include_archived: bool = False,
+    ) -> list[Conversation]:
+        q = f"%{query.strip()}%"
+        if not query.strip():
+            return []
+        arch = "" if include_archived else " AND c.archived = 0"
+        rows = self.db.query(
+            "SELECT c.id, c.title, c.workspace_id, c.created_at, c.updated_at,"
+            " c.archived, c.pinned,"
+            " (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count"
+            " FROM conversations c WHERE c.workspace_id = ?"
+            f" AND (c.title LIKE ? OR EXISTS (SELECT 1 FROM messages m"
+            f" WHERE m.conversation_id = c.id AND m.content LIKE ?)){arch}"
+            " ORDER BY c.pinned DESC, c.updated_at DESC",
+            (workspace_id, q, q),
         )
         return [self._conv(r) for r in rows]
 

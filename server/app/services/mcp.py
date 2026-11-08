@@ -9,13 +9,18 @@
 """
 
 import asyncio
+import base64
+import hashlib
 import json
+import os
 import threading
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.core.config import get_settings
+from app.services import audit
 from app.services.state import blob
 from typing import Literal
 
@@ -30,6 +35,7 @@ _STATE = blob("mcp", _STORE_PATH)
 
 TOOL_CALL_TIMEOUT = 120  # 单次工具调用上限（秒）
 LIST_TIMEOUT = 20        # 刷新工具清单上限（秒）
+MAX_CONCURRENT_PER_SERVER = 4  # 单服务器并发调用上限（执行隔离）
 
 
 class McpToolDef(BaseModel):
@@ -46,11 +52,13 @@ class McpServer(BaseModel):
     # stdio
     command: str = ""
     args: list[str] = Field(default_factory=list)
-    env: dict[str, str] = Field(default_factory=dict)
+    env: dict[str, str] = Field(default_factory=dict)  # 落盘为加密值（enc:v1:…）
     # http (streamable)
     url: str = ""
 
     enabled: bool = True
+    # 工具审批：空 = 全部放行（兼容存量配置）；非空 = 仅列表内的工具可调用
+    approved_tools: list[str] = Field(default_factory=list)
     # 运行时缓存（刷新后写入）
     status: Literal["unknown", "ok", "error"] = "unknown"
     tools: list[McpToolDef] = Field(default_factory=list)
@@ -62,6 +70,52 @@ class McpServer(BaseModel):
         if self.transport == "stdio":
             return " ".join([self.command, *self.args]).strip()
         return self.url
+
+
+# ---------- 凭证加密（无第三方依赖：SHA-256 密钥流 XOR + base64） ----------
+
+_ENC_PREFIX = "enc:v1:"
+
+
+def _keystream_xor(key: bytes, iv: bytes, data: bytes) -> bytes:
+    out = bytearray()
+    counter = 0
+    for i in range(len(data)):
+        if i % 32 == 0:
+            block = hashlib.sha256(key + iv + counter.to_bytes(4, "big")).digest()
+            counter += 1
+        out.append(data[i] ^ block[i % 32])
+    return bytes(out)
+
+
+def encrypt_value(value: str) -> str:
+    """加密单个凭证值。明文原样返回（向后兼容未加密的存量配置）。"""
+    if not value or value.startswith(_ENC_PREFIX):
+        return value
+    key = hashlib.sha256(("mcp-env:" + get_settings().secret_key).encode()).digest()
+    iv = os.urandom(16)
+    ct = _keystream_xor(key, iv, value.encode("utf-8"))
+    return _ENC_PREFIX + base64.urlsafe_b64encode(iv + ct).decode()
+
+
+def decrypt_value(value: str) -> str:
+    if not value.startswith(_ENC_PREFIX):
+        return value
+    try:
+        key = hashlib.sha256(("mcp-env:" + get_settings().secret_key).encode()).digest()
+        raw = base64.urlsafe_b64decode(value[len(_ENC_PREFIX):])
+        iv, ct = raw[:16], raw[16:]
+        return _keystream_xor(key, iv, ct).decode("utf-8")
+    except Exception:  # noqa: BLE001 — 密钥不匹配等，返回占位避免崩溃
+        return ""
+
+
+def _encrypt_env(env: dict[str, str]) -> dict[str, str]:
+    return {k: encrypt_value(v) for k, v in env.items()}
+
+
+def _decrypt_env(env: dict[str, str]) -> dict[str, str]:
+    return {k: decrypt_value(v) for k, v in env.items()}
 
 
 # ---------- 持久化 ----------
@@ -119,7 +173,7 @@ def add_server(
         transport=transport,
         command=command,
         args=args or [],
-        env=env or {},
+        env=_encrypt_env(env or {}),  # 凭证加密落盘
         url=url,
         workspace_id=workspace_id,
     )
@@ -137,6 +191,8 @@ def update_server(server_id: str, patch: dict) -> McpServer | None:
         return None
     allowed = {"name", "enabled", "command", "args", "env", "url", "transport"}
     updates = {k: v for k, v in patch.items() if k in allowed}
+    if "env" in updates and isinstance(updates["env"], dict):
+        updates["env"] = _encrypt_env(updates["env"])
     updated = server.model_copy(update=updates)
     # 配置变更后工具缓存失效
     if {"command", "args", "env", "url", "transport"} & updates.keys():
@@ -165,8 +221,8 @@ def remove_server(server_id: str) -> bool:
 async def _connect(server: McpServer):
     """按传输方式建立会话。用 asyncio.wait_for 兜底防止握手挂死。"""
     if server.transport == "stdio":
-        # 合并环境变量：stdio 子进程通常需要继承 PATH 才能解析命令
-        env = {**_stdio.get_default_environment(), **server.env}
+        # 合并环境变量：stdio 子进程通常需要继承 PATH 才能解析命令；凭证先解密
+        env = {**_stdio.get_default_environment(), **_decrypt_env(server.env)}
         params = StdioServerParameters(command=server.command, args=server.args, env=env)
         async with _stdio.stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
@@ -232,31 +288,99 @@ async def refresh_server(server_id: str) -> McpServer | None:
     return updated
 
 
+# 单服务器并发闸门（执行隔离）：一个 MCP server 卡死不能拖垮整站
+_SEMS: dict[str, asyncio.Semaphore] = {}
+_SEM_LOCK = threading.Lock()
+
+
+def _semaphore(server_id: str) -> asyncio.Semaphore:
+    with _SEM_LOCK:
+        if server_id not in _SEMS:
+            _SEMS[server_id] = asyncio.Semaphore(MAX_CONCURRENT_PER_SERVER)
+        return _SEMS[server_id]
+
+
 async def call_tool(server_id: str, tool_name: str, arguments: dict) -> str:
-    """执行一次 MCP 工具调用，返回文本结果。"""
+    """执行一次 MCP 工具调用，返回文本结果。含审批检查、并发隔离与审计。"""
     server = _registry().get(server_id)
     if server is None:
         raise ValueError(f"MCP 服务器不存在: {server_id}")
     if not server.enabled:
         raise ValueError(f"MCP 服务器已停用: {server.name}")
-    async with _connect(server) as session:
-        result = await asyncio.wait_for(
-            session.call_tool(tool_name, arguments=arguments), TOOL_CALL_TIMEOUT
+    t0 = datetime.now(timezone.utc)
+    status = 200
+    detail = ""
+    try:
+        if server.approved_tools and tool_name not in server.approved_tools:
+            # 审批拒绝也要留审计，便于追查异常调用
+            status = 403
+            detail = "tool not approved"
+            raise ValueError(f"工具 {tool_name} 未通过审批，请先在 MCP 管理页批准")
+        async with _semaphore(server_id):
+            async with _connect(server) as session:
+                result = await asyncio.wait_for(
+                    session.call_tool(tool_name, arguments=arguments), TOOL_CALL_TIMEOUT
+                )
+        parts: list[str] = []
+        for item in result.content:
+            text = getattr(item, "text", None)
+            if text:
+                parts.append(text)
+        text = "\n".join(parts) if parts else json.dumps(
+            {"isError": bool(result.is_error)}, ensure_ascii=False
         )
-    parts: list[str] = []
-    for item in result.content:
-        text = getattr(item, "text", None)
-        if text:
-            parts.append(text)
-    text = "\n".join(parts) if parts else json.dumps(
-        {"isError": bool(result.is_error)}, ensure_ascii=False
-    )
-    if result.is_error:
-        text = f"[MCP 工具报错] {text}"
-    return text
+        if result.is_error:
+            text = f"[MCP 工具报错] {text}"
+            status = 502
+        detail = f"{len(text)} chars"
+        return text
+    except ValueError:
+        status = 403
+        raise
+    except asyncio.TimeoutError as exc:
+        status = 504
+        detail = "timeout"
+        raise ValueError(f"MCP 工具调用超时（>{TOOL_CALL_TIMEOUT}s）") from exc
+    except Exception as exc:  # noqa: BLE001
+        status = 502
+        detail = f"{type(exc).__name__}: {exc}"[:200]
+        raise
+    finally:
+        elapsed_ms = (datetime.now(timezone.utc) - t0).total_seconds() * 1000
+        audit.record(
+            workspace_id=server.workspace_id,
+            key_id=None,
+            key_name=None,
+            method="MCP_CALL",
+            path=f"/mcp/{server_id}/{tool_name}",
+            status=status,
+            duration_ms=round(elapsed_ms, 1),
+            detail=detail,
+        )
+
+
+def set_tool_approval(server_id: str, tool: str, approved: bool) -> McpServer | None:
+    """把工具加入/移出审批白名单。首次收紧时从空（全放行）切到白名单模式。"""
+    registry = _registry()
+    server = registry.get(server_id)
+    if server is None or not tool:
+        return None
+    current = list(server.approved_tools)
+    if approved and tool not in current:
+        current.append(tool)
+    elif not approved and tool in current:
+        current.remove(tool)
+    updated = server.model_copy(update={"approved_tools": current})
+    with _lock:
+        registry[server_id] = updated
+        _save(registry)
+    return updated
 
 
 def server_payload(server: McpServer) -> dict:
     d = server.model_dump(by_alias=True)
+    # 凭证不回传明文：有配置就给占位符
+    d["env"] = {k: ("•••" if v else "") for k, v in server.env.items()}
+    d["has_env"] = any(v for v in server.env.values())
     d["connection"] = server.connection_summary()
     return d

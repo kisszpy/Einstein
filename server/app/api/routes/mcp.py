@@ -29,6 +29,11 @@ class McpToolCall(BaseModel):
     arguments: dict = Field(default_factory=dict)
 
 
+class ToolApproval(BaseModel):
+    tool: str
+    approved: bool
+
+
 def _require_own(server: McpServer | None, ws: str) -> McpServer:
     if server is None or server.workspace_id != ws:
         raise HTTPException(404, "MCP 服务器不存在")
@@ -87,6 +92,18 @@ async def delete_server(server_id: str, ws: str = Depends(current_workspace)) ->
 async def refresh(server_id: str, ws: str = Depends(current_workspace)) -> dict:
     _require_own(mcp_service.get_server(server_id), ws)
     server = await mcp_service.refresh_server(server_id)
+    if server is None:
+        raise HTTPException(404, "MCP 服务器不存在")
+    return mcp_service.server_payload(server)
+
+
+@router.post("/servers/{server_id}/tools/approve")
+async def approve_tool(
+    server_id: str, req: ToolApproval, ws: str = Depends(current_workspace)
+) -> dict:
+    """工具审批：把工具加入/移出白名单。白名单为空 = 全部放行。"""
+    _require_own(mcp_service.get_server(server_id), ws)
+    server = mcp_service.set_tool_approval(server_id, req.tool.strip(), req.approved)
     if server is None:
         raise HTTPException(404, "MCP 服务器不存在")
     return mcp_service.server_payload(server)

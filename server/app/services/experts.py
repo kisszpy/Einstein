@@ -8,6 +8,7 @@ import json
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.services.state import blob
@@ -15,6 +16,14 @@ from app.services.state import blob
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 STORE_PATH = DATA_DIR / "experts_store.json"
 _STATE = blob("experts", STORE_PATH)
+
+# 发布流状态机：draft（编辑中）→ testing（内部测试）→ live（对话页可见）
+STATUSES = ("draft", "testing", "live")
+TRANSITIONS = {
+    "draft": {"testing"},
+    "testing": {"live", "draft"},
+    "live": {"testing"},  # 下架回测试
+}
 
 
 @dataclass
@@ -30,6 +39,11 @@ class Expert:
     temperature: float = 0.7
     enabled: bool = True
     workspace_id: str = "default"
+    # ---- 结构化人设与发布流 ----
+    greeting: str = ""        # 开场白（选中专家后展示在空会话里）
+    suggestions: list[str] = field(default_factory=list)  # 推荐问题（点击即发送）
+    status: str = "draft"     # draft | testing | live
+    published_at: str = ""    # 首次上线时间
 
 
 class ExpertStore:
@@ -59,8 +73,23 @@ class ExpertStore:
             tool_ids=kwargs.get("tool_ids", []),  # type: ignore[arg-type]
             temperature=kwargs.get("temperature", 0.7),  # type: ignore[arg-type]
             workspace_id=kwargs.get("workspace_id", "default"),  # type: ignore[arg-type]
+            greeting=kwargs.get("greeting", ""),  # type: ignore[arg-type]
+            suggestions=kwargs.get("suggestions", []),  # type: ignore[arg-type]
+            status=kwargs.get("status", "draft"),  # type: ignore[arg-type]
         )
         self.experts[expert.id] = expert
+        return expert
+
+    def publish(self, expert_id: str, status: str) -> Expert | None:
+        """按状态机推进发布流，返回 None 表示非法转移。"""
+        expert = self.experts.get(expert_id)
+        if expert is None or status not in STATUSES:
+            return None
+        if status not in TRANSITIONS.get(expert.status, set()):
+            return None
+        expert.status = status
+        if status == "live":
+            expert.published_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         return expert
 
     def update(self, expert_id: str, **fields: object) -> Expert | None:
@@ -89,6 +118,10 @@ class ExpertStore:
         try:
             payload = _STATE.read() or {}
             store.experts = {k: Expert(**v) for k, v in payload.items()}
+            # 存量数据没有 status 字段：视为已上线，避免升级后对话页专家消失
+            for key, v in payload.items():
+                if key in store.experts and "status" not in v:
+                    store.experts[key].status = "live"
         except Exception:  # noqa: BLE001 — 损坏则重建
             pass
         return store

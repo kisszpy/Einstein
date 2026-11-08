@@ -1,10 +1,13 @@
-"""技能管理路由：本地编辑、GitHub 安装、技能市场。"""
+"""技能管理路由：本地编辑、GitHub 安装、技能市场、版本管理、zip 互通、试运行。"""
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import urllib.parse
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.api.deps import current_workspace
-from app.services import skill_installer, skill_market
+from app.services import llm, skill_installer, skill_market
 from app.services.skills import Skill, get_skill_store
 
 router = APIRouter(prefix="/skills", tags=["skills"])
@@ -58,6 +61,8 @@ def _dump(skill: Skill) -> dict:
         "files": skill.files,
         "installed_at": skill.installed_at,
         "updated_at": skill.updated_at,
+        "version": skill.version,
+        "versions": skill.versions,
     }
 
 
@@ -168,8 +173,109 @@ async def update_skill(
     )
     if skill is None:
         raise HTTPException(404, "技能不存在")
+    if any(v is not None for v in (req.name, req.description, req.system_prompt, req.tools)):
+        # 内容变更固化为新版本，可随时回滚
+        store.snapshot(skill_id, note="编辑")
     store.save()
     return _dump(skill)
+
+
+# ---------- 版本管理 / 导入导出 / 试运行 ----------
+
+
+@router.get("/{skill_id}/versions")
+async def list_versions(skill_id: str, ws: str = Depends(current_workspace)) -> dict:
+    skill = _require_own(get_skill_store().get(skill_id), ws)
+    return {"version": skill.version, "versions": skill.versions}
+
+
+class RollbackRequest(BaseModel):
+    version: str
+
+
+@router.post("/{skill_id}/rollback")
+async def rollback_skill(
+    skill_id: str, req: RollbackRequest, ws: str = Depends(current_workspace)
+) -> dict:
+    store = get_skill_store()
+    _require_own(store.get(skill_id), ws)
+    skill = store.rollback(skill_id, req.version)
+    if skill is None:
+        raise HTTPException(404, f"版本 {req.version} 不存在")
+    store.save()
+    return _dump(skill)
+
+
+@router.get("/{skill_id}/export")
+async def export_skill(skill_id: str, ws: str = Depends(current_workspace)) -> Response:
+    skill = _require_own(get_skill_store().get(skill_id), ws)
+    data = skill_installer.export_zip(skill)
+    # HTTP header 只允许 latin-1：文件名剥离非 ASCII，中文名走 RFC 5987 filename*
+    ascii_safe = "".join(
+        ch for ch in skill.name if ch.isascii() and (ch.isalnum() or ch in "-_")
+    ) or "skill"
+    quoted = urllib.parse.quote(f"{skill.name}-{skill.version}.zip")
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_safe}-{skill.version}.zip"; '
+                f"filename*=UTF-8''{quoted}"
+            )
+        },
+    )
+
+
+@router.post("/import")
+async def import_skill(
+    file: UploadFile = File(...), ws: str = Depends(current_workspace)
+) -> dict:
+    data = await file.read()
+    if len(data) > skill_installer.MAX_IMPORT_BYTES:
+        raise HTTPException(400, "zip 文件超过 50MB 上限")
+    try:
+        skill = skill_installer.import_zip(data, get_skill_store(), ws)
+    except skill_installer.SkillInstallError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _dump(skill)
+
+
+class TryRequest(BaseModel):
+    message: str
+    temperature: float = 0.7
+
+
+@router.post("/{skill_id}/try")
+async def try_skill(skill_id: str, req: TryRequest, ws: str = Depends(current_workspace)) -> dict:
+    """沙箱试运行：用技能的系统提示词回答一条样例消息（限长，不落历史）。"""
+    skill = _require_own(get_skill_store().get(skill_id), ws)
+    message = req.message.strip()
+    if not message:
+        raise HTTPException(400, "试运行消息不能为空")
+    system = skill.system_prompt or "你是通用助手。"
+    system = system[:4000]
+    import time as _time
+
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    t0 = _time.perf_counter()
+    try:
+        reply, usage = await llm.complete(
+            [SystemMessage(content=system), HumanMessage(content=message[:2000])],
+            temperature=req.temperature,
+            max_tokens=400,
+            kind="skill_try",
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"试运行失败：{type(exc).__name__}: {exc}") from exc
+    elapsed_ms = round((_time.perf_counter() - t0) * 1000)
+    return {
+        "reply": reply,
+        "elapsed_ms": elapsed_ms,
+        "usage": usage,
+        "version": skill.version,
+    }
 
 
 @router.post("/{skill_id}/update")

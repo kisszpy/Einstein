@@ -13,6 +13,8 @@ from app.api.deps import current_workspace
 from app.services import web_augment
 from app.services.experts import get_expert_store
 from app.services.history import get_history_store
+from app.services import memory as memory_service
+from app.services.query_rewrite import rewrite_query
 from app.services.llm import stream_chat
 from app.services.rag import build_context_block, search
 from app.services.skill_installer import inline_resources
@@ -177,10 +179,25 @@ async def _event_stream(req: ChatRequest, ws: str) -> AsyncIterator[str]:
                         )
                     )
 
+            # ---- 长期记忆注入 ----
+            memory_block = ""
+            relevant = memory_service.relevant_memory(ws, user_text, top_k=3)
+            if relevant:
+                memory_block = "\n".join(f"- {e['content']}" for e in relevant)
+                system_text = (
+                    f"{system_text}\n\n=== 已知背景（来自长期记忆） ===\n{memory_block}\n"
+                    "=== 背景结束 ==="
+                )
+
             # ---- 知识库检索 ----
+            # 追问先做指代消解：「它的第二个条件呢」直接检索命不中
             citations: list[dict] = []
             if effective_kb_ids:
-                hits = await search(store, effective_kb_ids, user_text, top_k=4)
+                search_query = user_text
+                if history:
+                    search_query = await rewrite_query(history, user_text)
+                hits = await search(store, effective_kb_ids, search_query, top_k=4,
+                                    parent_expand=True)
                 if hits:
                     citations = [
                         {
@@ -189,6 +206,7 @@ async def _event_stream(req: ChatRequest, ws: str) -> AsyncIterator[str]:
                             "chunk_id": h.chunk_id,
                             "text": h.text,
                             "score": h.score,
+                            "query": search_query,
                         }
                         for i, h in enumerate(hits)
                     ]

@@ -13,13 +13,17 @@ from fastapi.responses import JSONResponse
 from app.api import deps
 from app.api.routes import agent, auth, browse, chat, conversations, experts, health, kb, mcp, skills
 from app.api.routes import eval as eval_routes
+from app.api.routes import memory as memory_routes
 from app.api.routes import observability, openapi, platform, projects
 from app.api.routes import jobs
 from app.core.config import get_settings
-from app.services import audit, metrics, tickets
+from app.services import audit, metrics, ratelimit, tickets
 
 # 控制台无需登录即可访问的端点：登录本身与健康探针
 PUBLIC_API_PATHS = {"/api/auth/login", "/api/health"}
+
+# viewer（只读角色）放行的写路径：对话消费类——看得了就要问得了
+VIEWER_ALLOWED_PREFIXES = ("/api/chat", "/api/agent", "/api/conversations", "/api/auth/")
 
 
 def create_app() -> FastAPI:
@@ -70,6 +74,77 @@ def create_app() -> FastAPI:
                     headers={"WWW-Authenticate": "Bearer"},
                 )
             request.state.user = user
+            # 工作区上下文供 llm 层记 Token 配额（ContextVar 随请求传播）
+            ratelimit.current_ws.set(deps.workspaces.resolve(
+                request.headers.get("x-workspace")))
+            # viewer 只读：拦截资源写操作（对话类接口在白名单里放行，阅读不受影响）
+            if (
+                request.method not in ("GET", "HEAD", "OPTIONS")
+                and not user.can_write
+                and not path.startswith(VIEWER_ALLOWED_PREFIXES)
+            ):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "只读角色无权执行该操作，请联系管理员调整角色"},
+                )
+            # 工作区级每日配额（0 = 不限；chat/agent 在路由内还会记 Token 用量）
+            if path.startswith(("/api/chat", "/api/agent")):
+                allowed, _used = ratelimit.quota_check(deps.workspaces.resolve(
+                    request.headers.get("x-workspace")), "requests")
+                if not allowed:
+                    return JSONResponse(
+                        status_code=429,
+                        content={"detail": "已达当日请求配额，请明天再试或联系管理员调整"},
+                    )
+        return await call_next(request)
+
+    @app.middleware("http")
+    async def _ratelimit_middleware(request: Request, call_next):
+        """按端点族的固定窗口限流：防爆破、防打爆，Redis 计数、内存兜底。
+
+        键维度不同：登录按 IP+账号（防撞库），其余按用户（登录态）或
+        API Key（/v1）。设为 0 即关闭对应限流。
+        """
+        settings = get_settings()
+        if not settings.ratelimit_enabled:
+            return await call_next(request)
+        path = request.url.path
+        window = 60  # 秒
+        if path == "/api/auth/login" and request.method == "POST":
+            ip = request.client.host if request.client else "unknown"
+            username = ""
+            try:
+                # 读掉 body 后必须塞回 request._body，否则下游登录接口拿到空流
+                raw = await request.body()
+                request._body = raw  # noqa: SLF001 — Starlette 官方推荐的缓存位
+                import json as _json
+
+                username = str(_json.loads(raw or b"{}").get("username", ""))[:64]
+            except Exception:  # noqa: BLE001
+                pass
+            ok, retry = ratelimit.allow(f"login:{ip}:{username}", settings.ratelimit_login, window)
+        elif path.startswith("/v1/"):
+            key = deps._extract_bearer(request.headers.get("authorization"))[:24] or "anon"
+            ok, retry = ratelimit.allow(f"v1:{key}", settings.ratelimit_openapi, window)
+        elif path.startswith(("/api/chat", "/api/kb/search", "/api/agent/run")):
+            user = getattr(request.state, "user", None)
+            if user is None:   # 未登录请求由鉴权中间件处理，这里不重复拦
+                return await call_next(request)
+            if path.startswith("/api/chat"):
+                limit = settings.ratelimit_chat
+            elif path.startswith("/api/agent"):
+                limit = settings.ratelimit_agent
+            else:
+                limit = settings.ratelimit_search
+            ok, retry = ratelimit.allow(f"api:{user.id}:{path.split('/')[2]}", limit, window)
+        else:
+            ok, retry = True, 0
+        if not ok:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "请求过于频繁，请稍后再试"},
+                headers={"Retry-After": str(retry)},
+            )
         return await call_next(request)
 
     @app.middleware("http")
@@ -120,6 +195,7 @@ def create_app() -> FastAPI:
     app.include_router(observability.router, prefix="/api")
     app.include_router(eval_routes.router, prefix="/api")
     app.include_router(platform.router, prefix="/api")
+    app.include_router(memory_routes.router, prefix="/api")
     # 对外开放 API：/v1/...（Bearer 鉴权，与 /api 控制台面分开）
     app.include_router(openapi.router)
 

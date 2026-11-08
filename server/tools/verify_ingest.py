@@ -149,6 +149,36 @@ def main() -> int:
         check("编辑后的文本能检索命中", status == 200 and any(marker in t for t in hit_texts),
               str(hits)[:160])
 
+    # ---------------- S2.3：父子切片 / 引用定位 / 多策略对比
+    pc_text = (
+        "## 检索验收章节\n本段用于父子切片验收。" + "关键信息：检索验收标记%d。" % 42 + "\n"
+        "补充背景" * 200
+    )
+    status, pc_doc = call("POST", f"/api/kb/{kb_id}/documents",
+                          {"name": "父子切片.md", "content": pc_text, "strategy": "parent-child"})
+    check("父子切片入库", status == 200 and pc_doc.get("chunk_count", 0) > 0, str(pc_doc)[:160])
+    status, pc_chunks = call("GET", f"/api/kb/{kb_id}/documents/{pc_doc['id']}/chunks")
+    pc_all = status == 200 and pc_chunks and all(c.get("parent_seq") is not None for c in pc_chunks)
+    check("孩子片都带 parent_seq", pc_all, str(pc_chunks)[:160])
+
+    status, hits = call("POST", "/api/kb/search",
+                        {"kb_ids": [kb_id], "query": "检索验收标记", "top_k": 2,
+                         "parent_expand": True})
+    expanded_ok = status == 200 and hits and any("关键信息" in h["text"] and len(h["text"]) > 300
+                                                 for h in hits)
+    check("父片回填（命中孩子片返回父片全文）", expanded_ok, str(hits)[:200])
+
+    status, cite = call("GET", f"/api/kb/citations/{hits[0]['chunk_id']}") if status == 200 and hits \
+        else (404, None)
+    check("引用定位返回原文偏移", status == 200 and cite and cite.get("char_end", 0) > cite.get("char_start", 0)
+          and "excerpt" in cite, str(cite)[:200])
+
+    status, cmp_res = call("POST", "/api/kb/search_compare",
+                           {"kb_ids": [kb_id], "query": "检索验收标记", "top_k": 2,
+                            "modes": ["hybrid", "lexical"]})
+    modes_ok = status == 200 and set(cmp_res.get("results", {})) == {"hybrid", "lexical"}
+    check("多策略并排对比", modes_ok, str(cmp_res)[:200])
+
     # ---------------- 异步上传
     status, job = upload(f"/api/kb/{kb_id}/documents/async", "异步.csv", csv_v2)
     check("异步上传立即返回 job_id", status == 200 and job.get("job_id"), str(job))

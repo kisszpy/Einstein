@@ -1,18 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Download,
+  FlaskConical,
   FolderOpen,
   GitBranch,
+  History,
   Loader2,
   Plus,
   RefreshCw,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { InstallDialog } from "./InstallDialog";
 import { MarketPanel } from "./MarketPanel";
 import { SkillFilesDialog } from "./SkillFilesDialog";
-import type { Skill } from "./types";
+import type { Skill, SkillVersion } from "./types";
 import { cn } from "@/lib/utils";
 
 const TOOL_OPTIONS = [
@@ -41,6 +44,14 @@ export function SkillsPage() {
   const [installOpen, setInstallOpen] = useState(false);
   const [installUrl, setInstallUrl] = useState("");
   const [filesSkill, setFilesSkill] = useState<Skill | null>(null);
+  // ---- S2.6：版本管理 / 导入导出 / 沙箱试运行 ----
+  const [versionSkill, setVersionSkill] = useState<Skill | null>(null);
+  const [versions, setVersions] = useState<SkillVersion[]>([]);
+  const [trySkill, setTrySkill] = useState<Skill | null>(null);
+  const [tryMessage, setTryMessage] = useState("");
+  const [tryReply, setTryReply] = useState("");
+  const [tryBusy, setTryBusy] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/skills");
@@ -140,6 +151,65 @@ export function SkillsPage() {
     }));
   };
 
+  // ---- S2.6 ----
+  const openVersions = async (s: Skill) => {
+    setVersionSkill(s);
+    const res = await fetch(`/api/skills/${s.id}/versions`);
+    if (res.ok) {
+      const data = await res.json();
+      setVersions(data.versions ?? []);
+    }
+  };
+
+  const rollback = async (version: string) => {
+    if (!versionSkill) return;
+    const res = await fetch(`/api/skills/${versionSkill.id}/rollback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version }),
+    });
+    if (res.ok) {
+      setToast(`已回滚到 ${version}`);
+      await load();
+      await openVersions(versionSkill);
+    } else {
+      setToast("回滚失败");
+    }
+  };
+
+  const runTry = async () => {
+    if (!trySkill || !tryMessage.trim()) return;
+    setTryBusy(true);
+    setTryReply("");
+    try {
+      const res = await fetch(`/api/skills/${trySkill.id}/try`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: tryMessage }),
+      });
+      const data = await res.json();
+      setTryReply(res.ok ? data.reply : (data.detail ?? "试运行失败"));
+    } catch (e) {
+      setTryReply(`试运行失败：${(e as Error).message}`);
+    } finally {
+      setTryBusy(false);
+    }
+  };
+
+  const importZip = async (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    const res = await fetch("/api/skills/import", { method: "POST", body });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      setToast(`已导入技能「${data.name}」(${data.version})`);
+      setTab("installed");
+      await load();
+    } else {
+      setToast(data.detail ?? "导入失败");
+    }
+  };
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-[860px] space-y-5 px-8 py-8">
@@ -152,6 +222,21 @@ export function SkillsPage() {
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".zip"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void importZip(file);
+                e.target.value = "";
+              }}
+            />
+            <Button variant="outline" onClick={() => importInputRef.current?.click()}>
+              <Upload size={13} className="mr-1.5" />
+              导入 zip
+            </Button>
             <Button
               variant="outline"
               onClick={() => {
@@ -273,6 +358,11 @@ export function SkillsPage() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-[13px] font-medium text-primary">{s.name}</span>
+                        {s.version && (
+                          <span className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-[11px] text-secondary">
+                            v{s.version}
+                          </span>
+                        )}
                         {s.builtin && (
                           <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[11px] text-tertiary">
                             内置
@@ -328,6 +418,30 @@ export function SkillsPage() {
                     </div>
 
                     <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        title="沙箱试运行：用该技能提示词回答一条样例消息"
+                        onClick={() => {
+                          setTrySkill(s);
+                          setTryMessage("");
+                          setTryReply("");
+                        }}
+                      >
+                        <FlaskConical size={12} />
+                        <span className="ml-1">试运行</span>
+                      </Button>
+                      <Button variant="ghost" onClick={() => void openVersions(s)}>
+                        <History size={12} />
+                        <span className="ml-1">版本</span>
+                      </Button>
+                      <a
+                        href={`/api/skills/${s.id}/export`}
+                        className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-[12.5px] text-secondary transition-colors duration-150 hover:bg-hover hover:text-primary"
+                        title="导出为 zip（含 skill.json 元数据与全部文件）"
+                      >
+                        <Download size={12} />
+                        导出
+                      </a>
                       {s.source === "github" && (
                         <>
                           <Button
@@ -389,6 +503,93 @@ export function SkillsPage() {
         />
 
         <SkillFilesDialog skill={filesSkill} onClose={() => setFilesSkill(null)} />
+
+        {/* 版本历史与回滚 */}
+        {versionSkill && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+            onClick={() => setVersionSkill(null)}
+          >
+            <Card
+              className="max-h-[70vh] w-full max-w-[520px] overflow-y-auto p-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-[13px] font-medium">
+                版本历史 · {versionSkill.name}
+                <span className="ml-2 font-mono text-[11px] text-tertiary">
+                  当前 v{versionSkill.version}
+                </span>
+              </h3>
+              <ul className="mt-3 space-y-2">
+                {versions.map((v) => (
+                  <li
+                    key={v.version}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-mono text-[12px] text-primary">
+                        v{v.version}
+                        {v.note && <span className="ml-2 text-tertiary">{v.note}</span>}
+                      </p>
+                      <p className="truncate text-[11px] text-tertiary">
+                        {v.saved_at.replace("T", " ")} · {(v.system_prompt ?? "").slice(0, 40)}
+                      </p>
+                    </div>
+                    <Button variant="ghost" onClick={() => void rollback(v.version)}>
+                      回滚到此版
+                    </Button>
+                  </li>
+                ))}
+                {versions.length === 0 && (
+                  <p className="py-6 text-center text-[12px] text-tertiary">
+                    还没有历史版本；编辑内容后会自动生成快照。
+                  </p>
+                )}
+              </ul>
+            </Card>
+          </div>
+        )}
+
+        {/* 沙箱试运行 */}
+        {trySkill && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+            onClick={() => setTrySkill(null)}
+          >
+            <Card
+              className="w-full max-w-[520px] space-y-3 p-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-[13px] font-medium">
+                沙箱试运行 · {trySkill.name}
+                <span className="ml-2 font-mono text-[11px] text-tertiary">
+                  v{trySkill.version}
+                </span>
+              </h3>
+              <textarea
+                value={tryMessage}
+                onChange={(e) => setTryMessage(e.target.value)}
+                placeholder="输入一条样例消息，看看这个技能会怎样回答（限 400 token）"
+                rows={3}
+                className="w-full resize-y rounded-lg border border-line bg-surface-1 px-3 py-2 text-sm outline-none focus:border-brand"
+              />
+              <div className="flex items-center gap-2">
+                <Button disabled={tryBusy || !tryMessage.trim()} onClick={() => void runTry()}>
+                  {tryBusy ? <Loader2 size={12} className="animate-spin" /> : null}
+                  <span className="ml-1">{tryBusy ? "运行中…" : "运行"}</span>
+                </Button>
+                <Button variant="ghost" onClick={() => setTrySkill(null)}>
+                  关闭
+                </Button>
+              </div>
+              {tryReply && (
+                <div className="max-h-56 overflow-y-auto whitespace-pre-wrap rounded-lg bg-surface-2 p-3 text-[12.5px] leading-relaxed text-secondary">
+                  {tryReply}
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
       </div>
     </div>
   );

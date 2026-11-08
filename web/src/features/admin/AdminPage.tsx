@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { MembersCard } from "./MembersCard";
+import { InvitesCard } from "./InvitesCard";
+import { MemoryCard } from "./MemoryCard";
 
 interface Summary {
   requests: {
@@ -109,7 +111,12 @@ export function AdminPage() {
           </Button>
         </div>
 
-        <MembersCard />
+        <div className="grid gap-4 lg:grid-cols-2">
+          <MembersCard />
+          <InvitesCard />
+        </div>
+
+        <MemoryCard />
 
         {summary && (
           <>

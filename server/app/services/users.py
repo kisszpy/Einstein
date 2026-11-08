@@ -26,8 +26,10 @@ STORE_PATH = DATA_DIR / "users.json"
 _STATE = blob("users", STORE_PATH)
 
 ITERATIONS = 120_000
-ROLES = ("owner", "admin", "member")
-ROLE_LABEL = {"owner": "所有者", "admin": "管理员", "member": "成员"}
+ROLES = ("owner", "admin", "member", "viewer")
+ROLE_LABEL = {"owner": "所有者", "admin": "管理员", "member": "成员", "viewer": "只读"}
+# 允许在 UI 上分配的角色（owner 只能是唯一创始人，不从下拉里选）
+ASSIGNABLE_ROLES = ("admin", "member", "viewer")
 
 SEED_USERNAME = "admin"
 SEED_PASSWORD = "admin123"
@@ -85,6 +87,11 @@ class User:
     @property
     def is_admin(self) -> bool:
         return self.role in ("owner", "admin")
+
+    @property
+    def can_write(self) -> bool:
+        """viewer 只读：不能建/改/删任何资源（对话类接口由中间件白名单放行）。"""
+        return self.role != "viewer"
 
     def can_access(self, workspace_id: str) -> bool:
         """管理员跨工作区；成员只看归属列表。"""

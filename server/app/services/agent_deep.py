@@ -32,7 +32,7 @@ from langgraph.errors import GraphRecursionError
 
 from app.core.config import get_settings
 from app.services import metrics
-from app.services.capabilities import AgentContext, _artifact_kind, sandbox
+from app.services.capabilities import ApprovalRequired, AgentContext, _artifact_kind, sandbox
 from app.services.capabilities.sandbox import slugify, workspace_root
 from app.services.tools import build_lc_tools, kb_directive, preflight_kb
 
@@ -323,6 +323,18 @@ async def run_deep_agent(
             if event["kind"] == "tool_call":
                 tool_calls += 1
             yield event
+    except ApprovalRequired as approval:
+        # 敏感工具未批准：暂停任务，前端弹批准框；批准后前端自动重发任务
+        yield {
+            "kind": "approval_required",
+            "tool": approval.tool,
+            "args": _short(approval.args),
+        }
+        final_text = (
+            f"任务已暂停：工具 `{approval.tool}` 需要你批准后才能执行。"
+            "批准后我会自动继续。"
+        )
+        status = "paused"
     except GraphRecursionError:
         final_text = (
             final_text

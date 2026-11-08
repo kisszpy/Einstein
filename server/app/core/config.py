@@ -26,6 +26,29 @@ class Settings(BaseSettings):
     # 检索
     retrieval_mode: str = "hybrid"  # vector | lexical | hybrid
     rrf_k: int = 60                 # RRF 融合平滑常数
+    # 重排序：none 关闭；http 走 OpenAI 兼容 /rerank 端点；onnx 本机 bge-reranker
+    rerank_provider: str = "none"
+    rerank_endpoint: str = ""       # 如 http://127.0.0.1:8080/v1/rerank
+    rerank_model: str = "reranker"
+    rerank_api_key: str = ""
+    rerank_model_dir: str = ""      # onnx 模型目录（含 model.onnx + tokenizer）
+    # 限流（每分钟；0 = 不限）。Redis 计数，Redis 不可用自动回落内存
+    ratelimit_enabled: bool = True
+    ratelimit_login: int = 10       # 登录尝试，按 IP+账号
+    ratelimit_chat: int = 60        # 对话请求，按用户
+    ratelimit_agent: int = 30       # 智能体任务，按用户
+    ratelimit_search: int = 120     # 检索，按用户
+    ratelimit_openapi: int = 240    # 开放 API /v1，按 API Key
+    # 配额（每工作区每日；0 = 不限）
+    quota_daily_requests: int = 0
+    quota_daily_tokens: int = 0
+    # 模型降级链：主端点连不上时依次尝试。格式 `base_url::model::api_key;...`
+    llm_fallbacks: str = ""
+    # 人工确认：这些智能体工具在执行前需要用户批准（逗号分隔；空 = 关闭）。
+    # 例：APP_AGENT_APPROVAL_TOOLS=code_run
+    agent_approval_tools: str = ""
+    # 主密钥：用于 MCP 凭证等敏感配置的落盘加密。生产必须改掉默认值。
+    secret_key: str = "einstein-local-secret-change-me"
 
     # 技能市场与动态安装
     github_token: str = ""                     # 可选：提升 GitHub 接口额度（60/h → 5000/h）

@@ -205,7 +205,9 @@ class JsonKbRepository:
 
     def owns(self, kb_id: str, workspace_id: str) -> bool:
         kb = self.kbs.get(kb_id)
-        return kb is not None and kb.workspace_id == workspace_id
+        if kb is None:
+            return False
+        return kb.workspace_id == workspace_id or kb.visibility == "shared"
 
     # ---- 文档 ----
     def add_document(
@@ -372,11 +374,13 @@ class SqlKbRepository:
 
     @staticmethod
     def _chunk(row: dict) -> Chunk:
+        parent_seq = row.get("parent_seq")
         return Chunk(
             id=row["id"], kb_id=row["kb_id"], document_id=row["document_id"], text=row["text"],
             vector=bytes_to_vec(row.get("vector")), embedding_kind=row["vector_kind"] or "mock",
             seq=int(row["seq"] or 0), char_start=int(row["char_start"] or 0),
             char_end=int(row["char_end"] or 0), created_at=row["created_at"],
+            parent_seq=int(parent_seq) if parent_seq is not None else None,
         )
 
     # ---- KB ----
@@ -415,10 +419,13 @@ class SqlKbRepository:
         return affected > 0
 
     def owns(self, kb_id: str, workspace_id: str) -> bool:
-        row = self.db.query_one(
-            "SELECT 1 AS ok FROM knowledge_bases WHERE id = ? AND workspace_id = ?", (kb_id, workspace_id),
-        )
-        return row is not None
+        # shared 知识库跨工作区可读（检索/引用）；private/workspace 仅本工作区。
+        # 注：private 与 workspace 的区分需要"创建者"字段，当前模型没有——
+        # 在引入 owner 之前两者语义一致，均限本工作区。
+        kb = self.get_kb(kb_id)
+        if kb is None:
+            return False
+        return kb.workspace_id == workspace_id or kb.visibility == "shared"
 
     # ---- 文档 ----
     def add_document(
@@ -536,13 +543,13 @@ class SqlKbRepository:
         rows = [
             (
                 c.id, c.kb_id, c.document_id, c.seq, c.text, c.char_start, c.char_end,
-                vec_to_bytes(c.vector), c.embedding_kind, c.created_at or now,
+                vec_to_bytes(c.vector), c.embedding_kind, c.created_at or now, c.parent_seq,
             )
             for c in chunks
         ]
         self.db.executemany(
             "INSERT INTO chunks (id, kb_id, document_id, seq, text, char_start, char_end,"
-            " vector, vector_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " vector, vector_kind, created_at, parent_seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
 
@@ -561,7 +568,7 @@ class SqlKbRepository:
             params.append(document_id)
         clause = f" WHERE {' AND '.join(where)}" if where else ""
         # 词法检索不需要向量：4096 维 float 一条 16KB，几千条就是几十 MB 的白读
-        cols = "id, kb_id, document_id, seq, text, char_start, char_end, vector_kind, created_at"
+        cols = "id, kb_id, document_id, seq, text, char_start, char_end, vector_kind, created_at, parent_seq"
         if with_vector:
             cols = cols.replace("vector_kind", "vector, vector_kind")
         rows = self.db.query(
@@ -577,7 +584,7 @@ class SqlKbRepository:
         marks = ", ".join("?" for _ in chunk_ids)
         rows = self.db.query(
             "SELECT id, kb_id, document_id, seq, text, char_start, char_end, vector,"
-            f" vector_kind, created_at FROM chunks WHERE id IN ({marks})",
+            " vector_kind, created_at, parent_seq FROM chunks WHERE id IN ({})".format(marks),
             list(chunk_ids),
         )
         return [self._chunk(r) for r in rows]

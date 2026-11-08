@@ -33,6 +33,8 @@ interface Report {
   recall_at_1: number;
   recall_at_k: number;
   mrr: number;
+  context_precision?: number;
+  faithfulness?: number | null;
   answer_pass_rate: number | null;
   items: {
     query: string;
@@ -47,6 +49,21 @@ interface Report {
   }[];
 }
 
+/** 历史运行摘要（GET /runs 返回，不含 items）。 */
+interface RunSummary {
+  run_id: string;
+  name: string;
+  mode: string;
+  ran_at: string;
+  total: number;
+  recall_at_1: number;
+  recall_at_k: number;
+  mrr: number;
+  context_precision?: number;
+  faithfulness?: number | null;
+  answer_pass_rate: number | null;
+}
+
 const EMPTY_ITEM = { query: "", expected_doc: "", expected_text: "", expected_contains: "" };
 
 export function EvalPage() {
@@ -58,6 +75,7 @@ export function EvalPage() {
   const [newName, setNewName] = useState("");
   const [newItems, setNewItems] = useState([{ ...EMPTY_ITEM }]);
   const [report, setReport] = useState<Report | null>(null);
+  const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runMode, setRunMode] = useState<"hybrid" | "vector" | "lexical">("hybrid");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -138,10 +156,22 @@ export function EvalPage() {
         return;
       }
       setReport(await res.json());
+      await loadRuns(setId); // 刷新历史，供两次运行对比
     } finally {
       setRunning(false);
     }
   };
+
+  // 历史运行（新→旧）；与上一次的指标差值用来快速判断"改了之后有没有变好"
+  const loadRuns = useCallback(async (setId: string) => {
+    const res = await fetch(`/api/eval/sets/${setId}/runs`);
+    if (res.ok) setRuns((await res.json()) as RunSummary[]);
+  }, []);
+
+  useEffect(() => {
+    if (selectedSet) void loadRuns(selectedSet);
+    else setRuns([]);
+  }, [selectedSet, loadRuns]);
 
   const remove = async (s: EvalSet) => {
     if (!window.confirm(`删除评测集「${s.name}」？`)) return;
@@ -307,15 +337,59 @@ export function EvalPage() {
                 </span>
               </h3>
             </div>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-3">
               <Metric label="Recall@1" value={String(report.recall_at_1)} />
               <Metric label={`Recall@${3}`} value={String(report.recall_at_k)} />
               <Metric label="MRR" value={String(report.mrr)} />
+              {report.context_precision != null && (
+                <Metric label="Context Precision" value={String(report.context_precision)} />
+              )}
               <Metric
                 label="回答通过率"
                 value={report.answer_pass_rate != null ? String(report.answer_pass_rate) : "—"}
               />
+              <Metric
+                label="忠实性"
+                value={report.faithfulness != null ? String(report.faithfulness) : "—"}
+              />
             </div>
+            {/* 历史运行：与上一次的差值，一眼看出改动是变好还是变坏 */}
+            {runs.length > 1 && (
+              <div className="rounded-lg border border-line p-3">
+                <p className="mb-2 text-xs text-tertiary">
+                  历史运行（最近 {Math.min(runs.length, 10)} 次，Δ 为与上一次相比）
+                </p>
+                <div className="space-y-1.5">
+                  {runs.slice(0, 10).map((r, i) => {
+                    const prev = runs[i + 1];
+                    const delta = (key: "recall_at_k" | "mrr" | "context_precision") =>
+                      prev && r[key] != null && prev[key] != null
+                        ? r[key]! - prev[key]!
+                        : null;
+                    const fmtDelta = (d: number | null) =>
+                      d == null ? "" : ` ${d >= 0 ? "▲" : "▼"}${Math.abs(d).toFixed(3)}`;
+                    return (
+                      <div key={r.run_id} className="flex items-center gap-3 text-xs">
+                        <span className="w-36 shrink-0 text-tertiary">{r.ran_at} UTC</span>
+                        <span className="text-secondary">{r.mode}</span>
+                        <span className="text-secondary">
+                          MRR {r.mrr}
+                          <span className={delta("mrr") && delta("mrr")! < 0 ? "text-danger" : "text-brand"}>
+                            {fmtDelta(delta("mrr"))}
+                          </span>
+                        </span>
+                        <span className="text-secondary">
+                          Recall {r.recall_at_k}
+                          <span className={delta("recall_at_k") && delta("recall_at_k")! < 0 ? "text-danger" : "text-brand"}>
+                            {fmtDelta(delta("recall_at_k"))}
+                          </span>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div className="space-y-2">
               {report.items.map((it, idx) => (
                 <div key={idx} className="rounded-lg border border-line p-3">

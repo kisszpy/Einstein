@@ -70,6 +70,8 @@ class SearchRequest(BaseModel):
     query: str
     top_k: int = 4
     mode: str | None = None  # vector / lexical / hybrid，空则用服务端默认
+    rerank: bool = True      # false 可对比关闭重排后的效果
+    parent_expand: bool = False  # 父子切片命中后回填父片上下文
 
 
 def _require_kb(store: KBStore, kb_id: str, ws: str) -> None:
@@ -482,6 +484,7 @@ async def list_document_chunks(
             "char_end": c.char_end,
             "embedding_kind": c.embedding_kind,
             "has_vector": bool(c.vector),
+            "parent_seq": c.parent_seq,
         }
         for c in sorted(store.list_chunks([kb_id], document_id=doc_id), key=lambda x: x.seq)
     ]
@@ -587,7 +590,8 @@ async def search_kb(req: SearchRequest, ws: str = Depends(current_workspace)) ->
     if not kb_ids:
         return []
     try:
-        hits = await search(store, kb_ids, req.query, req.top_k, mode=req.mode)  # type: ignore[arg-type]
+        hits = await search(store, kb_ids, req.query, req.top_k, mode=req.mode,  # type: ignore[arg-type]
+                            rerank=req.rerank, parent_expand=req.parent_expand)
     except RuntimeError as exc:  # 嵌入端点不可用：与入库一致，回 503 而不是 500
         raise HTTPException(503, str(exc)) from exc
     return [
@@ -601,6 +605,75 @@ async def search_kb(req: SearchRequest, ws: str = Depends(current_workspace)) ->
         }
         for h in hits
     ]
+
+
+class CompareRequest(BaseModel):
+    kb_ids: list[str]
+    query: str
+    top_k: int = 5
+    modes: list[str] = ["vector", "lexical", "hybrid"]
+    rerank: bool = True
+
+
+@router.post("/search_compare")
+async def search_compare(req: CompareRequest, ws: str = Depends(current_workspace)) -> dict:
+    """多策略并排对比：同一查询在各检索模式下的召回 diff（测试台用）。"""
+    store = get_store()
+    kb_ids = store.owned_kb_ids(ws, req.kb_ids)
+    if not kb_ids:
+        return {"query": req.query, "results": {}}
+    results: dict[str, list[dict]] = {}
+    timings: dict[str, int] = {}
+    import time as _time
+    for mode in req.modes:
+        if mode not in ("vector", "lexical", "hybrid"):
+            continue
+        t0 = _time.perf_counter()
+        try:
+            hits = await search(store, kb_ids, req.query, req.top_k, mode=mode,  # type: ignore[arg-type]
+                                rerank=req.rerank)
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc)) from exc
+        timings[mode] = round((_time.perf_counter() - t0) * 1000)
+        results[mode] = [
+            {
+                "chunk_id": h.chunk_id,
+                "document_name": h.document_name,
+                "text": h.text[:200],
+                "score": h.score,
+            }
+            for h in hits
+        ]
+    return {"query": req.query, "results": results, "timings_ms": timings}
+
+
+@router.get("/citations/{chunk_id}")
+async def citation_locator(chunk_id: str, ws: str = Depends(current_workspace)) -> dict:
+    """引用定位：切片 → 原文段落（前后各带 200 字上下文，便于前端高亮）。"""
+    store = get_store()
+    chunk = store.get_chunks([chunk_id])
+    if not chunk:
+        raise HTTPException(404, "切片不存在")
+    c = chunk[0]
+    doc = store.get_document(c.document_id)
+    kb = store.get_kb(c.kb_id)
+    if doc is None or kb is None or kb.workspace_id != ws:
+        raise HTTPException(404, "切片不存在")
+    content = doc.content
+    before = content[max(0, c.char_start - 200):c.char_start]
+    after = content[c.char_end:c.char_end + 200]
+    return {
+        "chunk_id": c.id,
+        "document_id": c.document_id,
+        "document_name": doc.name,
+        "kb_id": c.kb_id,
+        "text": c.text,
+        "char_start": c.char_start,
+        "char_end": c.char_end,
+        "before": before,
+        "after": after,
+        "excerpt": content[max(0, c.char_start - 200):c.char_end + 200],
+    }
 
 
 @router.delete("/{kb_id}")

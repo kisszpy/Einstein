@@ -23,6 +23,7 @@ interface Workspace {
 
 const ROLES = [
   { value: "member", label: "成员" },
+  { value: "viewer", label: "只读" },
   { value: "admin", label: "管理员" },
   { value: "owner", label: "所有者" },
 ];

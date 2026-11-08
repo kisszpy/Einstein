@@ -71,14 +71,32 @@ async def delete_set(set_id: str, ws: str = Depends(current_workspace)) -> dict:
 
 @router.post("/sets/{set_id}/run")
 async def run(
-    set_id: str, mode: str | None = None, ws: str = Depends(current_workspace)
+    set_id: str, mode: str | None = None, judge: bool = False,
+    ws: str = Depends(current_workspace),
 ) -> dict:
-    """mode 可选：vector / lexical / hybrid，用于对比不同检索策略。"""
+    """mode 可选：vector / lexical / hybrid；judge=true 开 LLM 忠实性裁判。"""
     _require_visible(set_id, ws)
     try:
-        report = await eval_service.run_eval(set_id, mode=mode)
+        report = await eval_service.run_eval(set_id, mode=mode, judge=judge)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"{type(exc).__name__}: {exc}")
     if report is None:
         raise HTTPException(404, "评测集不存在")
+    return report
+
+
+@router.get("/sets/{set_id}/runs")
+async def run_history(set_id: str, ws: str = Depends(current_workspace)) -> list[dict]:
+    """历史运行（新→旧，不含逐条明细），两次运行的指标对比在前端做。"""
+    _require_visible(set_id, ws)
+    return eval_service.list_runs(set_id)
+
+
+@router.get("/sets/{set_id}/runs/{run_id}")
+async def run_detail(set_id: str, run_id: str, ws: str = Depends(current_workspace)) -> dict:
+    """单次运行全量报告（含逐条 items）。"""
+    _require_visible(set_id, ws)
+    report = eval_service.get_run(set_id, run_id)
+    if report is None:
+        raise HTTPException(404, "运行记录不存在")
     return report

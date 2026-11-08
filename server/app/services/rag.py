@@ -20,12 +20,18 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.core.config import get_settings
 from app.services.embeddings import embed_texts
 from app.services.lexical import BM25
+from app.services.rerank import rerank_hits
 from app.services.store import Chunk, Document, KBStore, get_store
 from app.services.vector import MemoryIndex, VectorIndexError, get_vector_index
 
 DEFAULT_CHUNK_SIZE = 500
 DEFAULT_CHUNK_OVERLAP = 50
-DEFAULT_STRATEGY = "recursive"   # recursive | fixed | semantic（按 markdown 标题）
+DEFAULT_STRATEGY = "recursive"   # recursive | fixed | semantic（按 markdown 标题）| parent-child
+
+# 父子切片参数：孩子片（小、准）用于检索命中，父片（大、全）用于回答上下文
+PARENT_SIZE = 1000
+CHILD_SIZE = 250
+CHILD_OVERLAP = 30
 
 RetrievalMode = Literal["vector", "lexical", "hybrid"]
 
@@ -77,6 +83,8 @@ def _split(
     - recursive：按段落/句子边界递归切，保留语义完整（默认）
     - fixed：定长硬切，适合表格/日志这类无段落结构的文本
     - semantic：先按 markdown 标题切块，过长再递归细分，保住章节边界
+    - parent-child：先切父片（大、保上下文），父片内再切孩子片（小、检索准）。
+      命中孩子片后把同父兄弟拼回去回答，兼顾召回精度与上下文完整
     """
     size = max(100, min(int(size), 4000))
     overlap = max(0, min(int(overlap), size // 2))
@@ -98,14 +106,46 @@ def _split(
                 out.extend(_split(block, strategy="recursive", size=size, overlap=overlap))
         return [b.strip() for b in out if b.strip()] or [content]
 
+    if strategy == "parent-child":
+        parents = _split(content, strategy="recursive", size=PARENT_SIZE, overlap=0)
+        children: list[str] = []
+        for parent in parents:
+            children.extend(_split(parent, strategy="recursive",
+                                   size=CHILD_SIZE, overlap=CHILD_OVERLAP))
+        return [c for c in children if c.strip()] or [content]
+
     splitter = RecursiveCharacterTextSplitter(chunk_size=size, chunk_overlap=overlap)
     return splitter.split_text(content) or [content]
 
 
 async def _embed_and_store(
     store: KBStore, doc: Document, kb_id: str, content: str, texts: list[str],
+    *, strategy: str = DEFAULT_STRATEGY,
 ) -> int:
-    """嵌入并写入切片，返回切片数。切片 id 用 `{doc_id}-{seq}`，删过文档也不会撞号。"""
+    """嵌入并写入切片，返回切片数。切片 id 用 `{doc_id}-{seq}`，删过文档也不会撞号。
+
+    parent-child 策略额外标注 parent_seq：孩子片属于第几个父片，
+    检索命中后按 (document_id, parent_seq) 把兄弟片拼回父片上下文。
+    """
+    parent_bounds: list[tuple[int, int]] = []
+    if strategy == "parent-child":
+        cursor_p = 0
+        for parent in _split(content, strategy="recursive", size=PARENT_SIZE, overlap=0):
+            start_p = content.find(parent, cursor_p)
+            if start_p < 0:
+                start_p = cursor_p
+            parent_bounds.append((start_p, start_p + len(parent)))
+            cursor_p = start_p + len(parent)
+
+    def _parent_of(start: int) -> int | None:
+        if not parent_bounds:
+            return None
+        for i, (s, e) in enumerate(parent_bounds):
+            if s <= start < e:
+                return i
+        # 落在边界缝隙（如切片起点恰好在父片结尾）：归到最近的父片
+        return len(parent_bounds) - 1 if start >= parent_bounds[-1][0] else 0
+
     vectors, kind = await embed_texts(texts)
     chunks: list[Chunk] = []
     cursor = 0
@@ -120,6 +160,7 @@ async def _embed_and_store(
                 id=f"{doc.id}-{seq}", kb_id=kb_id, document_id=doc.id, text=text,
                 vector=vec, embedding_kind=kind, seq=seq,
                 char_start=start, char_end=end, created_at=now_iso(),
+                parent_seq=_parent_of(start) if parent_bounds else None,
             )
         )
     store.add_chunks(chunks)
@@ -170,7 +211,7 @@ async def ingest_document(
             version=previous.version + 1, chunk_count=len(texts), source=source,
         )
         assert doc is not None
-        count = await _embed_and_store(store, doc, kb_id, content, texts)
+        count = await _embed_and_store(store, doc, kb_id, content, texts, strategy=strategy)
         # 新版本也留档，否则只能回滚到"上一版"，看不到每一版的内容
         store.repo.add_version(
             document_id=doc.id, kb_id=kb_id, version=doc.version, content=content,
@@ -187,7 +228,7 @@ async def ingest_document(
         document_id=doc.id, kb_id=kb_id, version=doc.version, content=content,
         content_hash=digest, chunk_count=len(texts), source=source, note="首次入库",
     )
-    count = await _embed_and_store(store, doc, kb_id, content, texts)
+    count = await _embed_and_store(store, doc, kb_id, content, texts, strategy=strategy)
     store.save()
     return IngestResult(doc, version=doc.version, chunk_count=count)
 
@@ -228,8 +269,15 @@ async def search(
     query: str,
     top_k: int = 4,
     mode: RetrievalMode | None = None,
+    *,
+    rerank: bool = True,
+    parent_expand: bool = False,
 ) -> list[RetrievedChunk]:
-    """检索：mode 为空时用 Settings.retrieval_mode（默认 hybrid）。"""
+    """检索：mode 为空时用 Settings.retrieval_mode（默认 hybrid）。
+
+    rerank：开启时用配置的重排提供者对融合结果打绝对相关分（失败自动回退原序）。
+    parent_expand：命中父子切片的孩子片后，把同父兄弟片文本拼回去（对话注入用）。
+    """
     if not kb_ids:
         return []
     settings = get_settings()
@@ -294,11 +342,13 @@ async def search(
             fused[cid] = fused.get(cid, 0.0) + 1.0 / (k + rank + 1)
         for rank, (cid, _s) in enumerate(lex_ranked):
             fused[cid] = fused.get(cid, 0.0) + 1.0 / (k + rank + 1)
-        ordered = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
+        ordered = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)
+        width = max(top_k * 4, top_k)          # 融合候选多留些，重排后才截断
+        ordered = ordered[:width]
     elif mode == "vector":
-        ordered = vec_ranked[:top_k]
+        ordered = vec_ranked[: max(top_k * 4, top_k)]
     else:
-        ordered = lex_ranked[:top_k]
+        ordered = lex_ranked[: max(top_k * 4, top_k)]
 
     doc_names = store.doc_names()
     hits: list[RetrievedChunk] = []
@@ -317,7 +367,48 @@ async def search(
                 lexical_score=round(lex_scores[cid], 4) if cid in lex_scores else None,
             )
         )
+
+    if rerank and hits:
+        hits, _info = await rerank_hits(query, hits, top_k)
+    else:
+        hits = hits[:top_k]
+
+    if parent_expand:
+        hits = expand_parents(store, hits)
     return hits
+
+
+def expand_parents(store: KBStore, hits: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """父子切片回填：命中孩子片后，把同父兄弟片的文本按 seq 拼回父片。
+
+    非父子切片（parent_seq 为 None）原样保留。排序分取同父孩子片中的最高分。
+    """
+    parent_groups: dict[tuple[str, int], list[RetrievedChunk]] = {}
+    standalone: list[RetrievedChunk] = []
+    for h in hits:
+        chunks = store.get_chunks([h.chunk_id])
+        parent_seq = chunks[0].parent_seq if chunks else None
+        if parent_seq is None:
+            standalone.append(h)
+        else:
+            parent_groups.setdefault((h.document_id, parent_seq), []).append(h)
+
+    out: list[RetrievedChunk] = list(standalone)
+    for (_doc_id, _pseq), group in parent_groups.items():
+        siblings = [c for c in store.list_chunks(document_id=group[0].document_id)
+                    if c.parent_seq == _pseq]
+        siblings.sort(key=lambda c: c.seq)
+        best = max(group, key=lambda h: h.score)
+        out.append(RetrievedChunk(
+            chunk_id=best.chunk_id,
+            document_id=best.document_id,
+            document_name=best.document_name,
+            text="\n".join(c.text for c in siblings),
+            score=best.score,
+            vector_score=best.vector_score,
+            lexical_score=best.lexical_score,
+        ))
+    return out
 
 
 def build_context_block(hits: list[RetrievedChunk]) -> str:

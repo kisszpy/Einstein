@@ -189,12 +189,20 @@ export function PlatformPage() {
         <Card className="p-5">
           <div className="flex items-baseline justify-between">
             <h3 className="text-[13px] font-medium">调用审计</h3>
-            {audit && (
-              <span className="text-xs text-tertiary">
-                {audit.summary.total} 次调用 · 错误 {audit.summary.errors} · Token{" "}
-                {audit.summary.tokens_in}/{audit.summary.tokens_out}
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {audit && (
+                <span className="text-xs text-tertiary">
+                  {audit.summary.total} 次调用 · 错误 {audit.summary.errors} · Token{" "}
+                  {audit.summary.tokens_in}/{audit.summary.tokens_out}
+                </span>
+              )}
+              <a
+                href="/api/audit/export.csv"
+                className="rounded border border-line px-2 py-0.5 text-xs text-secondary transition-colors duration-150 hover:border-line-strong hover:text-primary"
+              >
+                导出 CSV
+              </a>
+            </div>
           </div>
           <div className="mt-2 max-h-80 overflow-y-auto">
             <table className="w-full text-xs">

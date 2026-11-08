@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from app.api.deps import current_workspace
 from app.services.history import get_history_store
@@ -14,18 +15,56 @@ def _require_own(conv_id: str, ws: str):
 
 
 @router.get("")
-async def list_conversations(ws: str = Depends(current_workspace)) -> list[dict]:
+async def list_conversations(
+    q: str | None = None, archived: bool = False,
+    ws: str = Depends(current_workspace),
+) -> list[dict]:
+    """q 为空列出未归档会话；给了 q 就全文搜索（标题+消息正文）。"""
     history = get_history_store()
+    convs = (history.search_conversations(ws, q, include_archived=archived)
+             if q else history.list_conversations(ws))
+    if archived and not q:
+        convs = [c for c in convs if c.archived]
+    elif not q:
+        convs = [c for c in convs if not c.archived]
     return [
         {
             "id": c.id,
             "title": c.title,
-            # 列表接口只取计数，SQL 后端不会为了显示条数把全部消息读出来
             "message_count": c.message_count or len(c.messages),
             "updated_at": c.updated_at,
+            "archived": c.archived,
+            "pinned": c.pinned,
         }
-        for c in history.list_conversations(ws)
+        for c in convs
     ]
+
+
+class ConversationPatch(BaseModel):
+    title: str | None = None
+    archived: bool | None = None
+    pinned: bool | None = None
+
+
+@router.patch("/{conversation_id}")
+async def patch_conversation(
+    conversation_id: str, req: ConversationPatch, ws: str = Depends(current_workspace),
+) -> dict:
+    """重命名 / 归档 / 置顶，字段可选只改传了的。"""
+    history = get_history_store()
+    _require_own(conversation_id, ws)
+    conv = None
+    if req.title is not None:
+        if not req.title.strip():
+            raise HTTPException(400, "标题不能为空")
+        conv = history.rename_conversation(conversation_id, req.title.strip())
+    if req.archived is not None or req.pinned is not None:
+        # 重命名与归档/置顶可同时生效，不要互斥
+        conv = history.set_conversation_flags(
+            conversation_id, archived=req.archived, pinned=req.pinned)
+    if conv is None:
+        raise HTTPException(404, "会话不存在")
+    return {"id": conv.id, "title": conv.title, "archived": conv.archived, "pinned": conv.pinned}
 
 
 @router.get("/{conversation_id}")

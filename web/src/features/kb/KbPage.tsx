@@ -27,6 +27,12 @@ interface SearchHit {
 
 type SearchMode = "hybrid" | "vector" | "lexical";
 
+interface CompareResult {
+  query: string;
+  results: Partial<Record<SearchMode, SearchHit[]>>;
+  timings_ms: Record<string, number>;
+}
+
 const MODE_LABEL: Record<SearchMode, string> = {
   hybrid: "混合",
   vector: "向量",
@@ -53,6 +59,7 @@ export function KbPage() {
   const [docContent, setDocContent] = useState("");
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [compare, setCompare] = useState<CompareResult | null>(null);
   const [mode, setMode] = useState<SearchMode>("hybrid");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -133,6 +140,7 @@ export function KbPage() {
     if (!selected || !query.trim()) return;
     setBusy(true);
     setError(null);
+    setCompare(null);
     try {
       const res = await fetch("/api/kb/search", {
         method: "POST",
@@ -148,6 +156,35 @@ export function KbPage() {
       setError((e as Error).message);
     } finally {
       setBusy(false); // 无论成功失败都要复位，否则按钮永久 disabled
+    }
+  };
+
+  // 多策略并排对比：同一 query 在各检索模式下的召回 diff 与耗时
+  const runCompare = async () => {
+    if (!selected || !query.trim()) return;
+    setBusy(true);
+    setError(null);
+    setHits(null);
+    try {
+      const res = await fetch("/api/kb/search_compare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kb_ids: [selected],
+          query: query.trim(),
+          top_k: 4,
+          modes: ["vector", "lexical", "hybrid"],
+        }),
+      });
+      if (!res.ok) {
+        setCompare(null);
+        throw new Error(await readError(res));
+      }
+      setCompare((await res.json()) as CompareResult);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -328,6 +365,9 @@ export function KbPage() {
                 <Button disabled={busy || !query.trim()} onClick={() => void runSearch()}>
                   检索
                 </Button>
+                <Button variant="outline" disabled={busy || !query.trim()} onClick={() => void runCompare()}>
+                  对比
+                </Button>
               </div>
               {hits && (
                 <div className="mt-4 space-y-2">
@@ -349,6 +389,43 @@ export function KbPage() {
                       </div>
                     ))
                   )}
+                </div>
+              )}
+              {compare && (
+                <div className="mt-4 space-y-3">
+                  {(Object.keys(compare.results) as SearchMode[]).map((m) => {
+                    const rows = compare.results[m] ?? [];
+                    const ms = compare.timings_ms[m];
+                    return (
+                      <div key={m}>
+                        <p className="mb-1 text-xs text-secondary">
+                          {MODE_LABEL[m]}
+                          <span className="ml-2 text-tertiary">
+                            {rows.length} 条{ms != null && ` · ${ms}ms`}
+                          </span>
+                        </p>
+                        {rows.length === 0 ? (
+                          <p className="rounded-lg bg-surface-3 p-2 text-xs text-tertiary">无命中</p>
+                        ) : (
+                          <div className="space-y-1">
+                            {rows.map((h, i) => (
+                              <div key={h.chunk_id} className="rounded-lg bg-surface-3 p-2 text-xs">
+                                <span className="text-tertiary">#{i + 1}</span>{" "}
+                                <span className="text-secondary">{h.document_name}</span>
+                                <p className="mt-0.5 line-clamp-2 text-primary">{h.text}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <button
+                    onClick={() => setCompare(null)}
+                    className="text-xs text-tertiary transition-colors hover:text-secondary"
+                  >
+                    收起对比
+                  </button>
                 </div>
               )}
             </Card>

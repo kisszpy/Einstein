@@ -3,6 +3,17 @@ export interface SkillFile {
   size: number;
 }
 
+export interface SkillVersion {
+  version: string;
+  name?: string;
+  description?: string;
+  system_prompt?: string;
+  tools?: string[];
+  commit?: string;
+  saved_at: string;
+  note?: string;
+}
+
 export interface Skill {
   id: string;
   name: string;
@@ -12,7 +23,7 @@ export interface Skill {
   builtin: boolean;
   enabled: boolean;
   workspace_id: string;
-  source: "local" | "github";
+  source: "local" | "github" | "zip";
   source_url: string;
   repo: string;
   ref: string;
@@ -23,6 +34,8 @@ export interface Skill {
   files: SkillFile[];
   installed_at: string;
   updated_at: string;
+  version?: string;
+  versions?: SkillVersion[];
 }
 
 export interface RepoInfo {

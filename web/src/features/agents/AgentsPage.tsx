@@ -11,6 +11,7 @@ import {
 import { readSseStream } from "@/features/chat/sse-parser";
 import { PreviewPanel } from "@/features/browser/PreviewPanel";
 import { tabForPath, type BrowserState } from "@/features/browser/types";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { TaskSidebar } from "./components/TaskSidebar";
 import { Composer } from "./components/Composer";
@@ -98,6 +99,8 @@ export function AgentsPage() {
   const [answer, setAnswer] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 敏感工具等待批准：非空时展示批准条，批准后自动续跑当前任务 */
+  const [approval, setApproval] = useState<{ tool: string; args: string } | null>(null);
   /** 当前任务的会话 id：追问沿用，新任务清空（由服务端分配） */
   const [sessionId, setSessionId] = useState<string | null>(null);
   /** 同一任务里已完成的更早轮次 */
@@ -261,6 +264,7 @@ export function AgentsPage() {
       setArtifacts([]);
       setAnswer("");
       setError(null);
+      setApproval(null);
       setElapsed(null);
       setRunning(true);
       startedAtRef.current = Date.now();
@@ -291,6 +295,11 @@ export function AgentsPage() {
             }
             case "step": {
               const { step } = raw as { step: AgentStep };
+              if (step.kind === "approval_required") {
+                // 敏感工具未批准：任务暂停，弹出批准条；不进步骤流
+                setApproval({ tool: step.tool ?? "", args: step.args ?? "" });
+                break;
+              }
               setSteps((prev) => [...prev, step]);
               break;
             }
@@ -362,6 +371,19 @@ export function AgentsPage() {
     if (!text.trim() || running) return;
     setTask("");
     void run(text);
+  };
+
+  /** 批准敏感工具：登记到服务端后自动重发当前任务继续执行 */
+  const approveTool = async () => {
+    if (!approval) return;
+    const res = await fetch("/api/agent/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId ?? "", tool: approval.tool }),
+    });
+    if (!res.ok) return;
+    setApproval(null);
+    if (submitted && !running) void run(submitted);
   };
 
   const stop = () => {
@@ -649,7 +671,33 @@ export function AgentsPage() {
             </div>
 
             <div className="shrink-0 pb-3">
-              <div className="conversation-column">{composer}</div>
+              <div className="conversation-column">
+                {approval && (
+                  <div className="mb-2 flex items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-4 py-2.5">
+                    <div className="min-w-0 text-[13px] text-primary">
+                      <p>
+                        任务已暂停：工具{" "}
+                        <code className="rounded bg-surface-3 px-1 py-0.5 text-xs">
+                          {approval.tool}
+                        </code>{" "}
+                        需要你批准后才能执行。
+                      </p>
+                      {approval.args && (
+                        <p className="mt-0.5 truncate text-xs text-tertiary" title={approval.args}>
+                          参数：{approval.args}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button onClick={() => void approveTool()}>批准并继续</Button>
+                      <Button variant="ghost" onClick={() => setApproval(null)}>
+                        拒绝
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {composer}
+              </div>
             </div>
           </>
         )}

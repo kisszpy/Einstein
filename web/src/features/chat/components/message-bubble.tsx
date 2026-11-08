@@ -1,9 +1,19 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { AppWindow, ChevronDown, Globe } from "lucide-react";
+import { AppWindow, ChevronDown, Globe, ThumbsDown, ThumbsUp } from "lucide-react";
 import { Markdown } from "./Markdown";
 import { cn } from "@/lib/utils";
 import type { ChatMessage, WebState } from "../chat-types";
+
+interface CitationLocation {
+  chunk_id: string;
+  document_name: string;
+  text: string;
+  char_start: number;
+  char_end: number;
+  before: string;
+  after: string;
+}
 
 function hostOf(url: string) {
   try {
@@ -84,11 +94,60 @@ function WebPanel({ web }: { web: WebState }) {
   );
 }
 
-export function MessageBubble({ message }: { message: ChatMessage }) {
+export function MessageBubble({
+  message,
+  conversationId,
+  turn = 1,
+}: {
+  message: ChatMessage;
+  /** 反馈上报需要会话归属；历史会话由 ChatPage 传入 */
+  conversationId?: string | null;
+  /** 会话内的轮次（第几轮问答），随消息序号传入 */
+  turn?: number;
+}) {
   const isUser = message.role === "user";
   const [reasoningOpen, setReasoningOpen] = useState(false);
+  // 引用原文定位：点引用标签展开原文片段（前后各 200 字上下文）
+  const [located, setLocated] = useState<CitationLocation | null>(null);
+  const [locateError, setLocateError] = useState<string | null>(null);
+  // 赞踩反馈：一次一票，可切换方向
+  const [rating, setRating] = useState<"up" | "down" | null>(null);
   const webRunning =
     message.web?.status === "checking" || message.web?.status === "searching";
+
+  const sendRating = async (next: "up" | "down") => {
+    const final = rating === next ? null : next;
+    setRating(final);
+    if (!final) return;
+    try {
+      await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rating: final,
+          conversation_id: conversationId ?? "",
+          turn,
+        }),
+      });
+    } catch {
+      /* 反馈失败不打扰用户，汇总在管理页可见 */
+    }
+  };
+
+  const locate = async (chunkId: string) => {
+    if (located?.chunk_id === chunkId) {
+      setLocated(null);
+      return;
+    }
+    setLocateError(null);
+    try {
+      const res = await fetch(`/api/kb/citations/${chunkId}`);
+      if (!res.ok) throw new Error(await res.text());
+      setLocated((await res.json()) as CitationLocation);
+    } catch (e) {
+      setLocateError(`原文定位失败：${(e as Error).message.slice(0, 80)}`);
+    }
+  };
 
   return (
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
@@ -132,18 +191,64 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
             )}
             {message.citations && message.citations.length > 0 && !message.streaming && (
               <div className="mt-2 border-t border-line pt-2">
-                <p className="mb-1 text-xs text-tertiary">引用来源</p>
+                <p className="mb-1 text-xs text-tertiary">引用来源（点击定位原文）</p>
                 <div className="flex flex-wrap gap-1">
                   {message.citations.map((c) => (
-                    <span
+                    <button
                       key={c.chunk_id}
                       title={c.text}
-                      className="rounded bg-surface-3 px-1.5 py-0.5 text-xs text-secondary"
+                      onClick={() => void locate(c.chunk_id)}
+                      className="rounded bg-surface-3 px-1.5 py-0.5 text-xs text-secondary transition-colors duration-150 hover:bg-brand-soft hover:text-brand"
                     >
                       [{c.index}] {c.document_name} · {c.score.toFixed(2)}
-                    </span>
+                    </button>
                   ))}
                 </div>
+                {locateError && (
+                  <p className="mt-1 text-xs text-danger">{locateError}</p>
+                )}
+                {located && (
+                  <div className="mt-2 rounded-lg bg-surface-3 p-2.5 text-xs leading-relaxed">
+                    <p className="mb-1 text-tertiary">
+                      原文定位 · 字符 {located.char_start}–{located.char_end}
+                    </p>
+                    {located.before && <p className="text-tertiary">…{located.before}</p>}
+                    <p className="text-primary">{located.text}</p>
+                    {located.after && <p className="text-tertiary">{located.after}…</p>}
+                    <button
+                      onClick={() => setLocated(null)}
+                      className="mt-1 text-tertiary transition-colors duration-150 hover:text-secondary"
+                    >
+                      收起
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            {/* 赞踩反馈：回答结束后出现 */}
+            {!isUser && !message.streaming && message.content && !message.error && (
+              <div className="mt-1.5 flex items-center gap-1 text-tertiary">
+                <button
+                  onClick={() => void sendRating("up")}
+                  title="有帮助"
+                  className={cn(
+                    "rounded p-1 transition-colors duration-150 hover:text-brand",
+                    rating === "up" && "text-brand",
+                  )}
+                >
+                  <ThumbsUp size={13} />
+                </button>
+                <button
+                  onClick={() => void sendRating("down")}
+                  title="有待改进"
+                  className={cn(
+                    "rounded p-1 transition-colors duration-150 hover:text-danger",
+                    rating === "down" && "text-danger",
+                  )}
+                >
+                  <ThumbsDown size={13} />
+                </button>
+                {rating && <span className="text-xs">已记录反馈</span>}
               </div>
             )}
           </>

@@ -14,6 +14,9 @@ interface Expert {
   tool_ids: string[];
   temperature: number;
   enabled: boolean;
+  greeting?: string;
+  suggestions?: string[];
+  status?: string;
 }
 
 interface Skill {
@@ -43,6 +46,14 @@ const EMPTY_FORM = {
   kb_ids: [] as string[],
   tool_ids: [] as string[],
   temperature: 0.7,
+  greeting: "",
+  suggestions: "" as string, // 逗号/换行分隔，保存时拆分
+};
+
+const STATUS_LABEL: Record<string, string> = {
+  draft: "草稿",
+  testing: "测试中",
+  live: "已上线",
 };
 
 function MultiSelect({
@@ -122,6 +133,8 @@ export function ExpertsPage() {
       kb_ids: [...e.kb_ids],
       tool_ids: [...e.tool_ids],
       temperature: e.temperature,
+      greeting: e.greeting ?? "",
+      suggestions: (e.suggestions ?? []).join("、"),
     });
     setError(null);
   };
@@ -137,17 +150,38 @@ export function ExpertsPage() {
       setError("名称不能为空");
       return;
     }
+    const payload = {
+      ...form,
+      suggestions: form.suggestions
+        .split(/[、,，\n]/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    };
     const url = editing === "new" ? "/api/experts" : `/api/experts/${editing}`;
     const res = await fetch(url, {
       method: editing === "new" ? "POST" : "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       setError(`保存失败：HTTP ${res.status}`);
       return;
     }
     setEditing(null);
+    await load();
+  };
+
+  const publish = async (e: Expert, status: string) => {
+    const res = await fetch(`/api/experts/${e.id}/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      window.alert(data.detail ?? "状态转移失败");
+      return;
+    }
     await load();
   };
 
@@ -213,6 +247,18 @@ export function ExpertsPage() {
               rows={4}
               className="w-full resize-y rounded-lg border border-line bg-surface-1 px-3 py-2 text-sm outline-none focus:border-brand"
             />
+            <input
+              value={form.greeting}
+              onChange={(e) => setForm({ ...form, greeting: e.target.value })}
+              placeholder="开场白：选中该专家后展示的欢迎语"
+              className="w-full rounded-lg border border-line bg-surface-1 px-3 py-2 text-sm outline-none focus:border-brand"
+            />
+            <input
+              value={form.suggestions}
+              onChange={(e) => setForm({ ...form, suggestions: e.target.value })}
+              placeholder="推荐问题：用顿号或换行分隔，对话页可一键发送"
+              className="w-full rounded-lg border border-line bg-surface-1 px-3 py-2 text-sm outline-none focus:border-brand"
+            />
             <MultiSelect
               label="挂载技能"
               options={skills
@@ -269,7 +315,21 @@ export function ExpertsPage() {
                 <div className="flex items-start gap-3">
                   <span className="text-2xl">{e.emoji}</span>
                   <div className="min-w-0">
-                    <div className="text-[13px] font-medium text-primary">{e.name}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[13px] font-medium text-primary">{e.name}</span>
+                      <span
+                        className={cn(
+                          "rounded px-1.5 py-0.5 text-[11px]",
+                          e.status === "live"
+                            ? "bg-brand-soft text-brand"
+                            : e.status === "testing"
+                              ? "bg-warning/15 text-warning"
+                              : "bg-surface-3 text-tertiary",
+                        )}
+                      >
+                        {STATUS_LABEL[e.status ?? "draft"] ?? e.status}
+                      </span>
+                    </div>
                     <p className="mt-0.5 text-xs text-secondary">{e.description}</p>
                     <div className="mt-1.5 flex flex-wrap gap-1">
                       {e.skill_ids.map((id) => (
@@ -299,13 +359,36 @@ export function ExpertsPage() {
                     </div>
                   </div>
                 </div>
-                <div className="flex shrink-0 gap-1">
-                  <Button variant="ghost" onClick={() => startEdit(e)}>
-                    编辑
-                  </Button>
-                  <Button variant="ghost" onClick={() => void remove(e)}>
-                    删除
-                  </Button>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  {/* 发布流：draft → testing → live，可回退 */}
+                  {(e.status ?? "draft") === "draft" && (
+                    <Button variant="ghost" onClick={() => void publish(e, "testing")}>
+                      转测试
+                    </Button>
+                  )}
+                  {(e.status ?? "draft") === "testing" && (
+                    <>
+                      <Button variant="ghost" onClick={() => void publish(e, "live")}>
+                        上线
+                      </Button>
+                      <Button variant="ghost" onClick={() => void publish(e, "draft")}>
+                        退回草稿
+                      </Button>
+                    </>
+                  )}
+                  {e.status === "live" && (
+                    <Button variant="ghost" onClick={() => void publish(e, "testing")}>
+                      下架回测试
+                    </Button>
+                  )}
+                  <div className="flex gap-1">
+                    <Button variant="ghost" onClick={() => startEdit(e)}>
+                      编辑
+                    </Button>
+                    <Button variant="ghost" onClick={() => void remove(e)}>
+                      删除
+                    </Button>
+                  </div>
                 </div>
               </div>
             </Card>

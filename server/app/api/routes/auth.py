@@ -117,6 +117,31 @@ async def logout(request: Request, user: users.User = Depends(current_user)) -> 
     return {"ok": True, "user": user.username}
 
 
+@router.post("/auth/join")
+async def join_by_invite(payload: dict, user: users.User = Depends(current_user)) -> dict:
+    """凭邀请码加入工作区：角色由码上标注，管理员不发码（需在成员页手动授予）。"""
+    code = str(payload.get("code", "")).strip()
+    if not code:
+        raise HTTPException(400, "邀请码不能为空")
+    redeemed = workspaces.redeem_invite(code)
+    if redeemed is None:
+        raise HTTPException(400, "邀请码无效或已用尽")
+    ws_id, role = redeemed["ws_id"], redeemed["role"]
+    store = users.get_user_store()
+    if ws_id in user.workspaces:
+        return {"ok": True, "workspace_id": ws_id, "role": user.role, "already_member": True}
+    updated = store.update(user, workspaces=[*user.workspaces, ws_id])
+    if user.role == "viewer" and role != "viewer":
+        # viewer 凭码加入时若码上角色更高，顺带提升（邀请码即授权）
+        updated = store.update(updated, role=role)
+    audit.record(
+        workspace_id=ws_id, key_id=None, key_name=user.username,
+        method="JOIN", path="/api/auth/join", status=200,
+        duration_ms=0, detail=f"role={role}",
+    )
+    return {"ok": True, "workspace_id": ws_id, "role": updated.role}
+
+
 # ---------- 成员管理（管理员） ----------
 
 

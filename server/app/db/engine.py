@@ -86,6 +86,11 @@ class Database:
         try:
             cur.execute(self._adapt(sql), params)
             rows = cur.fetchall()
+        except Exception:
+            # 读失败也必须回滚，否则 PG 事务停留在 aborted 状态，毒化后续所有请求
+            if self.dialect == "postgres":
+                self.conn.rollback()
+            raise
         finally:
             cur.close()
         if self.dialect == "sqlite":

@@ -68,6 +68,22 @@ async def delete_run(run_id: str, ws: str = Depends(current_workspace)) -> dict:
     return {"ok": True, "deleted": deleted}
 
 
+# 已批准的敏感工具：键 (session_id, tool)。进程内存即可——批准是短期状态，
+# 重启后用户重新点一次批准按钮，代价可接受，不值得为此建表。
+_APPROVALS: set[tuple[str, str]] = set()
+
+
+@router.post("/approve")
+async def approve_tool(payload: dict, ws: str = Depends(current_workspace)) -> dict:
+    """批准某会话使用某敏感工具。批准后前端自动重发任务继续执行。"""
+    session_id = str(payload.get("session_id", "")).strip()
+    tool = str(payload.get("tool", "")).strip()
+    if not session_id or not tool:
+        raise HTTPException(status_code=400, detail="session_id 与 tool 必填")
+    _APPROVALS.add((session_id, tool))
+    return {"ok": True, "session_id": session_id, "tool": tool}
+
+
 async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
     history = get_history_store()
     # 会话：追问沿用同一会话，新任务分配新 id
@@ -90,6 +106,7 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
         kb_ids = get_store().owned_kb_ids(ws, req.kb_ids)
 
         ctx = AgentContext(workspace_id=ws, project=req.project)
+        ctx.approved_tools = {t for (sid, t) in _APPROVALS if sid == session_id}
         if ctx.project:
             try:
                 sandbox.project_dir(ws, ctx.project)

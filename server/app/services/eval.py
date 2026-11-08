@@ -28,12 +28,19 @@ from app.services.store import get_store
 
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 _STORE_PATH = _DATA_DIR / "eval_sets.json"
+_RUNS_PATH = _DATA_DIR / "eval_runs.json"
 _STATE = blob("eval", _STORE_PATH)
+_RUN_STATE = blob("eval_runs", _RUNS_PATH)
 
 EVAL_TOP_K = 3
 EVAL_SYSTEM = (
     "你是问答助手。仅依据提供的参考资料回答，简洁直接；"
     "资料不足以回答时明确说明。不要输出思考过程。"
+)
+FAITHFULNESS_SYSTEM = (
+    "你是忠实性裁判。给你一段「参考资料」和一个「回答」，"
+    "判断回答是否完全基于参考资料、没有编造资料之外的事实。"
+    "只输出 JSON：{\"faithful\": true/false, \"reason\": \"一句话理由\"}。"
 )
 
 
@@ -166,7 +173,14 @@ def _judge_rank(expected_doc: str, expected_text: str, hits: list) -> int | None
     return None
 
 
-async def run_eval(set_id: str, mode: str | None = None) -> dict | None:
+async def run_eval(
+    set_id: str, mode: str | None = None, *, judge: bool = False, save: bool = True,
+) -> dict | None:
+    """跑一轮评测。
+
+    judge：开启 LLM 裁判算忠实性（faithfulness）——逐条调模型，评测变慢，默认关。
+    save：结果写入 eval_runs 历史（最近 20 轮），供两次运行对比。
+    """
     es = _registry().get(set_id)
     if es is None:
         return None
@@ -181,6 +195,7 @@ async def run_eval(set_id: str, mode: str | None = None) -> dict | None:
 
         answer = ""
         answer_pass: bool | None = None
+        faith: dict | None = None
         if hits:
             context = build_context_block(hits)
             prompt = f"=== 参考资料 ===\n{context}\n=== 参考资料 end ===\n\n问题：{item.query}"
@@ -196,6 +211,8 @@ async def run_eval(set_id: str, mode: str | None = None) -> dict | None:
             except Exception as exc:  # noqa: BLE001 — 模型不可用不应作废整轮检索指标
                 answer = f"（回答生成失败：{type(exc).__name__}）"
                 answer_pass = None
+            if judge and answer and not answer.startswith("（"):
+                faith = await _judge_faithfulness(context, answer)
         else:
             answer = "（检索无命中，跳过回答）"
 
@@ -210,6 +227,8 @@ async def run_eval(set_id: str, mode: str | None = None) -> dict | None:
                 "sources": [h.document_name for h in hits],
                 "answer": answer,
                 "answer_pass": answer_pass,
+                "faithful": (faith or {}).get("faithful") if faith else None,
+                "faith_reason": (faith or {}).get("reason") if faith else None,
             }
         )
 
@@ -217,8 +236,15 @@ async def run_eval(set_id: str, mode: str | None = None) -> dict | None:
     n = len(results)
     ranks = [r["rank"] for r in results if r["rank"] is not None]
     answer_items = [r for r in results if r["answer_pass"] is not None]
+    faith_items = [r for r in results if r["faithful"] is not None]
+
+    # context precision：命中时排名越靠前越好（P@rank 的均值）；未命中记 0
+    ctx_precision = (
+        round(sum(1.0 / r for r in ranks) / n, 3) if n else 0
+    )
 
     report = {
+        "run_id": uuid.uuid4().hex[:12],
         "set_id": es.id,
         "name": es.name,
         "kb_id": es.kb_id,
@@ -229,10 +255,16 @@ async def run_eval(set_id: str, mode: str | None = None) -> dict | None:
         "recall_at_1": round(sum(1 for r in ranks if r == 1) / n, 3) if n else 0,
         "recall_at_k": round(len(ranks) / n, 3) if n else 0,
         "mrr": round(sum(1.0 / r for r in ranks) / n, 3) if n else 0,
+        "context_precision": ctx_precision,
         "answer_pass_rate": round(
             sum(1 for r in answer_items if r["answer_pass"]) / len(answer_items), 3
         )
         if answer_items
+        else None,
+        "faithfulness": round(
+            sum(1 for r in faith_items if r["faithful"]) / len(faith_items), 3
+        )
+        if faith_items
         else None,
         "items": results,
     }
@@ -242,7 +274,61 @@ async def run_eval(set_id: str, mode: str | None = None) -> dict | None:
         duration_ms=duration_ms,
         status="ok",
     )
+    if save:
+        _save_run(report)
     return report
+
+
+async def _judge_faithfulness(context: str, answer: str) -> dict | None:
+    """LLM 裁判：回答是否完全基于资料。失败返回 None，不影响其他指标。"""
+    try:
+        raw, _ = await complete(
+            [SystemMessage(FAITHFULNESS_SYSTEM),
+             HumanMessage(content=f"=== 参考资料 ===\n{context}\n=== 参考资料 end ===\n\n回答：{answer}")],
+            temperature=0.0, max_tokens=150, kind="eval",
+        )
+        import json as _json
+
+        start = raw.find("{")
+        data = _json.loads(raw[start:raw.rfind("}") + 1])
+        return {"faithful": bool(data.get("faithful")), "reason": str(data.get("reason", ""))[:200]}
+    except Exception:  # noqa: BLE001 — 裁判不可用就跳过
+        return None
+
+
+# ---------- 运行历史（两次运行对比用） ----------
+
+_RUNS_PER_SET = 20
+
+
+def _runs_registry() -> dict[str, list[dict]]:
+    try:
+        return _RUN_STATE.read() or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_run(report: dict) -> None:
+    runs = _runs_registry()
+    history = runs.setdefault(report["set_id"], [])
+    history.append(report)
+    runs[report["set_id"]] = history[-_RUNS_PER_SET:]
+    _RUN_STATE.write(runs)
+
+
+def list_runs(set_id: str, limit: int = _RUNS_PER_SET) -> list[dict]:
+    """该评测集的历史运行（新→旧），不含逐条 items 以省流量。"""
+    out = []
+    for r in _runs_registry().get(set_id, [])[-limit:][::-1]:
+        out.append({k: v for k, v in r.items() if k != "items"})
+    return out
+
+
+def get_run(set_id: str, run_id: str) -> dict | None:
+    for r in _runs_registry().get(set_id, []):
+        if r.get("run_id") == run_id:
+            return r
+    return None
 
 
 def set_payload(es: EvalSet) -> dict:
