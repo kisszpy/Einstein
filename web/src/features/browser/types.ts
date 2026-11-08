@@ -106,6 +106,8 @@ export interface Deck {
   source: "sidecar" | "parsed";
   editable: "full" | "partial";
   slides: DeckSlide[];
+  /** 服务端用 PowerPoint 真实渲染的逐页 JPG（项目内相对路径），还原渐变/圆角等视觉 */
+  preview_images?: string[];
   bytes: number;
   updated_at: string;
 }

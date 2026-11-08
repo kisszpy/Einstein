@@ -6,6 +6,7 @@
 它们用票据鉴权（iframe 带不了 Authorization 头），票据由 /api/browse/ticket 签发。
 """
 
+import asyncio
 import io
 import mimetypes
 import zipfile
@@ -237,7 +238,8 @@ class DeckSaveRequest(BaseModel):
 async def read_deck(project: str, path: str, ws: str = Depends(current_workspace)) -> dict:
     try:
         root = sandbox.project_dir(ws, project)
-        return deck_service.load_deck(root, path)
+        # load_deck 首次会触发 PowerPoint COM 导出预览图（秒级），放线程避免阻塞事件循环
+        return await asyncio.to_thread(deck_service.load_deck, root, path)
     except sandbox.SandboxError as exc:
         raise _guard(exc, 404) from exc
 

@@ -74,6 +74,8 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
   const [deck, setDeck] = useState<Deck | null>(null);
   const [themes, setThemes] = useState<ThemePreset[]>([FALLBACK_THEME]);
   const [selected, setSelected] = useState(0);
+  /** 设计稿模式：展示 PowerPoint 真实渲染图（还原渐变/圆角等），否则展示可编辑大纲 */
+  const [designMode, setDesignMode] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
@@ -121,6 +123,20 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
   );
 
   const slide: DeckSlide | null = deck ? (deck.slides[selected] ?? null) : null;
+  const previews = deck?.preview_images ?? [];
+  const hasDesign = previews.length > 0;
+  // img 标签带不了 Authorization 头，设计稿图片靠 browse ticket 鉴权
+  const [ticket, setTicket] = useState("");
+  useEffect(() => {
+    if (!hasDesign) return;
+    let alive = true;
+    api.getTicket().then((value) => {
+      if (alive) setTicket(value);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [hasDesign]);
 
   /** 所有修改都走这里：入栈历史 → 标记未保存。 */
   const mutate = useCallback(
@@ -249,6 +265,33 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
         )}
 
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          {hasDesign && (
+            <div
+              className="flex shrink-0 items-center rounded-md border border-line bg-surface-1 text-[12px]"
+              role="group"
+              aria-label="预览模式切换"
+              title="设计稿为 PowerPoint 真实渲染；可编辑按结构化大纲显示"
+            >
+              <button
+                onClick={() => setDesignMode(true)}
+                className={cn(
+                  "rounded-l-md px-2 py-1",
+                  designMode ? "bg-brand/10 font-medium text-brand" : "text-secondary hover:bg-surface-3",
+                )}
+              >
+                设计稿
+              </button>
+              <button
+                onClick={() => setDesignMode(false)}
+                className={cn(
+                  "rounded-r-md px-2 py-1",
+                  !designMode ? "bg-brand/10 font-medium text-brand" : "text-secondary hover:bg-surface-3",
+                )}
+              >
+                可编辑
+              </button>
+            </div>
+          )}
           {compact && (
             <button
               onClick={() => setPropsOpen((prev) => !prev)}
@@ -401,17 +444,30 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
               <span className="hidden shrink-0 lg:inline">点文字直接改，改完失焦生效</span>
             </div>
             <div className={cn("mx-auto w-full px-4 pb-6", compact ? "max-w-[680px]" : "max-w-[920px]")}>
-              <SlideCanvas
-                key={`${selected}-${slide.layout}`}
-                slide={slide}
-                theme={theme}
-                index={selected}
-                deckTitle={deck.title}
-                author={deck.author}
-                editable
-                onChange={patchSlide}
-                className="rounded-lg"
-              />
+              {designMode && hasDesign && ticket ? (
+                <>
+                  <img
+                    src={api.previewUrl(project, previews[selected] ?? previews[0] ?? "", ticket)}
+                    alt={`第 ${selected + 1} 页设计稿`}
+                    className="w-full rounded-lg border border-line"
+                  />
+                  <p className="mt-2 text-center text-[11.5px] text-tertiary">
+                    设计稿 · PowerPoint 真实渲染（还原渐变/圆角/玻璃质感）；切「可编辑」改文字，保存会按主题重排
+                  </p>
+                </>
+              ) : (
+                <SlideCanvas
+                  key={`${selected}-${slide.layout}`}
+                  slide={slide}
+                  theme={theme}
+                  index={selected}
+                  deckTitle={deck.title}
+                  author={deck.author}
+                  editable
+                  onChange={patchSlide}
+                  className="rounded-lg"
+                />
+              )}
             </div>
           </div>
         </div>

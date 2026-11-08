@@ -439,9 +439,45 @@ def _describe(root: Path, rel: str, payload: dict, source: str, inferred: bool, 
         # sidecar 来源 = 完整语义，保存无损；解析来源 = 归一化重排
         "editable": "full" if source == "sidecar" else "partial",
         "slides": payload.get("slides") or [],
+        "preview_images": payload.get("preview_images") or [],
         "bytes": stat.st_size,
         "updated_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
     }
+
+
+def _slide_images(root: Path, target: Path) -> list[str]:
+    """用本机 PowerPoint 把每页导出成 JPG，返回相对 root 的路径列表。
+
+    编辑器的结构化模型是有损的（丢渐变/圆角/玻璃卡/透明度），前端「设计稿」
+    模式靠这份真实渲染图还原文件本身的设计。导出按文件 mtime 缓存；机器上
+    没有 PowerPoint 或 COM 失败时返回空列表，前端自动退回大纲模式。
+    """
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError:
+        return []
+    cache_dir = root / ".deckpreview" / f"{target.stem}-{int(target.stat().st_mtime)}"
+    if not cache_dir.is_dir() or not any(cache_dir.glob("*.JPG")):
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            pythoncom.CoInitialize()
+            try:
+                app = win32com.client.Dispatch("PowerPoint.Application")
+                pres = app.Presentations.Open(str(target), True, False, False)
+                pres.SaveAs(str(cache_dir), 17)  # ppSaveAsJPG：整份导出为逐页 JPG
+                pres.Close()
+            finally:
+                pythoncom.CoUninitialize()
+        except Exception:  # noqa: BLE001 — 预览是增强能力，失败不阻塞大纲
+            return []
+    jpgs = sorted(
+        cache_dir.glob("*.JPG"),
+        key=lambda p: (len(p.stem), p.stem),  # 幻灯片1 < 幻灯片10（位数优先）
+    )
+    if not jpgs:
+        return []
+    return [p.relative_to(root).as_posix() for p in jpgs]
 
 
 def load_deck(root: Path, rel: str) -> dict:
@@ -458,8 +494,10 @@ def load_deck(root: Path, rel: str) -> dict:
         for idx, slide in enumerate(slides):
             if isinstance(slide, dict) and slide.get("layout") not in LAYOUTS:
                 slide["layout"] = ppt._infer_layout(slide, idx, total)
+        payload["preview_images"] = _slide_images(root, target)
         return _describe(root, rel, payload, "sidecar", False, target)
     parsed, inferred = parse_pptx(target)
+    parsed["preview_images"] = _slide_images(root, target)
     return _describe(root, rel, parsed, "parsed", inferred, target)
 
 
