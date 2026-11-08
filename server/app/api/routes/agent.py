@@ -25,6 +25,10 @@ class AgentRunRequest(BaseModel):
     project: str = ""
     # 追问时带上所属会话 id；为空表示新任务（服务端分配）
     session_id: str = ""
+    # 技能：留空 = 引擎按任务上下文从技能清单自主挑选；点名 = 强制装载
+    skill_ids: list[str] = []
+    # 专家人设（可选）：只取 persona + temperature，不携带任何挂载
+    expert_id: str = ""
 
 
 def _sse(event: str, data: dict) -> str:
@@ -84,6 +88,31 @@ async def approve_tool(payload: dict, ws: str = Depends(current_workspace)) -> d
     return {"ok": True, "session_id": session_id, "tool": tool}
 
 
+def _resolve_mounts(ws: str, req: AgentRunRequest) -> tuple[str, list[str], float | None]:
+    """解析人设与技能挂载，返回 (persona 段, pinned 技能名, temperature)。
+
+    规则：显式请求参数覆盖专家默认；技能集合 = 去重(req ∪ expert.skill_ids)；
+    无效/跨工作区技能静默丢弃（与 kb_ids 同一防探测原则）。
+    """
+    from app.services import skill_publisher
+    from app.services.experts import get_expert_store
+
+    persona = ""
+    temperature: float | None = None
+    default_skill_ids: list[str] = []
+    if req.expert_id:
+        expert = get_expert_store().get(req.expert_id)
+        if expert and expert.enabled and expert.workspace_id == ws:
+            if expert.persona.strip():
+                persona = f"【人设】{expert.persona.strip()}"
+            temperature = expert.temperature
+            default_skill_ids = list(expert.skill_ids)
+
+    skill_ids = list(dict.fromkeys([*req.skill_ids, *default_skill_ids]))
+    pinned = skill_publisher.pinned_slugs(ws, skill_ids)
+    return persona, pinned, temperature
+
+
 async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
     history = get_history_store()
     # 会话：追问沿用同一会话，新任务分配新 id
@@ -104,6 +133,7 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
     try:
         # 只允许检索当前工作区的知识库；项目名给定时必须已存在
         kb_ids = get_store().owned_kb_ids(ws, req.kb_ids)
+        persona, pinned_skills, temperature = _resolve_mounts(ws, req)
 
         ctx = AgentContext(workspace_id=ws, project=req.project)
         ctx.approved_tools = {t for (sid, t) in _APPROVALS if sid == session_id}
@@ -118,6 +148,16 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
         yield _sse("error", {"message": f"{type(exc).__name__}: {exc}"})
         return
 
+    if pinned_skills:
+        from app.services import audit as audit_svc
+
+        audit_svc.record(
+            workspace_id=ws, key_id=None, key_name=None,
+            method="AGENT_SKILLS", path="/agent/run", status=200,
+            duration_ms=0.0, detail=",".join(pinned_skills),
+        )
+        print(f"[agent-stream] {run_id} skills={','.join(pinned_skills)}", flush=True)
+
     try:
         final_text = ""
         steps: list[dict] = []
@@ -131,7 +171,8 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
         async def _pump() -> None:
             try:
                 async for step in run_agent(
-                    req.task, req.tool_ids, kb_ids, ws, ctx, history=lc_history
+                    req.task, req.tool_ids, kb_ids, ws, ctx, history=lc_history,
+                    persona=persona, pinned_skills=pinned_skills, temperature=temperature,
                 ):
                     await queue.put(step)
             except Exception as exc:  # noqa: BLE001 — 异常也走队列，保持事件序

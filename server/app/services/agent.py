@@ -25,9 +25,9 @@ from app.services.tools import build_lc_tools, kb_directive, preflight_kb
 RECURSION_LIMIT = 48  # 工作型任务的步数预算（一轮工具调用 ≈ 2 步）
 
 
-def _get_model() -> ChatOpenAI:
+def _get_model(temperature: float | None = None) -> ChatOpenAI:
     settings = get_settings()
-    return ChatOpenAI(
+    kwargs: dict = dict(
         base_url=settings.llm_base_url,
         api_key=settings.llm_api_key,
         model=settings.llm_model,
@@ -35,6 +35,9 @@ def _get_model() -> ChatOpenAI:
         timeout=300,  # 长上下文下本地 27B 生成慢，180s 会误杀
         max_retries=2,
     )
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    return ChatOpenAI(**kwargs)
 
 
 def _short(obj: Any, limit: int = 300) -> str:
@@ -76,8 +79,14 @@ async def run_agent(
     workspace_id: str | None = None,
     ctx: AgentContext | None = None,
     history: list[dict] | None = None,
+    persona: str = "",
+    pinned_skills: list[str] | None = None,
+    temperature: float | None = None,
 ) -> AsyncIterator[dict]:
     """按配置选择引擎，对外只有这一个入口。
+
+    persona/pinned_skills/temperature 仅 deep 引擎支持（技能是 deepagents
+    原生能力），ReAct 引擎自动忽略。
 
     events：
       {kind: "tool_call", name, args}
@@ -93,7 +102,10 @@ async def run_agent(
 
     from app.services.agent_deep import run_deep_agent  # 延迟导入：换引擎不该拖慢启动
 
-    async for step in run_deep_agent(task, tool_ids, kb_ids, workspace_id, ctx, history):
+    async for step in run_deep_agent(
+        task, tool_ids, kb_ids, workspace_id, ctx, history,
+        persona=persona, pinned_skills=pinned_skills, temperature=temperature,
+    ):
         yield step
 
 

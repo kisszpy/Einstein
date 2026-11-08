@@ -31,7 +31,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
 
 from app.core.config import get_settings
-from app.services import metrics
+from app.services import metrics, skill_publisher
 from app.services.capabilities import ApprovalRequired, AgentContext, _artifact_kind, sandbox
 from app.services.capabilities.sandbox import slugify, workspace_root
 from app.services.tools import build_lc_tools, kb_directive, preflight_kb
@@ -170,28 +170,40 @@ def _short(obj: Any, limit: int = 300) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-def _build_agent(ctx: AgentContext, tool_ids: list[str], kb_ids: list[str], workspace_id: str):
+def _build_agent(
+    ctx: AgentContext,
+    tool_ids: list[str],
+    kb_ids: list[str],
+    workspace_id: str,
+    persona: str = "",
+    temperature: float | None = None,
+):
     root = workspace_root(workspace_id)
     backend = _WorkspaceBackend(str(root), ctx)
     lc_tools = [t for t in build_lc_tools(tool_ids, kb_ids, workspace_id, ctx)
                 if t.name not in SUPERSEDED_TOOLS]
+    # 技能：引擎原生 SkillsMiddleware。发布器已在任务开始时把 DB 技能同步到
+    # <workspace>/skills/（热加载），这里只挂目录；模型按 description 自主
+    # 选取，被点名的技能由 pinned_skills 状态强制装载。
+    extras = f"\n\n{persona.strip()}" if persona.strip() else ""
     agent = create_deep_agent(
-        model=_get_model(),
+        model=_get_model(temperature),
         tools=lc_tools,
         # 挂了知识库就追加"KB 优先"硬规则，否则任务路由会把模型带向 web_search
-        system_prompt=DEEP_SYSTEM_PROMPT + (kb_directive(kb_ids) if kb_ids else ""),
+        system_prompt=DEEP_SYSTEM_PROMPT + extras + (kb_directive(kb_ids) if kb_ids else ""),
         backend=backend,
         # 计划工具是这轮换引擎的主要动机，显式挂上（0.7 起默认不装）
         middleware=[TodoListMiddleware()],
+        skills=[f"/{skill_publisher.SKILLS_SUBDIR}/"],
     )
     return agent
 
 
-def _get_model():
+def _get_model(temperature: float | None = None):
     """复用 agent.py 的模型配置，避免两处各写一遍 base_url/timeout。"""
     from app.services.agent import _get_model as build
 
-    return build()
+    return build(temperature)
 
 
 def _plan_event(todos: Any) -> dict | None:
@@ -208,7 +220,12 @@ def _plan_event(todos: Any) -> dict | None:
     return {"kind": "plan", "items": items} if items else None
 
 
-async def _iter_events(agent, messages: list[tuple[str, str]], ctx: AgentContext) -> AsyncIterator[dict]:
+async def _iter_events(
+    agent,
+    messages: list[tuple[str, str]],
+    ctx: AgentContext,
+    pinned_skills: list[str] | None = None,
+) -> AsyncIterator[dict]:
     """把 LangGraph 的 updates 流翻成前端协议，顺便收集计划和产物。"""
     seen: set[str] = set()
     emitted_artifacts = 0
@@ -227,8 +244,13 @@ async def _iter_events(agent, messages: list[tuple[str, str]], ctx: AgentContext
         last_plan = stamp
         return plan
 
+    # pinned_skills 是 SkillsMiddleware 的状态键：被点名的技能在下一次模型
+    # 调用前全文装载（用户显式指定时不赌模型自己的选择）。
+    invoke_input: dict[str, Any] = {"messages": messages}
+    if pinned_skills:
+        invoke_input["pinned_skills"] = pinned_skills
     async for update in agent.astream(
-        {"messages": messages},
+        invoke_input,
         stream_mode="updates",
         config={"recursion_limit": RECURSION_LIMIT},
     ):
@@ -292,14 +314,26 @@ async def run_deep_agent(
     workspace_id: str | None = None,
     ctx: AgentContext | None = None,
     history: list[dict] | None = None,
+    persona: str = "",
+    pinned_skills: list[str] | None = None,
+    temperature: float | None = None,
 ) -> AsyncIterator[dict]:
-    """运行 Deep Agents，产出与 ReAct 引擎完全一致的事件流。"""
+    """运行 Deep Agents，产出与 ReAct 引擎完全一致的事件流。
+
+    persona：专家人设（附加系统提示段）；pinned_skills：被点名要强制装载
+    的技能 name 清单（对应 SkillsMiddleware 的 pinned_skills 状态键）。
+    """
     settings = get_settings()
     ws = workspace_id or "default"
     own_ctx = ctx is None
     ctx = ctx or AgentContext(workspace_id=ws)
 
-    agent = _build_agent(ctx, tool_ids, kb_ids, ws)
+    # 热加载：每个任务开始时把 DB 技能同步到工作区 skills/ 目录，
+    # 增删改回滚即时生效；同时把点名的技能翻译成引擎可用的 name。
+    skill_publisher.sync_skills(ws)
+    pinned = [n for n in (pinned_skills or []) if n]
+
+    agent = _build_agent(ctx, tool_ids, kb_ids, ws, persona=persona, temperature=temperature)
     messages: list[tuple[str, str]] = [
         (("assistant" if h.get("role") == "assistant" else "user"), h.get("content", ""))
         for h in (history or [])
@@ -316,7 +350,7 @@ async def run_deep_agent(
     final_text = ""
     tool_calls = 0
     try:
-        async for event in _iter_events(agent, messages, ctx):
+        async for event in _iter_events(agent, messages, ctx, pinned_skills=pinned):
             if event["kind"] == "__final_text__":
                 final_text = event["text"]
                 continue

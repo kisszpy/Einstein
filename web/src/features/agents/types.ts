@@ -52,6 +52,13 @@ export interface KbInfo {
   document_count: number;
 }
 
+/** 技能（智能体可挂载；选中 = 强制装载，不选 = 引擎按任务自动挑选） */
+export interface SkillInfo {
+  id: string;
+  name: string;
+  description: string;
+}
+
 export interface ProjectInfo {
   id: string;
   name: string;

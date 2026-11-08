@@ -19,7 +19,7 @@ import {
   ComposerToolbar,
 } from "@/components/ui/composer";
 import { cn } from "@/lib/utils";
-import type { KbInfo, ProjectInfo, ToolInfo } from "../types";
+import type { KbInfo, ProjectInfo, SkillInfo, ToolInfo } from "../types";
 
 interface Props {
   value: string;
@@ -33,6 +33,9 @@ interface Props {
   kbs: KbInfo[];
   selectedKbs: string[];
   onToggleKb: (id: string) => void;
+  skills: SkillInfo[];
+  selectedSkills: string[];
+  onToggleSkill: (id: string) => void;
   projects: ProjectInfo[];
   project: string;
   onSelectProject: (id: string) => void;
@@ -53,6 +56,9 @@ export function Composer({
   kbs,
   selectedKbs,
   onToggleKb,
+  skills,
+  selectedSkills,
+  onToggleSkill,
   projects,
   project,
   onSelectProject,
@@ -174,6 +180,40 @@ export function Composer({
                         </>
                       )}
 
+                      {skills.length > 0 && (
+                        <>
+                          <p className="mt-1 border-t border-line px-2 pb-1 pt-2 text-[11px] font-medium text-tertiary">
+                            技能
+                            <span className="ml-1 font-normal">不选则按任务自动挑选</span>
+                          </p>
+                          {skills.map((sk) => {
+                            const on = selectedSkills.includes(sk.id);
+                            return (
+                              <button
+                                key={sk.id}
+                                onClick={() => onToggleSkill(sk.id)}
+                                className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors duration-150 hover:bg-hover"
+                              >
+                                <span
+                                  className={cn(
+                                    "mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
+                                    on ? "border-brand bg-brand text-white" : "border-line-strong",
+                                  )}
+                                >
+                                  {on && <Check size={10} strokeWidth={3} />}
+                                </span>
+                                <span className="min-w-0">
+                                  <span className="block text-[12.5px] text-primary">{sk.name}</span>
+                                  <span className="block truncate text-[11px] text-tertiary">
+                                    {sk.description}
+                                  </span>
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </>
+                      )}
+
                       <p className="mt-1 border-t border-line px-2 pb-1 pt-2 text-[11px] font-medium text-tertiary">
                         项目
                       </p>
@@ -227,6 +267,11 @@ export function Composer({
               {selectedKbs.length > 0 && (
                 <span className="inline-flex h-6 items-center gap-1 rounded-full bg-surface-3 px-2 text-[11.5px] text-secondary">
                   知识库 {selectedKbs.length}
+                </span>
+              )}
+              {selectedSkills.length > 0 && (
+                <span className="inline-flex h-6 items-center gap-1 rounded-full bg-surface-3 px-2 text-[11.5px] text-secondary">
+                  技能 {selectedSkills.length}
                 </span>
               )}
               {project && (

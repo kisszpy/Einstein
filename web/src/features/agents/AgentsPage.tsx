@@ -23,6 +23,7 @@ import {
   type Artifact,
   type KbInfo,
   type ProjectInfo,
+  type SkillInfo,
   type TaskSession,
   type ToolInfo,
   type TreeNode,
@@ -83,6 +84,9 @@ export function AgentsPage() {
   const [caps, setCaps] = useState<string[]>([]);
   const [kbs, setKbs] = useState<KbInfo[]>([]);
   const [selectedKbs, setSelectedKbs] = useState<string[]>([]);
+  // 技能：空 = 引擎按任务上下文自动挑选；选中 = 强制装载（pinned）
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   // 运行绑定项目：只有用户明确选择或任务产出时才设置；空 = 运行请求不带 project
   const [boundProject, setBoundProject] = useState("");
@@ -188,6 +192,11 @@ export function AgentsPage() {
         setCaps(d.capabilities.filter((c) => c.default).map((c) => c.id));
       });
     void fetch("/api/kb").then((r) => r.json()).then(setKbs);
+    void fetch("/api/skills")
+      .then((r) => r.json())
+      .then((rows: (SkillInfo & { enabled?: boolean })[]) =>
+        setSkills(rows.filter((s) => s.enabled !== false)),
+      );
     void loadProjects();
     void loadRuns();
   }, [loadProjects, loadRuns]);
@@ -279,6 +288,7 @@ export function AgentsPage() {
             task: text,
             tool_ids: capabilityTools,
             kb_ids: selectedKbs,
+            skill_ids: selectedSkills,
             project: boundProject,
             session_id: sessionId ?? "",
           }),
@@ -357,6 +367,7 @@ export function AgentsPage() {
       sessionId,
       capabilityTools,
       selectedKbs,
+      selectedSkills,
       boundProject,
       loadProjects,
       loadRuns,
@@ -509,6 +520,11 @@ export function AgentsPage() {
       selectedKbs={selectedKbs}
       onToggleKb={(id) =>
         setSelectedKbs((prev) => (prev.includes(id) ? prev.filter((k) => k !== id) : [...prev, id]))
+      }
+      skills={skills}
+      selectedSkills={selectedSkills}
+      onToggleSkill={(id) =>
+        setSelectedSkills((prev) => (prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]))
       }
       projects={projects}
       project={boundProject}
