@@ -125,6 +125,10 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
   const slide: DeckSlide | null = deck ? (deck.slides[selected] ?? null) : null;
   const previews = deck?.preview_images ?? [];
   const hasDesign = previews.length > 0;
+  // 外部生成的 pptx（slidep/导入）没有 sidecar，解析模型只是有损近似——
+  // 与 WorkBuddy 一致：预览即真相，只展示真实渲染，不提供会「重排」的编辑
+  const readOnlyDesign = deck?.source === "parsed" && hasDesign;
+  const showDesign = readOnlyDesign || (hasDesign && designMode);
   // img 标签带不了 Authorization 头，设计稿图片靠 browse ticket 鉴权
   const [ticket, setTicket] = useState("");
   useEffect(() => {
@@ -265,7 +269,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
         )}
 
         <div className="ml-auto flex shrink-0 items-center gap-1">
-          {hasDesign && (
+          {hasDesign && !readOnlyDesign && (
             <div
               className="flex shrink-0 items-center rounded-md border border-line bg-surface-1 text-[12px]"
               role="group"
@@ -305,37 +309,43 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
               <SlidersHorizontal size={14} />
             </button>
           )}
-          <select
-            value={deck.theme}
-            aria-label="主题配色"
-            onChange={(event) =>
-              mutate((current) => ({ ...current, theme: event.target.value }))
-            }
-            className="rounded-md border border-line bg-surface-1 px-1.5 py-1 text-[12px] outline-none"
-            title="主题配色"
-          >
-            {themes.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={undo}
-            disabled={past.current.length === 0}
-            className="rounded-md p-1.5 text-secondary hover:bg-surface-3 disabled:opacity-30"
-            title="撤销 (Ctrl+Z)"
-          >
-            <Undo2 size={14} />
-          </button>
-          <button
-            onClick={redo}
-            disabled={future.current.length === 0}
-            className="rounded-md p-1.5 text-secondary hover:bg-surface-3 disabled:opacity-30"
-            title="重做"
-          >
-            <Redo2 size={14} />
-          </button>
+          {!readOnlyDesign && (
+            <select
+              value={deck.theme}
+              aria-label="主题配色"
+              onChange={(event) =>
+                mutate((current) => ({ ...current, theme: event.target.value }))
+              }
+              className="rounded-md border border-line bg-surface-1 px-1.5 py-1 text-[12px] outline-none"
+              title="主题配色"
+            >
+              {themes.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          )}
+          {!readOnlyDesign && (
+            <button
+              onClick={undo}
+              disabled={past.current.length === 0}
+              className="rounded-md p-1.5 text-secondary hover:bg-surface-3 disabled:opacity-30"
+              title="撤销 (Ctrl+Z)"
+            >
+              <Undo2 size={14} />
+            </button>
+          )}
+          {!readOnlyDesign && (
+            <button
+              onClick={redo}
+              disabled={future.current.length === 0}
+              className="rounded-md p-1.5 text-secondary hover:bg-surface-3 disabled:opacity-30"
+              title="重做"
+            >
+              <Redo2 size={14} />
+            </button>
+          )}
           <a
             href={api.downloadUrl(project, path)}
             className="rounded-md p-1.5 text-secondary hover:bg-surface-3"
@@ -343,19 +353,21 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
           >
             <Download size={14} />
           </a>
-          <button
-            onClick={save}
-            disabled={saving || !dirty}
-            className={cn(
-              "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12.5px] font-medium transition-colors",
-              dirty
-                ? "bg-brand text-brand-fg hover:opacity-90"
-                : "bg-surface-3 text-tertiary",
-            )}
-          >
-            {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
-            {saving ? "保存中" : dirty ? "保存" : "已保存"}
-          </button>
+          {!readOnlyDesign && (
+            <button
+              onClick={save}
+              disabled={saving || !dirty}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12.5px] font-medium transition-colors",
+                dirty
+                  ? "bg-brand text-brand-fg hover:opacity-90"
+                  : "bg-surface-3 text-tertiary",
+              )}
+            >
+              {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+              {saving ? "保存中" : dirty ? "保存" : "已保存"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -376,27 +388,54 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
         {/* 缩略图（宽屏走左栏） */}
         {!compact && (
           <div className="flex w-[132px] shrink-0 flex-col gap-2 overflow-y-auto border-r border-line bg-surface-2 p-2.5">
-            {deck.slides.map((item, i) => (
-              <Thumb
-                key={i}
-                slide={item}
-                theme={theme}
-                index={i}
-                deckTitle={deck.title}
-                author={deck.author}
-                active={i === selected}
-                onClick={() => setSelected(i)}
-              />
-            ))}
-            <AddSlideButton
-              onClick={() => {
-                mutate((current) => ({
-                  ...current,
-                  slides: [...current.slides, blankSlide("bullets")],
-                }));
-                setSelected(deck.slides.length);
-              }}
-            />
+            {readOnlyDesign ? (
+              deck.slides.map((_, i) => (
+                <button
+                  key={i}
+                  onClick={() => setSelected(i)}
+                  className={cn(
+                    "overflow-hidden rounded-md border transition-colors",
+                    i === selected ? "border-brand" : "border-transparent hover:border-line-strong",
+                  )}
+                  title={`第 ${i + 1} 页`}
+                >
+                  {ticket ? (
+                    <img
+                      src={api.previewUrl(project, previews[i] ?? "", ticket)}
+                      alt={`第 ${i + 1} 页缩略图`}
+                      className="block w-full"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="aspect-video w-full animate-pulse bg-surface-3" />
+                  )}
+                </button>
+              ))
+            ) : (
+              <>
+                {deck.slides.map((item, i) => (
+                  <Thumb
+                    key={i}
+                    slide={item}
+                    theme={theme}
+                    index={i}
+                    deckTitle={deck.title}
+                    author={deck.author}
+                    active={i === selected}
+                    onClick={() => setSelected(i)}
+                  />
+                ))}
+                <AddSlideButton
+                  onClick={() => {
+                    mutate((current) => ({
+                      ...current,
+                      slides: [...current.slides, blankSlide("bullets")],
+                    }));
+                    setSelected(deck.slides.length);
+                  }}
+                />
+              </>
+            )}
           </div>
         )}
 
@@ -404,29 +443,54 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
           {/* 缩略图（面板模式走顶部胶片条） */}
           {compact && (
             <div className="flex shrink-0 items-start gap-2 overflow-x-auto border-b border-line bg-surface-2 px-2.5 py-2">
-              {deck.slides.map((item, i) => (
-                <Thumb
-                  key={i}
-                  slide={item}
-                  theme={theme}
-                  index={i}
-                  deckTitle={deck.title}
-                  author={deck.author}
-                  active={i === selected}
-                  onClick={() => setSelected(i)}
-                  className="w-[92px] shrink-0"
+              {readOnlyDesign
+                ? deck.slides.map((_, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setSelected(i)}
+                      className={cn(
+                        "w-[92px] shrink-0 overflow-hidden rounded-md border transition-colors",
+                        i === selected ? "border-brand" : "border-transparent hover:border-line-strong",
+                      )}
+                      title={`第 ${i + 1} 页`}
+                    >
+                      {ticket ? (
+                        <img
+                          src={api.previewUrl(project, previews[i] ?? "", ticket)}
+                          alt={`第 ${i + 1} 页缩略图`}
+                          className="block w-full"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="aspect-video w-full animate-pulse bg-surface-3" />
+                      )}
+                    </button>
+                  ))
+                : deck.slides.map((item, i) => (
+                    <Thumb
+                      key={i}
+                      slide={item}
+                      theme={theme}
+                      index={i}
+                      deckTitle={deck.title}
+                      author={deck.author}
+                      active={i === selected}
+                      onClick={() => setSelected(i)}
+                      className="w-[92px] shrink-0"
+                    />
+                  ))}
+              {!readOnlyDesign && (
+                <AddSlideButton
+                  compact
+                  onClick={() => {
+                    mutate((current) => ({
+                      ...current,
+                      slides: [...current.slides, blankSlide("bullets")],
+                    }));
+                    setSelected(deck.slides.length);
+                  }}
                 />
-              ))}
-              <AddSlideButton
-                compact
-                onClick={() => {
-                  mutate((current) => ({
-                    ...current,
-                    slides: [...current.slides, blankSlide("bullets")],
-                  }));
-                  setSelected(deck.slides.length);
-                }}
-              />
+              )}
             </div>
           )}
 
@@ -434,17 +498,25 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
           <div className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-page">
             <div className="flex items-center justify-between gap-2 px-4 py-2 text-[11.5px] text-tertiary">
               <span className="min-w-0 truncate">
-                第 {selected + 1} / {deck.slides.length} 页 · {LAYOUT_LABELS[slide.layout]}
-                {deck.editable === "partial" && (
+                第 {selected + 1} / {deck.slides.length} 页
+                {!showDesign && LAYOUT_LABELS[slide.layout]}
+                {showDesign && (
+                  <span className="ml-2 rounded bg-brand/10 px-1.5 py-0.5 text-brand">
+                    真实渲染
+                  </span>
+                )}
+                {deck.editable === "partial" && !showDesign && (
                   <span className="ml-2 rounded bg-warning/10 px-1.5 py-0.5 text-warning">
                     外部版式，保存将重排
                   </span>
                 )}
               </span>
-              <span className="hidden shrink-0 lg:inline">点文字直接改，改完失焦生效</span>
+              <span className="hidden shrink-0 lg:inline">
+                {showDesign ? "预览即文件真实效果；要改内容请回智能体重新生成" : "点文字直接改，改完失焦生效"}
+              </span>
             </div>
             <div className={cn("mx-auto w-full px-4 pb-6", compact ? "max-w-[680px]" : "max-w-[920px]")}>
-              {designMode && hasDesign && ticket ? (
+              {showDesign && ticket ? (
                 <>
                   <img
                     src={api.previewUrl(project, previews[selected] ?? previews[0] ?? "", ticket)}
@@ -452,7 +524,9 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                     className="w-full rounded-lg border border-line"
                   />
                   <p className="mt-2 text-center text-[11.5px] text-tertiary">
-                    设计稿 · PowerPoint 真实渲染（还原渐变/圆角/玻璃质感）；切「可编辑」改文字，保存会按主题重排
+                    {readOnlyDesign
+                      ? "PowerPoint 真实渲染，与文件完全一致；要修改内容请在智能体里重新生成"
+                      : "设计稿 · PowerPoint 真实渲染（还原渐变/圆角/玻璃质感）；切「可编辑」改文字，保存会按主题重排"}
                   </p>
                 </>
               ) : (
@@ -472,8 +546,8 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
           </div>
         </div>
 
-        {/* 属性面板：宽屏常驻，面板模式是可切换的浮层 */}
-        {(!compact || propsOpen) && (
+        {/* 属性面板：宽屏常驻，面板模式是可切换的浮层；设计稿只读模式下无编辑属性可调 */}
+        {!readOnlyDesign && (!compact || propsOpen) && (
           <div
             className={cn(
               "shrink-0 overflow-y-auto bg-surface-1 p-3",
