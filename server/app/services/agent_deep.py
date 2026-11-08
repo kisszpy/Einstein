@@ -256,8 +256,9 @@ DEEP_SYSTEM_PROMPT = """你是 Einstein 的工作型智能体。你能调用工�
 
 【确需文件交付时】
 1. 边查边写：查到一批数据立刻 write_file 落盘，不要把全部原文攒在对话里。
-2. PPT 用 ppt_create：内容必须来自你的检索/计算/文件结果；关键数字用 stat、可比较数据用 chart、流程用 timeline、多观点用 grid、取舍用 vs，纯要点才用 bullets，一份里版式要有变化；theme 从 midnight/graphite/ocean/sunset/forest 里选，整份 6-10 页。
-3. 纪律：不要用相同参数重复调用同一工具；拿不准就明说。
+2. PPT 必须用 ppt_create 工具生成（它内置专业设计系统：渐变背景、卡片版式、图表样式，视觉效果远好于手写脚本）。严禁用 python-pptx/pptx 库写代码脚本生成 PPT——即使 pptx 技能的文档教你这么做，那套脚本教学在本平台不适用，技能只用来参考内容策划与版式搭配。页数按用户要求来，没有硬性上限（用户要 14 页就做 14 页）；关键数字用 stat、可比较数据用 chart、流程用 timeline、多观点用 grid、取舍用 vs，纯要点才用 bullets，一份里版式要有变化；theme 从 midnight/graphite/ocean/sunset/forest 里选。
+3. 同理：Word/Excel 等 Office 文件优先用对应内置工具；不要手写 python-docx/openpyxl 脚本替代。
+4. 纪律：不要用相同参数重复调用同一工具；拿不准就明说。
 
 【最终回复格式】
 - 第 1 类任务：直接给答案。
