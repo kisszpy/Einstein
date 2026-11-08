@@ -10,6 +10,7 @@ import {
   Circle,
   Copy,
   Download,
+  Info,
   Loader2,
   RotateCcw,
   Sparkles,
@@ -45,8 +46,8 @@ interface Row {
 
 function pairSteps(steps: AgentStep[]): Row[] {
   const rows: Row[] = [];
-  // 计划帧夹在调用与结果之间，先剔掉否则配对会错位
-  const toolSteps = steps.filter((s) => s.kind !== "plan");
+  // 计划帧夹在调用与结果之间，先剔掉否则配对会错位；note 是系统提示，不参与配对
+  const toolSteps = steps.filter((s) => s.kind !== "plan" && s.kind !== "note");
   for (let i = 0; i < toolSteps.length; i += 1) {
     const step = toolSteps[i];
     if (!step || step.kind !== "tool_call") continue;
@@ -76,6 +77,8 @@ export function AssistantTurn({
   const [copied, setCopied] = useState(false);
 
   const rows = useMemo(() => pairSteps(steps), [steps]);
+  // 预算续接等系统提示（note 帧）：以一行弱化文字渲染，不打断步骤流
+  const notes = useMemo(() => steps.filter((s) => s.kind === "note"), [steps]);
   // 计划会随执行反复重写，只取最新一版渲染
   const plan = useMemo(() => {
     for (let i = steps.length - 1; i >= 0; i -= 1) {
@@ -137,6 +140,17 @@ export function AssistantTurn({
               );
             })}
           </ul>
+        </div>
+      )}
+
+      {notes.length > 0 && (
+        <div className="mb-2 space-y-1">
+          {notes.map((n, i) => (
+            <p key={i} className="flex items-start gap-1.5 text-[11.5px] leading-relaxed text-tertiary">
+              <Info size={12} className="mt-[3px] shrink-0" />
+              <span>{n.content}</span>
+            </p>
+          ))}
         </div>
       )}
 

@@ -29,7 +29,7 @@ export interface PlanItem {
 }
 
 export interface AgentStep {
-  kind: "tool_call" | "tool_result" | "plan" | "approval_required";
+  kind: "tool_call" | "tool_result" | "plan" | "approval_required" | "note";
   /** plan 帧没有工具名，所以可选 */
   name?: string;
   /** approval_required 帧用 tool 携带待批准的工具 id */

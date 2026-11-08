@@ -36,7 +36,8 @@ from app.services.capabilities import ApprovalRequired, AgentContext, _artifact_
 from app.services.capabilities.sandbox import slugify, workspace_root
 from app.services.tools import build_lc_tools, kb_directive, preflight_kb
 
-RECURSION_LIMIT = 64  # 有了计划工具后每步更"值钱"，预算比 ReAct 略宽
+RECURSION_LIMIT = 64   # 单份预算：有了计划工具后每步更"值钱"，比 ReAct 略宽
+MAX_BUDGETS = 3        # 触顶自动续跑：把已有进展带回引擎继续执行，最多续 2 次
 
 # harvest 自带的文件工具会顶掉我们的 fs_*，避免两套同名语义打架
 SUPERSEDED_TOOLS = {"fs_read", "fs_write", "fs_list"}
@@ -144,8 +145,8 @@ DEEP_SYSTEM_PROMPT = """你是 Einstein 的工作型智能体。你能调用工�
 
 【计划：先拆解，再执行】
 1. 超过两步的任务，动手前必须先用 write_todos 把任务拆解成可执行的预设步骤：每步写清「做什么、用哪个工具、产出什么」，粒度以一次工具调用能完成为准；拆完贴出计划再逐步执行，做完一步更新一步状态。
-2. 计划总量控制在 8 步以内。任务再大也不要一口气跑完：先交付第一阶段成果（例如大纲或初稿），在最终回复里说明剩余阶段，等用户确认再继续。
-3. 执行纪律：严格按计划走，禁止偏离计划反复检索、重读同一文件；同一工具连续失败 2 次就换路径，而不是原地重试。感觉步数将尽（计划还剩多步未完成时）立刻收尾：把已有结论整理成回答交付，并说明哪些步骤未完成。
+2. 计划按任务实际需要拆步（超过 8 步也完整列出），然后自主执行到底。不要中途停下来向用户确认、也不要把任务推回给用户拆分——预算不足时系统会自动为你续接新一轮预算。
+3. 执行纪律：严格按计划走，禁止偏离计划反复检索、重读同一文件；同一工具连续失败 2 次就换路径，而不是原地重试。收到「预算已续接」的系统消息时，对照计划从上次中断处继续，不要重做已完成的步骤。
 4. 简单任务（一两步）不用计划工具，直接做。计划是给用户看的进度，不是交付物。
 
 【多轮追问】
@@ -223,13 +224,35 @@ def _plan_event(todos: Any) -> dict | None:
     return {"kind": "plan", "items": items} if items else None
 
 
+def _continuation_note(last: bool) -> str:
+    """预算续接时注入的用户消息：让模型从计划中断处继续，而不是重做或停机。"""
+    if last:
+        return (
+            "（系统：步数预算已续接，这是最后一轮。请对照你的计划立即收尾："
+            "完成最关键的交付，把已有成果整理成最终回复。）"
+        )
+    return (
+        "（系统：上一轮步数预算已用完，已自动续接新一轮。"
+        "请对照你的计划从上次中断处继续，不要重做已完成的步骤。）"
+    )
+
+
 async def _iter_events(
     agent,
     messages: list[tuple[str, str]],
     ctx: AgentContext,
     pinned_skills: list[str] | None = None,
+    carry: dict | None = None,
 ) -> AsyncIterator[dict]:
-    """把 LangGraph 的 updates 流翻成前端协议，顺便收集计划和产物。"""
+    """把 LangGraph 的 updates 流翻成前端协议，顺便收集计划和产物。
+
+    carry：跨预算续跑的载体。流式过程中把真实消息对象与计划状态写回
+    carry，触顶后调用方用它构造续跑输入（已完成对话 + todos 不丢）。
+    """
+    if carry is None:
+        carry = {}
+    carry.setdefault("messages", [])
+    carry.setdefault("todos", None)
     seen: set[str] = set()
     emitted_artifacts = 0
     last_plan = ""
@@ -249,7 +272,10 @@ async def _iter_events(
 
     # pinned_skills 是 SkillsMiddleware 的状态键：被点名的技能在下一次模型
     # 调用前全文装载（用户显式指定时不赌模型自己的选择）。
+    # todos 带回计划状态：续跑时模型不用重拆计划。
     invoke_input: dict[str, Any] = {"messages": messages}
+    if carry.get("todos"):
+        invoke_input["todos"] = carry["todos"]
     if pinned_skills:
         invoke_input["pinned_skills"] = pinned_skills
     async for update in agent.astream(
@@ -264,12 +290,15 @@ async def _iter_events(
             plan = _plan_of(state.get("todos"))
             if plan:
                 yield plan
+            if state.get("todos"):
+                carry["todos"] = state["todos"]
 
             for msg in state.get("messages") or []:
                 mid = getattr(msg, "id", None) or f"{type(msg).__name__}:{id(msg)}"
                 if mid in seen:
                     continue
                 seen.add(mid)
+                carry["messages"].append(msg)
 
                 if isinstance(msg, ToolMessage):
                     t0 = started.pop(getattr(msg, "tool_call_id", "") or "", None)
@@ -352,14 +381,40 @@ async def run_deep_agent(
     status = "ok"
     final_text = ""
     tool_calls = 0
+    carry: dict[str, Any] = {"messages": [], "todos": None}
+    base_messages = list(messages)  # 原始输入：续跑时用它 + carry 重建，不重复拼接
+    budgets_used = 0
     try:
-        async for event in _iter_events(agent, messages, ctx, pinned_skills=pinned):
-            if event["kind"] == "__final_text__":
-                final_text = event["text"]
-                continue
-            if event["kind"] == "tool_call":
-                tool_calls += 1
-            yield event
+        while True:
+            try:
+                async for event in _iter_events(agent, messages, ctx, pinned_skills=pinned, carry=carry):
+                    if event["kind"] == "__final_text__":
+                        final_text = event["text"]
+                        continue
+                    if event["kind"] == "tool_call":
+                        tool_calls += 1
+                    yield event
+                break  # 正常完成
+            except GraphRecursionError:
+                budgets_used += 1
+                if budgets_used >= MAX_BUDGETS:
+                    # 预算全部耗尽：按产品语义收尾交付，不把任务推回给用户
+                    final_text = (
+                        final_text
+                        or f"（任务规模较大，已自动续跑 {MAX_BUDGETS} 轮仍未完成全部计划。"
+                        "已完成的成果与产物见上方，本轮先交付到这里。）"
+                    )
+                    break
+                # 自动续跑：原始输入 + 全部已发生消息 + 计划状态重新入图
+                messages = [
+                    *base_messages,
+                    *carry["messages"],
+                    ("user", _continuation_note(last=budgets_used == MAX_BUDGETS - 1)),
+                ]
+                yield {
+                    "kind": "note",
+                    "content": f"步数预算已用完，自动续接第 {budgets_used + 1}/{MAX_BUDGETS} 轮，从中断处继续…",
+                }
     except ApprovalRequired as approval:
         # 敏感工具未批准：暂停任务，前端弹批准框；批准后前端自动重发任务
         yield {
@@ -372,20 +427,6 @@ async def run_deep_agent(
             "批准后我会自动继续。"
         )
         status = "paused"
-    except GraphRecursionError:
-        # 触顶提示按实际挂载动态生成，不误导用户（没挂 KB 就不该提 KB）
-        mounts: list[str] = []
-        if kb_ids:
-            mounts.append(f"{len(kb_ids)} 个知识库")
-        if pinned_skills:
-            mounts.append(f"{len(pinned_skills)} 个点名技能")
-        hint = "建议把任务拆成多轮逐步交付"
-        if mounts:
-            hint += f"，或减少挂载的 {'、'.join(mounts)}"
-        final_text = (
-            final_text
-            or f"（已执行 {tool_calls} 次工具调用后达到步数上限，任务未能在预算内完成。{hint}。）"
-        )
     except Exception as exc:
         status = "error"
         name = type(exc).__name__
