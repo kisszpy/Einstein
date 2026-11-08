@@ -89,8 +89,51 @@ def _make_kb_search(kb_ids: list[str]):
     return StructuredTool.from_function(
         coroutine=kb_search,
         name="kb_search",
-        description="在挂载的知识库中检索相关资料",
+        description="在挂载的知识库中检索相关资料。挂载了知识库时这是第一信息源，"
+                    "回答前必须先检索，知识库查不到才考虑 web_search",
         args_schema=KBSearchArgs,
+    )
+
+
+def kb_directive(kb_ids: list[str]) -> str:
+    """挂载知识库时附加到系统提示词的硬规则。
+
+    之前 kb_search 只是"可用的工具"，模型经常直接用参数知识回答，
+    知识库挂了也白挂；用户预期是"选了知识库就先从知识库检索"。
+    这段指令 + run 入口的预取检索（preflight_kb）共同保证这一点。
+    """
+    return (
+        f"\n【知识库（已挂载 {len(kb_ids)} 个，第一优先级信息源）】\n"
+        "1. 对话开头的【知识库预取】是系统替你做好的首轮检索，回答先基于它。\n"
+        "2. 预取内容不够答、或是多轮追问出现新问题点时，先 kb_search 补检索"
+        "（可以换措辞多试一两次），kb_search 查不到才允许 web_search。\n"
+        "3. 知识库有相关内容时，答案必须以知识库为准并注明文档名；"
+        "绝不拿自己的参数知识顶替知识库里已有的说法。\n"
+        "4. 知识库内容只能通过 kb_search 获取，不要在工作区文件系统里"
+        "grep/glob/read_file 找知识库的文档——它们不在那里。\n"
+        "5. 知识库未命中相关内容时，明说「知识库中未找到」，再走 web_search。"
+    )
+
+
+async def preflight_kb(kb_ids: list[str], task: str, top_k: int = 4) -> str | None:
+    """首轮强制检索：把命中结果直接注入上下文。
+
+    只靠提示词，模型仍会漏调 kb_search；预取把"先检索"变成确定性行为。
+    追问轮（有 history）不预取——「再改一下」这类任务拿去检索只会带回噪音，
+    那时由提示词规则驱动模型按需调 kb_search。
+    """
+    if not kb_ids or not task.strip():
+        return None
+    try:
+        hits = await search(get_store(), kb_ids, task, top_k=top_k)
+    except Exception:  # noqa: BLE001 — 检索服务挂了不阻塞对话，模型还能自己补调
+        return None
+    if not hits:
+        return "[知识库预取] 知识库中没有检索到与任务相关的内容。请先告诉用户知识库未命中，再考虑其他信息源。"
+    body = "\n\n".join(f"[{h.document_name}] {h.text}" for h in hits)
+    return (
+        f"[知识库预取] 系统已按任务在知识库中检索到 {len(hits)} 条相关内容，"
+        f"回答请以这些为准并注明文档名：\n\n{body}"
     )
 
 

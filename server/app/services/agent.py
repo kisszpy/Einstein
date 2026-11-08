@@ -20,7 +20,7 @@ from langgraph.prebuilt import create_react_agent
 from app.core.config import get_settings
 from app.services import metrics
 from app.services.capabilities import AgentContext
-from app.services.tools import build_lc_tools
+from app.services.tools import build_lc_tools, kb_directive, preflight_kb
 
 RECURSION_LIMIT = 48  # 工作型任务的步数预算（一轮工具调用 ≈ 2 步）
 
@@ -45,7 +45,7 @@ def _short(obj: Any, limit: int = 300) -> str:
 AGENT_SYSTEM_PROMPT = """你是 Einstein 的工作型智能体，能调用工具实际完成任务。但**不要什么任务都用工具**——先判断用户要的是「答案」还是「文件」，选最省力的路径：
 
 【任务路由】
-1. 问答/解释/比较/观点/规划类（用户要一个回答）→ 直接在回复里给答案。不建项目、不写代码、不产出文件。需要外部信息或时效性数据时，先 web_search、关键结论用 web_fetch 打开原文核实（max_chars 2500 左右，检索类合计最多 2 次调用），核完就答。
+1. 问答/解释/比较/观点/规划类（用户要一个回答）→ 直接在回复里给答案。不建项目、不写代码、不产出文件。需要外部信息或时效性数据时，先查已挂载的知识库（kb_search），查不到再 web_search；关键结论用 web_fetch 打开原文核实（max_chars 2500 左右，检索类合计最多 2 次调用），核完就答。
 2. 需要精确计算/数据处理/批量文本操作（三步以上的数字运算、排序统计、大批量格式转换，心算不可靠的）→ 用 code_run 跑代码算（不需要先建项目，无项目时自动落在临时沙盒），结论以运行结果为准。算完即止，不要为算一个数建工程。
 3. 用户明确要文件交付（代码工程、可下载的 PPT/报告/文档）→ project_create 建项目，fs_write 落盘；代码交付必须 code_run 跑通、报错就修，再汇报。
 
@@ -110,7 +110,8 @@ async def _run_react_agent(
     agent = create_react_agent(
         _get_model(),
         lc_tools,
-        prompt=AGENT_SYSTEM_PROMPT,
+        # 挂了知识库就追加"KB 优先"硬规则，与 deepagents 引擎保持一致
+        prompt=AGENT_SYSTEM_PROMPT + (kb_directive(kb_ids) if kb_ids else ""),
     )
     final_text = ""
     tool_call_count = 0
@@ -129,6 +130,11 @@ async def _run_react_agent(
         (("assistant" if h.get("role") == "assistant" else "user"), h.get("content", "")) for h in (history or [])
     ]
     messages.append(("user", task))
+    # 首轮强制预取检索：与 deepagents 引擎同语义
+    if kb_ids and not history:
+        note = await preflight_kb(kb_ids, task)
+        if note:
+            messages.insert(0, ("user", note))
     try:
         async for update in agent.astream(
             {"messages": messages},

@@ -34,7 +34,7 @@ from app.core.config import get_settings
 from app.services import metrics
 from app.services.capabilities import AgentContext, _artifact_kind, sandbox
 from app.services.capabilities.sandbox import slugify, workspace_root
-from app.services.tools import build_lc_tools
+from app.services.tools import build_lc_tools, kb_directive, preflight_kb
 
 RECURSION_LIMIT = 64  # 有了计划工具后每步更"值钱"，预算比 ReAct 略宽
 
@@ -138,7 +138,7 @@ DEEP_SYSTEM_PROMPT = """你是 Einstein 的工作型智能体。你能调用工�
 你有一个以工作区为根的文件系统：`ls` 看目录、`read_file` 读（带行号，可 offset/limit）、`write_file` 新建或整体覆盖、`edit_file` 精确替换、`glob` / `grep` 找文件内容、`delete` 删文件。路径写虚拟绝对路径，比如 `/周报/2026-W45.md`。项目目录由 `project_create` 创建，之后的文件都放在 `/项目名/...` 下。
 
 【任务路由】
-1. 问答/解释/比较/观点/规划（用户要一个回答）→ 直接回答。不建项目、不写文件。需要外部信息时先 web_search，关键结论用 web_fetch 打开原文核实（max_chars 2500 左右，检索类最多 2 次），核完就答。
+1. 问答/解释/比较/观点/规划（用户要一个回答）→ 直接回答。不建项目、不写文件。需要外部信息时先查已挂载的知识库（kb_search），查不到再 web_search；关键结论用 web_fetch 打开原文核实（max_chars 2500 左右，检索类最多 2 次），核完就答。
 2. 需要精确计算/数据处理（三步以上运算、排序统计、批量转换）→ code_run 跑代码，结论以运行结果为准，算完即止。
 3. 明确要文件交付（工程、可下载的 PPT/报告/文档）→ project_create 建项目，再用 write_file 落盘；代码交付必须 code_run 跑通、报错就修，再汇报。
 
@@ -178,7 +178,8 @@ def _build_agent(ctx: AgentContext, tool_ids: list[str], kb_ids: list[str], work
     agent = create_deep_agent(
         model=_get_model(),
         tools=lc_tools,
-        system_prompt=DEEP_SYSTEM_PROMPT,
+        # 挂了知识库就追加"KB 优先"硬规则，否则任务路由会把模型带向 web_search
+        system_prompt=DEEP_SYSTEM_PROMPT + (kb_directive(kb_ids) if kb_ids else ""),
         backend=backend,
         # 计划工具是这轮换引擎的主要动机，显式挂上（0.7 起默认不装）
         middleware=[TodoListMiddleware()],
@@ -304,6 +305,11 @@ async def run_deep_agent(
         for h in (history or [])
     ]
     messages.append(("user", task))
+    # 首轮强制预取检索：结果直接进上下文，不依赖模型是否记得调 kb_search
+    if kb_ids and not history:
+        note = await preflight_kb(kb_ids, task)
+        if note:
+            messages.insert(0, ("user", note))
 
     t0 = time.perf_counter()
     status = "ok"
