@@ -26,6 +26,15 @@ from typing import Any
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
+from deepagents.backends.protocol import (
+    DeleteResult,
+    EditResult,
+    GlobResult,
+    GrepResult,
+    LsResult,
+    ReadResult,
+    WriteResult,
+)
 from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
@@ -47,13 +56,90 @@ class _WorkspaceBackend(FilesystemBackend):
     """工作区磁盘后端：虚拟根 = 一个工作区，写成功即记产物。
 
     virtual_mode=True 时 `/a/b` 映射到 `<workspace>/a/b`，`..` 与符号链接
-    逃逸由父类挡掉；这里只多做一件事——把落盘成功的文件告诉 AgentContext，
-    否则前端产物区、预览、下载全都拿不到路径。
+    逃逸由父类挡掉。这里额外做两件事：
+
+    1. **项目边界（防穿项目）**：本次任务只能访问「活动项目」（用户挂载的
+       项目，或运行中 project_create 创建的项目）与 `/skills/` 技能目录
+       （只读，供技能渐进披露）。工作区其他项目读/写/搜索/删除全部拒绝。
+    2. **产物登记**：落盘成功的文件告诉 AgentContext，前端产物区、预览、
+       下载才照旧可用。
     """
 
     def __init__(self, root: str, ctx: AgentContext) -> None:
         super().__init__(root_dir=root, virtual_mode=True)
         self.ctx = ctx
+
+    # ---- 项目边界 ----
+
+    def _allowed(self) -> str:
+        """本次任务允许访问的项目 slug（动态读取：project_create 创建后即生效）。"""
+        return slugify(self.ctx.project) if self.ctx.project else ""
+
+    @staticmethod
+    def _head(virtual_path: str) -> str:
+        """虚拟路径首段（项目名/特殊目录名）。"""
+        rel = (virtual_path or "").replace("\\", "/").lstrip("/")
+        return rel.split("/", 1)[0] if rel else ""
+
+    def _in_scope(self, virtual_path: str) -> bool:
+        """读取范围：活动项目内 或 /skills/（技能渐进披露要读 SKILL.md）。"""
+        head = self._head(virtual_path)
+        if not head:
+            return True
+        if head == skill_publisher.SKILLS_SUBDIR:
+            return True
+        allowed = self._allowed()
+        return bool(allowed) and slugify(head) == allowed
+
+    def _read_blocked(self, virtual_path: str) -> str | None:
+        if self._in_scope(virtual_path):
+            return None
+        allowed = self._allowed()
+        if not allowed:
+            return (
+                f"路径 {virtual_path} 超出本次任务范围：当前没有活动项目，只能读取 "
+                f"/{skill_publisher.SKILLS_SUBDIR}/ 下的技能文件。请先用 project_create "
+                "创建项目，或让用户在界面上挂载项目后再访问项目文件。"
+            )
+        return (
+            f"路径 {virtual_path} 不在本次任务的项目（{allowed}）内。"
+            "为避免串到别的项目，已拒绝访问。"
+        )
+
+    def _write_blocked(self, virtual_path: str) -> str | None:
+        head = self._head(virtual_path)
+        if head == skill_publisher.SKILLS_SUBDIR:
+            return f"/{skill_publisher.SKILLS_SUBDIR}/ 是技能目录（只读），禁止写入。"
+        allowed = self._allowed()
+        if not allowed:
+            return (
+                f"路径 {virtual_path} 不在任务范围内：请先用 project_create 创建项目，"
+                "再写 /项目名/文件名。"
+            )
+        if slugify(head) != allowed:
+            return (
+                f"路径 {virtual_path} 不在本次任务的项目（{allowed}）内。"
+                "为避免串到别的项目，已拒绝写入。"
+            )
+        return None
+
+    def _scope_search_path(self, path: str | None) -> tuple[str | None, str | None]:
+        """把根级搜索收敛到活动项目内；越界路径直接拒绝。
+
+        返回 (收敛后的搜索路径或 None, 错误消息或 None)。
+        """
+        head = self._head(path or "")
+        if head == skill_publisher.SKILLS_SUBDIR or (head and self._in_scope(path or "")):
+            return path, None
+        allowed = self._allowed()
+        if not head and allowed:
+            return f"/{allowed}", None  # 根级搜索限定到活动项目
+        if head:
+            return None, self._read_blocked(path or "")
+        return None, (
+            "当前没有活动项目，无法从根目录搜索。请先用 project_create 创建项目，"
+            "或在指定项目路径下搜索。"
+        )
 
     # ---- 产物登记 ----
 
@@ -73,41 +159,11 @@ class _WorkspaceBackend(FilesystemBackend):
             return
         self.ctx.note_artifact(rel, _artifact_kind(rel))
 
-    # ---- 项目约束 ----
-
-    def _project_of(self, virtual_path: str) -> str | None:
-        """校验写入目标是否落在已存在的项目里，返回项目名。
-
-        harness 允许往虚拟根随手写文件，但我们的产物预览/下载是按「项目 + 相对
-        路径」拼的。放任 `/随手一写.md` 会写出一个前端打不开的产物，所以在写入口
-        就把项目约束补回来：第一段目录必须是已创建的项目。
-        """
-        rel = (virtual_path or "").replace("\\", "/").lstrip("/")
-        head = rel.split("/", 1)[0] if rel else ""
-        if not head:
-            return None
-        target = self.cwd / slugify(head)
-        if not target.is_dir():
-            return None
-        if not self.ctx.project:
-            self.ctx.project = head          # 模型自己拼对了项目名时顺势认领
-        return head
-
-    def _reject(self, virtual_path: str) -> str | None:
-        if self._project_of(virtual_path) is None:
-            return (
-                f"路径 {virtual_path} 不在任何项目内。请先用 project_create 创建项目，"
-                "再写 /项目名/文件名。"
-            )
-        return None
-
-    # ---- 覆盖写操作 ----
+    # ---- 覆盖写操作：先过项目边界，再登记产物 ----
 
     def write(self, file_path: str, content: str):  # noqa: ANN201 — 返回父类 WriteResult
-        blocked = self._reject(file_path)
+        blocked = self._write_blocked(file_path)
         if blocked:
-            from deepagents.backends.protocol import WriteResult
-
             return WriteResult(error=blocked)
         result = super().write(file_path, content)
         if getattr(result, "error", None) is None:
@@ -115,28 +171,67 @@ class _WorkspaceBackend(FilesystemBackend):
         return result
 
     def edit(self, file_path: str, old_string: str, new_string: str, replace_all: bool = False):  # noqa: ANN201
-        blocked = self._reject(file_path)
+        blocked = self._write_blocked(file_path)
         if blocked:
-            from deepagents.backends.protocol import EditResult
-
             return EditResult(error=blocked)
         result = super().edit(file_path, old_string, new_string, replace_all)
         if getattr(result, "error", None) is None:
             self._note(getattr(result, "path", None) or file_path)
         return result
 
+    def delete(self, file_path: str):  # noqa: ANN201
+        blocked = self._write_blocked(file_path)
+        if blocked:
+            return DeleteResult(error=blocked)
+        return super().delete(file_path)
+
     def upload_files(self, files):  # noqa: ANN001, ANN201
         results = super().upload_files(files)
         for item in results:
-            if getattr(item, "error", None) is None:
+            if getattr(item, "error", None) is not None:
+                continue
+            blocked = self._write_blocked(getattr(item, "path", ""))
+            if blocked:
+                item.error = blocked
+            else:
                 self._note(getattr(item, "path", ""))
         return results
+
+    # ---- 覆盖读操作：ls 过滤越界目录，read 直接拒绝 ----
+
+    def ls(self, path: str):  # noqa: ANN201
+        result: LsResult = super().ls(path)
+        if result.error is None and result.entries is not None:
+            # 根目录：只显示活动项目与技能目录，其他项目对模型不可见
+            result.entries = [e for e in result.entries if self._in_scope(e.get("path", ""))]
+        return result
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000):  # noqa: ANN201
+        blocked = self._read_blocked(file_path)
+        if blocked:
+            return ReadResult(error=blocked)
+        return super().read(file_path, offset, limit)
+
+    def glob(self, pattern: str, path: str | None = None):  # noqa: ANN201
+        scoped, err = self._scope_search_path(path)
+        if err:
+            return GlobResult(error=err)
+        return super().glob(pattern, scoped)
+
+    def grep(self, pattern: str, path: str | None = None, glob: str | None = None, *, max_count: int | None = None, context_lines: int = 0):  # noqa: ANN201
+        scoped, err = self._scope_search_path(path)
+        if err:
+            return GrepResult(error=err)
+        return super().grep(pattern, scoped, glob, max_count=max_count, context_lines=context_lines)
 
 
 DEEP_SYSTEM_PROMPT = """你是 Einstein 的工作型智能体。你能调用工具真正把活干完，但**不要什么任务都动工具**——先判断用户要的是「答案」还是「文件」，选最省力的路径。
 
 【文件系统】
 你有一个以工作区为根的文件系统：`ls` 看目录、`read_file` 读（带行号，可 offset/limit）、`write_file` 新建或整体覆盖、`edit_file` 精确替换、`glob` / `grep` 找文件内容、`delete` 删文件。路径写虚拟绝对路径，比如 `/周报/2026-W45.md`。项目目录由 `project_create` 创建，之后的文件都放在 `/项目名/...` 下。
+
+【项目边界】
+你只能访问本次任务的活动项目（用户挂载的项目，或你本次用 project_create 创建的项目）与 `/skills/` 技能目录（只读）。工作区里的其他项目对你不可见也不可写，访问会被拒绝——不要尝试绕过。glob/grep 从根搜索时系统会自动限定到活动项目内。若用户已挂载项目，直接在该项目内读和产出，不要再 project_create 新建项目。
 
 【任务路由】
 1. 问答/解释/比较/观点/规划（用户要一个回答）→ 直接回答。不建项目、不写文件。需要外部信息时先查已挂载的知识库（kb_search），查不到再 web_search；关键结论用 web_fetch 打开原文核实（max_chars 2500 左右，检索类最多 2 次），核完就答。
