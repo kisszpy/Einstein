@@ -111,10 +111,9 @@ export function AdminPage() {
           </Button>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <MembersCard />
-          <InvitesCard />
-        </div>
+        {/* 成员表有 6 列，半宽卡片会挤压换行；与邀请码卡片上下通栏排布 */}
+        <MembersCard />
+        <InvitesCard />
 
         <MemoryCard />
 

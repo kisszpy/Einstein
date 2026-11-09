@@ -116,14 +116,14 @@ export function MembersCard() {
 
   return (
     <Card className="p-4">
-      <div className="flex items-start justify-between">
-        <div>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
           <h3 className="text-[13px] font-medium">成员与权限</h3>
           <p className="mt-0.5 text-[12px] text-tertiary">
             每个账号自动拥有一个私有个人空间（只有自己可见）。勾选下方共享空间才会加入团队；未被加入的空间对该账号完全不可见。
           </p>
         </div>
-        <Button variant="outline" onClick={() => setAdding((v) => !v)}>
+        <Button variant="outline" className="shrink-0" onClick={() => setAdding((v) => !v)}>
           {adding ? "收起" : "新增成员"}
         </Button>
       </div>
@@ -197,15 +197,15 @@ export function MembersCard() {
       )}
 
       <div className="mt-3 overflow-x-auto">
-        <table className="w-full text-xs">
+        <table className="w-full min-w-[560px] text-xs">
           <thead>
             <tr className="text-left text-tertiary">
-              <th className="pb-1.5 font-normal">账号</th>
-              <th className="pb-1.5 font-normal">角色</th>
-              <th className="pb-1.5 font-normal">工作区</th>
-              <th className="pb-1.5 font-normal">最近登录</th>
-              <th className="pb-1.5 font-normal">状态</th>
-              <th className="pb-1.5 text-right font-normal">操作</th>
+              <th className="whitespace-nowrap pb-1.5 font-normal">账号</th>
+              <th className="whitespace-nowrap pb-1.5 font-normal">角色</th>
+              <th className="whitespace-nowrap pb-1.5 font-normal">工作区</th>
+              <th className="whitespace-nowrap pb-1.5 font-normal">最近登录</th>
+              <th className="whitespace-nowrap pb-1.5 font-normal">状态</th>
+              <th className="whitespace-nowrap pb-1.5 text-right font-normal">操作</th>
             </tr>
           </thead>
           <tbody>

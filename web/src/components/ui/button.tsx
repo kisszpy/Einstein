@@ -17,7 +17,7 @@ export function Button({
   return (
     <button
       className={cn(
-        "inline-flex h-9 items-center justify-center rounded-lg px-4 text-[13px] transition-all duration-150 disabled:pointer-events-none disabled:opacity-50",
+        "inline-flex h-9 shrink-0 items-center justify-center whitespace-nowrap rounded-lg px-4 text-[13px] transition-all duration-150 disabled:pointer-events-none disabled:opacity-50",
         VARIANTS[variant],
         className,
       )}
