@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { VisibilityBadge, VisibilitySelect, VISIBILITY_HINT, type Visibility } from "@/components/ui/visibility";
 import { BatchImport } from "@/features/kb/BatchImport";
 import { GrantsPanel } from "@/features/kb/GrantsPanel";
+import { ShareDialog } from "@/features/share/ShareDialog";
 import {
   readError,
   relativeTime,
@@ -125,6 +126,8 @@ export function KbPage() {
   const [newKbVisibility, setNewKbVisibility] = useState<Visibility>("private");
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  /** 对外分享面板：开了才渲染，避免空 Dialog 抢焦点 */
+  const [shareOpen, setShareOpen] = useState(false);
   const [docName, setDocName] = useState("");
   const [docContent, setDocContent] = useState("");
   const [query, setQuery] = useState("");
@@ -608,6 +611,9 @@ export function KbPage() {
                   <div className="flex shrink-0 items-center gap-2">
                     <Button variant="outline" onClick={() => setGrantsOpen(true)}>
                       共享给成员
+                    </Button>
+                    <Button variant="outline" onClick={() => setShareOpen(true)}>
+                      对外分享
                     </Button>
                     {currentKb.mine && (
                       <label className="flex items-center gap-2 text-xs text-tertiary">
@@ -1097,6 +1103,16 @@ export function KbPage() {
             </div>
           </Card>
         </div>
+      )}
+
+      {currentKb && (
+        <ShareDialog
+          open={shareOpen}
+          onClose={() => setShareOpen(false)}
+          kind="kb"
+          targetId={currentKb.id}
+          title={currentKb.name}
+        />
       )}
     </div>
   );

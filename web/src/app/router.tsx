@@ -12,9 +12,12 @@ import { EvalPage } from "@/features/eval/EvalPage";
 import { PlatformPage } from "@/features/platform/PlatformPage";
 import { OpsPage } from "@/features/ops/OpsPage";
 import { ModelsPage } from "@/features/models/ModelsPage";
+import { PublicPage } from "@/features/share/PublicPage";
 
 export const router = createBrowserRouter([
   { path: "/login", element: <LoginPage /> },
+  // 分享出去的只读页：鉴权之外，URL 里的 token 就是全部凭据
+  { path: "/s/:token", element: <PublicPage /> },
   {
     path: "/",
     element: (

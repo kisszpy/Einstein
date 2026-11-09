@@ -19,6 +19,8 @@ from app.api.routes import memory as memory_routes
 from app.api.routes import alerts as alert_routes
 from app.api.routes import models as model_routes
 from app.api.routes import templates as template_routes
+from app.api.routes import shares as share_routes
+from app.api.routes import public as public_routes
 from app.api.routes import observability, openapi, platform, projects
 from app.api.routes import jobs
 from app.core.config import get_settings
@@ -212,6 +214,9 @@ def create_app() -> FastAPI:
         if (
             path.startswith("/api/")
             and path not in PUBLIC_API_PATHS
+            # 分享出去的免登录链接：权限在 token 里，不在会话里。
+            # 这些路由自己按 IP 限流，不经过这里的用户态配额。
+            and not path.startswith("/api/public/")
             and request.method != "OPTIONS"
         ):
             token = deps._extract_bearer(request.headers.get("authorization"))
@@ -327,6 +332,9 @@ def create_app() -> FastAPI:
     app.include_router(model_routes.router, prefix="/api")
     app.include_router(alert_routes.router, prefix="/api")
     app.include_router(template_routes.router, prefix="/api")
+    app.include_router(share_routes.router, prefix="/api")
+    # 免登录访问面：token 即权限（中间件对 /api/public/ 前缀放行）
+    app.include_router(public_routes.router, prefix="/api")
     # 对外开放 API：/v1/...（Bearer 鉴权，与 /api 控制台面分开）
     app.include_router(openapi.router)
 

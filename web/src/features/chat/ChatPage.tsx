@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Archive, Globe, Pencil, Pin, PinOff, Search, SquarePen } from "lucide-react";
+import { Archive, Download, Globe, Pencil, Pin, PinOff, Search, Share2, SquarePen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   ComposerFrame,
@@ -10,6 +10,7 @@ import {
 import { useChatStream } from "./use-chat-stream";
 import { MessageBubble } from "./components/message-bubble";
 import type { WebMode } from "./chat-types";
+import { ShareDialog } from "@/features/share/ShareDialog";
 import { cn } from "@/lib/utils";
 
 const WEB_KEY = "einstein.chat.webMode";
@@ -67,6 +68,8 @@ export function ChatPage() {
   const [experts, setExperts] = useState<ExpertItem[]>([]);
   const [expertId, setExpertId] = useState<string | null>(null);
   const [webMode, setWebMode] = useState<WebMode>(readWebMode);
+  /** 正在分享的会话：null 表示面板关闭 */
+  const [shareTarget, setShareTarget] = useState<{ id: string; title: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -176,7 +179,32 @@ export function ChatPage() {
     }
   };
 
-  /** 会话行：置顶钉标 + 悬停操作（重命名/置顶/归档/删除） */
+  /**
+   * 导出会话。走 fetch 而不是 `<a download>`：鉴权是 Authorization 头，
+   * 直接开链接带不上，会拿到 401。
+   */
+  const exportConversation = async (c: ConversationItem, format: "md" | "json") => {
+    const res = await fetch(`/api/conversations/${c.id}/export?format=${format}`);
+    if (!res.ok) return;
+    const blob = await res.blob();
+    // 文件名以服务端给的为准：它做了中文与非法字符处理，前端重复一遍容易两边不一致
+    const disp = res.headers.get("Content-Disposition") || "";
+    const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(disp)?.[1];
+    const fallback = /filename="([^"]+)"/i.exec(disp)?.[1];
+    const name = utf8
+      ? decodeURIComponent(utf8)
+      : fallback || `${c.title}.${format}`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  /** 会话行：置顶钉标 + 悬停操作（重命名/置顶/导出/归档/删除） */
   const conversationRow = (c: ConversationItem, isArchived: boolean) => (
     <div
       key={c.id}
@@ -226,6 +254,26 @@ export function ChatPage() {
             </button>
           </>
         )}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            void exportConversation(c, e.shiftKey ? "json" : "md");
+          }}
+          className="text-xs text-tertiary hover:text-brand"
+          title="导出 Markdown（按住 Shift 导出 JSON）"
+        >
+          <Download size={13} />
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setShareTarget({ id: c.id, title: c.title });
+          }}
+          className="text-xs text-tertiary hover:text-brand"
+          title="对外分享（生成免登录链接）"
+        >
+          <Share2 size={13} />
+        </button>
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -486,6 +534,14 @@ export function ChatPage() {
           </p>
         </div>
       </section>
+
+      <ShareDialog
+        open={shareTarget !== null}
+        onClose={() => setShareTarget(null)}
+        kind="conversation"
+        targetId={shareTarget?.id ?? ""}
+        title={shareTarget?.title ?? ""}
+      />
     </div>
   );
 }

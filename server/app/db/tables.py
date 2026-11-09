@@ -591,6 +591,37 @@ RUN_TRACES = Table(
     order="started_at",
 )
 
+# ---------------------------------------------------------------- 发布与嵌入
+#
+# "把这段对话发给没账号的人看"是最高频的对外需求。做法不是给匿名用户开一个
+# 访客账号，而是发一个 token：能且只能读这一份内容。
+#
+# 单独一张表而不是往 conversations 加 `shared` 列，理由有三条：
+# 1. 同一段对话可能同时存在多条分享（不同有效期、不同标题）；
+# 2. 撤销要能追溯（谁撤的、什么时候），加列只能看到"当前是不是公开"；
+# 3. 分享是"对外契约"，字段会独立演化（访问计数、允许追问、有效期），
+#    混进会话表会让会话表越来越像个杂物箱。
+SHARES = Table(
+    name="shares",
+    columns=(
+        _c("id"),                          # token，同时是主键
+        _c("workspace_id", default="'default'"),
+        _c("owner_id", default="''"),
+        _c("kind", default="'conversation'"),   # conversation | kb
+        _c("target_id", default="''"),          # 会话 id 或知识库 id
+        _c("title", default="''"),
+        # 知识库分享默认只读：允许匿名提问等于让任何人花你的 token 钱
+        _c("allow_ask", "bool", default="0"),
+        _c("expires_at", default="''"),         # 空 = 不过期
+        _c("revoked", "bool", default="0"),
+        _c("view_count", "int", default="0"),
+        _c("last_viewed_at", default="''"),
+        _c("created_at", default="''"),
+        _c("note", default="''"),
+    ),
+    order="created_at",
+)
+
 TABLES: dict[str, Table] = {
     t.name: t
     for t in (
@@ -617,6 +648,7 @@ TABLES: dict[str, Table] = {
         LEGACY_IMPORTS,
         AGENT_APPROVALS,
         RUN_TRACES,
+        SHARES,
     )
 }
 
@@ -634,6 +666,7 @@ DOMAIN_TABLES: dict[str, str] = {
     "models": "models",
     "task_templates": "task_templates",
     "kb_grants": "kb_grants",
+    "shares": "shares",
     "alert_rules": "alert_rules",
     "alert_events": "alert_events",
     "sessions": "user_sessions",

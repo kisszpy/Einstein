@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from app.api.deps import current_uid, current_workspace
+from app.services import transcript
 from app.services.history import get_history_store
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
@@ -82,6 +83,28 @@ async def get_conversation(
             for m in conv.messages
         ],
     }
+
+
+@router.get("/{conversation_id}/export")
+async def export_conversation(
+    conversation_id: str, format: str = "md", inline: bool = False,
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> Response:
+    """导出整段会话：`format=md`（默认，给人看）/ `json`（给脚本处理）。
+
+    `inline=true` 时用 inline 而非 attachment——分享面板里想直接预览时用，
+    默认 attachment 让浏览器走"另存为"，避免把 Markdown 当网页打开。
+    """
+    conv = _require_own(conversation_id, ws, uid)
+    picked = transcript.RENDERERS.get((format or "md").lower())
+    if picked is None:
+        raise HTTPException(400, "format 只支持 md / json")
+    ext, media_type, render = picked
+    body = render(conv)
+    disp = transcript.disposition(conv.title, ext)
+    if inline:
+        disp = disp.replace("attachment;", "inline;", 1)
+    return Response(content=body, media_type=media_type, headers={"Content-Disposition": disp})
 
 
 @router.delete("/{conversation_id}")

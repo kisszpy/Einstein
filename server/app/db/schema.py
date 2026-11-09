@@ -424,6 +424,20 @@ def _migration_019(db: Database) -> list[str]:
     ]
 
 
+# 020：发布与嵌入（免登录只读链接）。
+#
+# 分享单独成表而不是给 conversations 加一列：同一份内容可以有多条分享
+# （不同有效期），撤销要能追溯，访问计数与"允许追问"这些字段也会独立演化。
+def _migration_020(db: Database) -> list[str]:
+    from app.db.tables import TABLES
+
+    return [
+        TABLES["shares"].ddl(),
+        "CREATE INDEX IF NOT EXISTS idx_shares_owner ON shares(workspace_id, owner_id)",
+        "CREATE INDEX IF NOT EXISTS idx_shares_target ON shares(target_id)",
+    ]
+
+
 MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (2, _MIGRATION_002),
     (3, _MIGRATION_003),
@@ -443,6 +457,7 @@ MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (17, _migration_017),
     (18, _migration_018),
     (19, _migration_019),
+    (20, _migration_020),
 ]
 
 _TYPE_TOKENS = {
