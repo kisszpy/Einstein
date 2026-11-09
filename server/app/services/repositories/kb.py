@@ -115,6 +115,9 @@ class KbRepository(Protocol):
         embedding_model: str = "", embedding_dim: int = 0,
     ) -> bool: ...
     def count_chunks(self, kb_id: str) -> int: ...
+    def chunk_signature(self, kb_ids: list[str]) -> tuple[int, str]:
+        """(切片数, 最新创建时间)：给 BM25 倒排表做失效判定用的廉价指纹。"""
+        ...
     def add_version(
         self, *, document_id: str, kb_id: str, version: int, content: str,
         content_hash: str, chunk_count: int, source: str = "text", note: str = "",
@@ -338,6 +341,11 @@ class JsonKbRepository:
 
     def count_chunks(self, kb_id: str) -> int:
         return sum(1 for c in self.chunks if c.kb_id == kb_id)
+
+    def chunk_signature(self, kb_ids: list[str]) -> tuple[int, str]:
+        wanted = set(kb_ids)
+        rows = [c for c in self.chunks if not wanted or c.kb_id in wanted]
+        return len(rows), max((c.created_at or "" for c in rows), default="")
 
     def update_chunk(
         self, chunk_id: str, *, text: str, vector: list[float], embedding_kind: str = "mock",
@@ -694,6 +702,19 @@ class SqlKbRepository:
 
     def count_chunks(self, kb_id: str) -> int:
         return int(self.db.scalar("SELECT count(*) AS n FROM chunks WHERE kb_id = ?", (kb_id,)) or 0)
+
+    def chunk_signature(self, kb_ids: list[str]) -> tuple[int, str]:
+        """一条聚合查询拿到 (数量, 最新时间)。比 count 多不了多少成本，
+        却能区分"同一批切片"和"删了又加"——后者数量可能刚好相等。"""
+        if not kb_ids:
+            return 0, ""
+        marks = ", ".join("?" for _ in kb_ids)
+        row = self.db.query_one(
+            f"SELECT count(*) AS n, COALESCE(MAX(created_at), '') AS ts"
+            f" FROM chunks WHERE kb_id IN ({marks})",
+            tuple(kb_ids),
+        )
+        return int(row["n"] if row else 0), str(row["ts"] if row else "")
 
     def save(self) -> None:
         """SQL 后端每次写就落库，save 保留为空操作以兼容旧调用点。"""

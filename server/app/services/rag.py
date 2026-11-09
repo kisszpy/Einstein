@@ -20,7 +20,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.core.config import get_settings
 from app.services.embeddings import embed_texts
-from app.services.lexical import BM25
+from app.services import lexical
 from app.services.rerank import rerank_hits
 from app.services.store import Chunk, Document, KBStore, get_store
 from app.services.vector import MemoryIndex, VectorIndexError, get_vector_index
@@ -377,6 +377,11 @@ async def search(
             raise EmbeddingMismatch(problem)
 
     vec_hits: list[tuple[str, float]] = []
+    # 只有内存向量后端需要把整库向量读进进程（要拿它现算余弦）；Milvus 走 ANN，
+    # 返回的就是 id，回表只取命中的那几行。
+    need_all = settings.vector_backend == "memory"
+    candidates: list = []
+
     if mode == "vector":
         # 纯向量：只把命中的切片回表，不必把整库向量读进进程
         assert qvec is not None
@@ -390,35 +395,45 @@ async def search(
             vec_hits = MemoryIndex.score(candidates, qvec, width)
         if not candidates:
             return []
+        lex_ranked: list[tuple[str, float]] = []
     else:
-        # 词法/混合：BM25 必须在目标库全量文本上建索引。
-        # 只有内存向量后端需要向量列（要用它现算余弦），Milvus 走 ANN 索引，
-        # 把 4096 维浮点一起读出来纯属白读——几千条就是几十 MB。
-        need_vec = settings.vector_backend == "memory"
-        candidates = store.list_chunks(kb_ids, with_vector=need_vec)
-        if not candidates:
-            return []
+        # 词法/混合：BM25 建表最贵的部分是"读全库文本 + 汇总 df/idf"。
+        # 整张倒排表按 (库集合, 签名) 缓存，签名不变就直接用上回建好的——
+        # 问答间隔通常几十秒，同一份资料反复重建同一张表纯属浪费。
+        signature = store.chunk_signature(kb_ids)
+        bm25 = lexical.get_index(
+            kb_ids, signature,
+            lambda: [(c.id, c.text) for c in store.list_chunks(kb_ids, with_vector=False)],
+        )
+        lex_ranked = bm25.search(query, width)
+
+        if need_all:
+            candidates = store.list_chunks(kb_ids, with_vector=True)
+            if not candidates:
+                return []
         if qvec is not None:
             try:
-                vec_hits = index.search(kb_ids, qvec, width, chunks=candidates)
+                vec_hits = index.search(kb_ids, qvec, width, chunks=candidates or None)
             except VectorIndexError as exc:
                 print(f"[rag] 向量索引不可用，降级内存打散：{exc}", flush=True)
-                if not need_vec:
-                    # 降级路径才需要向量，补一次带向量的查询
-                    candidates = store.list_chunks(kb_ids, with_vector=True)
+                candidates = store.list_chunks(kb_ids, with_vector=True)
                 vec_hits = MemoryIndex.score(candidates, qvec, width)
 
-    by_id = {c.id: c for c in candidates}
     # 索引里可能残留已删切片，统一用回表结果兜底。
+    # 走 Milvus 时这一步才回表：只取两路命中的那几十条，而不是整库。
+    if candidates:
+        by_id = {c.id: c for c in candidates}
+    else:
+        ids = list(dict.fromkeys(
+            [cid for cid, _ in vec_hits] + [cid for cid, _ in lex_ranked]
+        ))
+        by_id = {c.id: c for c in store.get_chunks(ids)} if ids else {}
+
     # 这里只做「候选池」的粗剪（门限的一半），真正的判定在排序完成后按
     # 绝对相关分做，避免过早在 RRF 融合前把可能有用的候选砍光。
     soft_floor = floor * 0.6 if floor > 0 else 0.0
     vec_ranked = [(cid, s) for cid, s in vec_hits if s >= soft_floor and cid in by_id]
-    lex_ranked: list[tuple[str, float]] = []
-
-    if mode in ("lexical", "hybrid"):
-        bm25 = BM25([(c.id, c.text) for c in candidates])
-        lex_ranked = [(cid, s) for cid, s in bm25.search(query, width) if cid in by_id]
+    lex_ranked = [(cid, s) for cid, s in lex_ranked if cid in by_id]
 
     vec_scores = dict(vec_ranked)
     lex_scores = dict(lex_ranked)

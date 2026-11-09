@@ -162,6 +162,11 @@ class KBStore:
         )
         if ok:
             self.repo.save()
+            # 签名看不出来（数量与 created_at 都没变），得显式作废 BM25 缓存，
+            # 否则改完切片还要等 TTL 到期才生效
+            from app.services import lexical
+
+            lexical.invalidate()
         return ok
 
     def delete_chunks_of_document(self, doc_id: str) -> int:
@@ -174,6 +179,14 @@ class KBStore:
 
     def count_chunks(self, kb_id: str) -> int:
         return self.repo.count_chunks(kb_id)
+
+    def chunk_signature(self, kb_ids: list[str]) -> tuple[int, str]:
+        """(切片数, 最新创建时间)：BM25 倒排表的失效判定。
+
+        增删切片一定会改变它；就地编辑文本不会（created_at 不动），
+        那种情况由 `update_chunk` 显式作废缓存兜住。
+        """
+        return self.repo.chunk_signature(kb_ids)
 
     # ---------- 持久化 ----------
     def save(self) -> None:

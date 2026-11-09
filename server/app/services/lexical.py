@@ -8,10 +8,17 @@
 分词结果是这里最贵的一步（千级切片约 1 秒），所以按 chunk_id 缓存 tf：
 切片文本变了 hash 就对不上，自动重算；未变的直接复用。删除切片留下的
 孤儿条目会在缓存涨到上限时整体清掉。
+
+**再往上一层是整库倒排表的缓存**（`get_index`）：一次 hybrid 检索要建 BM25，
+建表意味着把目标库全部切片读出来 + 汇总 df/idf。5000 片大概 3 秒，而问答
+间隔通常几十秒——同一份资料反复重建同一张表纯属浪费。所以按"库集合 + 签名"
+缓存整张表：签名（切片数 + 最新创建时间）变了才重建，另有 TTL 兜住
+"文本被就地编辑但 created_at 没变"这种边角情况。
 """
 
 import re
 import threading
+import time
 from collections import Counter
 
 import jieba
@@ -30,6 +37,11 @@ _initialized = False
 _TF_CACHE: dict[str, tuple[int, Counter[str], int]] = {}
 _TF_CACHE_MAX = 200_000
 _cache_lock = threading.Lock()
+
+# 库集合 -> (签名, 建表时间, BM25)
+_INDEX_CACHE: dict[tuple[str, ...], tuple[tuple[int, str], float, "BM25"]] = {}
+_INDEX_TTL = 300.0        # 秒；兜住"文本改了但签名没变"的情况
+_INDEX_CACHE_MAX = 32      # 每个库集合一张表，几十张就是几十 MB，够用
 
 
 def _ensure_init() -> None:
@@ -120,3 +132,46 @@ class BM25:
                 scores.append((doc_id, score))
         scores.sort(key=lambda kv: kv[1], reverse=True)
         return scores[:top_k]
+
+
+def get_index(
+    kb_ids: list[str], signature: tuple[int, str], loader,
+) -> BM25:
+    """取整库倒排表，签名没变就复用。
+
+    `signature` 由调用方用 `store.chunk_signature()` 取（切片数 + 最新创建时间）：
+    切片的增删一定会改它，文本就地编辑不会——那种情况由 TTL 兜底，
+    同时 `update_chunk` 会显式 `invalidate()`。
+    """
+    key = tuple(sorted(kb_ids))
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _INDEX_CACHE.get(key)
+        if hit is not None and hit[0] == signature and (now - hit[1]) < _INDEX_TTL:
+            return hit[2]
+
+    index = BM25(loader())
+    with _cache_lock:
+        if len(_INDEX_CACHE) >= _INDEX_CACHE_MAX:
+            # 不做 LRU：库集合的数量天然很少，涨到上限说明是"很多子集查询"，
+            # 整体清掉比逐个算最近使用更省事，也不会留下错配
+            _INDEX_CACHE.clear()
+        _INDEX_CACHE[key] = (signature, now, index)
+    return index
+
+
+def invalidate(kb_id: str = "") -> None:
+    """切片被改写/删除后主动作废。kb_id 为空表示全部作废。"""
+    with _cache_lock:
+        if not kb_id:
+            _INDEX_CACHE.clear()
+            return
+        for key in list(_INDEX_CACHE):
+            if kb_id in key:
+                _INDEX_CACHE.pop(key, None)
+
+
+def stats() -> dict:
+    """诊断用：缓存了几张表、tf 缓存多少条。"""
+    with _cache_lock:
+        return {"indexes": len(_INDEX_CACHE), "tf_entries": len(_TF_CACHE)}
