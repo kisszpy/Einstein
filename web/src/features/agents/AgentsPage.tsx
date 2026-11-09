@@ -798,7 +798,7 @@ export function AgentsPage() {
           </div>
         ) : (
           <>
-            <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+            <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
               <div className="conversation-column pb-4 pt-6">
                 {/* 同一任务的历史轮次：完整的问答对，形成连续对话 */}
                 {turns.map((turn, index) => (
@@ -851,7 +851,8 @@ export function AgentsPage() {
               </div>
             </div>
 
-            <div className="shrink-0 pb-3">
+            {/* 输入区：与消息滚动区留同宽滚动条槽，保证正文列与输入器逐像素对齐 */}
+            <div className="shrink-0 overflow-y-hidden pb-3 [scrollbar-gutter:stable]">
               <div className="conversation-column">
                 {approval && (
                   <div className="mb-2 flex items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-4 py-2.5">

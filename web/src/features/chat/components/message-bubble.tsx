@@ -279,8 +279,9 @@ export function MessageBubble({
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
       <div
         className={cn(
-          "group max-w-[85%] rounded-card px-4 py-2.5",
-          isUser ? "bg-brand-soft text-primary" : "bg-surface-1 text-primary shadow-card",
+          "group rounded-card px-4 py-2.5",
+          // 用户消息是右侧气泡（85% 封顶）；助手回答与底部输入框同宽，左右边缘严格对齐
+          isUser ? "max-w-[85%] bg-brand-soft text-primary" : "w-full bg-surface-1 text-primary shadow-card",
         )}
       >
         {isUser ? (

@@ -91,12 +91,17 @@ body {
   font-feature-settings: "tnum";
 }
 
-/* 键盘可达性：所有可交互元素在 Tab 聚焦时给一圈品牌色描边。
-   之前没有任何 focus-visible 样式，键盘用户完全看不出焦点在哪。 */
+/* 键盘可达性：Tab 聚焦时给一圈低饱和描边，能看清焦点但不抢戏。
+   输入控件除外——输入框的聚焦态由外壳的 focus-within 边框表达，
+   再叠一圈实色描边就是常驻发光（autoFocus 会命中 :focus-visible）。 */
 :focus-visible {
-  outline: 2px solid var(--brand);
+  outline: 2px solid color-mix(in srgb, var(--brand) 40%, transparent);
   outline-offset: 1px;
-  border-radius: 6px;
+}
+textarea:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: none;
 }
 
 /* 细滚动条，贴合 WorkBuddy 的克制观感 */

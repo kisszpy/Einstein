@@ -375,9 +375,10 @@ export function ChatPage() {
         </div>
       </aside>
 
-      {/* 聊天流：与智能体页同一条内容基准线（800px 列宽，正文约 752px） */}
+      {/* 聊天流：与智能体页同一条内容基准线。滚动区与输入区都留滚动条槽（gutter），
+          消息多到出现滚动条时正文列也不会比输入列窄一截。 */}
       <section className="flex min-w-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
           <div className="conversation-column">
             {empty ? (
               <div className="flex h-full min-h-[60vh] flex-col items-center justify-center text-center">
@@ -449,8 +450,9 @@ export function ChatPage() {
           </div>
         </div>
 
-        {/* 输入区 */}
-        <div className="conversation-column shrink-0 pb-6">
+        {/* 输入区：外层用同样的滚动条槽占位，保证与消息区逐像素同宽 */}
+        <div className="shrink-0 overflow-y-hidden [scrollbar-gutter:stable]">
+          <div className="conversation-column pb-6">
           {/* 专家选择行 */}
           {experts.length > 0 && (
             <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -554,6 +556,7 @@ export function ChatPage() {
           <p className="mt-2 text-center text-xs text-tertiary">
             内容由 AI 生成，请自行核实重要信息
           </p>
+          </div>
         </div>
       </section>
 
