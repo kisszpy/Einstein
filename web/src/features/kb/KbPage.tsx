@@ -3,6 +3,14 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { VisibilityBadge, VisibilitySelect, VISIBILITY_HINT, type Visibility } from "@/components/ui/visibility";
 import { BatchImport } from "@/features/kb/BatchImport";
+import { GrantsPanel } from "@/features/kb/GrantsPanel";
+import {
+  readError,
+  relativeTime,
+  sourceHost,
+  type BatchRefreshResult,
+  type StaleResult,
+} from "@/features/kb/kbShared";
 import { cn } from "@/lib/utils";
 
 interface KBItem {
@@ -13,6 +21,7 @@ interface KBItem {
   owner_id: string;
   mine: boolean;
   document_count: number;
+  my_role: "read" | "write";
 }
 
 interface DocItem {
@@ -23,6 +32,9 @@ interface DocItem {
   source: string;
   status: string;
   updated_at: string;
+  source_url: string;
+  fetched_at: string;
+  stale: boolean;
 }
 
 interface ChunkItem {
@@ -69,15 +81,34 @@ const MODE_LABEL: Record<SearchMode, string> = {
   lexical: "词法",
 };
 
-/** 从失败响应里取出可读原因；后端详情是纯文本时给出兜底文案。 */
-async function readError(res: Response): Promise<string> {
-  try {
-    const data = (await res.json()) as { detail?: unknown };
-    if (typeof data?.detail === "string") return data.detail;
-  } catch {
-    /* 非 JSON 响应 */
-  }
-  return `请求失败（HTTP ${res.status}）`;
+/** 本地只读徽标：样式风格对齐 VisibilityBadge，但只读属于权限态，单独定义。 */
+function ReadonlyBadge({ className }: { className?: string }) {
+  return (
+    <span
+      title="只有查看权限，无法修改"
+      className={cn("shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[11px] text-tertiary", className)}
+    >
+      只读
+    </span>
+  );
+}
+
+function LinkIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
+  );
 }
 
 function shortTime(iso: string): string {
@@ -111,8 +142,15 @@ export function KbPage() {
   const [versions, setVersions] = useState<DocVersion[]>([]);
   const [panelBusy, setPanelBusy] = useState(false);
   const [rowBusy, setRowBusy] = useState<string | null>(null);
+  // ---- 来源同步：批量重抓与结果摘要 ----
+  const [batchBusy, setBatchBusy] = useState<"stale" | "all" | null>(null);
+  const [batchResult, setBatchResult] = useState<BatchRefreshResult | null>(null);
+  // ---- 授权面板 ----
+  const [grantsOpen, setGrantsOpen] = useState(false);
 
   const currentKb = kbs.find((k) => k.id === selected) ?? null;
+  // 只读库隐藏一切写操作；字段缺失时按可写处理，避免后端旧响应把页面锁死
+  const canWrite = currentKb ? currentKb.my_role !== "read" : false;
 
   const loadKbs = useCallback(async () => {
     const res = await fetch("/api/kb");
@@ -150,6 +188,8 @@ export function KbPage() {
     setHits(null);
     setError(null);
     setOpenDoc(null);
+    setGrantsOpen(false);
+    setBatchResult(null);
     void refreshDocs();
   }, [selected, refreshDocs]);
 
@@ -340,6 +380,62 @@ export function KbPage() {
     }
   };
 
+  /** 单篇重抓：失败后端回 400，detail 即原因。 */
+  const refreshDoc = async (doc: DocItem) => {
+    if (!selected) return;
+    setRowBusy(doc.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/kb/${selected}/documents/${doc.id}/refresh`, { method: "POST" });
+      if (!res.ok) throw new Error(await readError(res));
+      const data = (await res.json()) as { changed: boolean; version: number };
+      if (data.changed) {
+        setNotice(`「${doc.name}」已更新到第 ${data.version} 版`);
+      } else {
+        setNotice(`「${doc.name}」内容未变（已更新抓取时间）`);
+      }
+      await refreshDocs();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRowBusy(null);
+    }
+  };
+
+  /**
+   * 批量重抓。stale_only 时先查过期清单，0 条直接提示不发请求；
+   * 批量接口里单篇失败不会 4xx，结果看 items[].error。
+   */
+  const refreshBatch = async (staleOnly: boolean) => {
+    if (!selected) return;
+    setBatchBusy(staleOnly ? "stale" : "all");
+    setError(null);
+    setBatchResult(null);
+    try {
+      if (staleOnly) {
+        const staleRes = await fetch(`/api/kb/${selected}/documents/stale?days=30`);
+        if (!staleRes.ok) throw new Error(await readError(staleRes));
+        const stale = (await staleRes.json()) as StaleResult;
+        if (stale.count === 0) {
+          setNotice("没有过期文档");
+          return;
+        }
+      }
+      const res = await fetch(`/api/kb/${selected}/documents/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doc_ids: [], stale_only: staleOnly }),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      setBatchResult((await res.json()) as BatchRefreshResult);
+      await refreshDocs();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBatchBusy(null);
+    }
+  };
+
   const rollbackDoc = async (doc: DocItem, version: number) => {
     if (!selected) return;
     if (
@@ -463,12 +559,13 @@ export function KbPage() {
                 <div className="flex items-center gap-1.5">
                   <span className="min-w-0 truncate text-[13px]">{kb.name}</span>
                   <VisibilityBadge value={kb.visibility} className="shrink-0" />
+                  {kb.my_role === "read" && <ReadonlyBadge />}
                 </div>
                 <div className="text-xs opacity-70">
                   {kb.document_count} 篇文档{kb.mine ? "" : " · 共享"}
                 </div>
               </button>
-              {selected === kb.id && (
+              {selected === kb.id && kb.my_role !== "read" && (
                 <button
                   title="删除知识库"
                   onClick={() => void removeKb(kb)}
@@ -501,20 +598,28 @@ export function KbPage() {
                   <div className="flex items-center gap-2">
                     <h2 className="truncate text-[15px] font-medium">{currentKb.name}</h2>
                     <VisibilityBadge value={currentKb.visibility} />
+                    {currentKb.my_role === "read" && <ReadonlyBadge />}
                   </div>
                   {currentKb.description && (
                     <p className="mt-1 text-[12.5px] text-secondary">{currentKb.description}</p>
                   )}
                 </div>
-                {currentKb.mine && (
-                  <label className="flex shrink-0 items-center gap-2 text-xs text-tertiary">
-                    可见范围
-                    <VisibilitySelect
-                      value={currentKb.visibility}
-                      disabled={busy}
-                      onChange={(v) => void patchKb(currentKb, { visibility: v })}
-                    />
-                  </label>
+                {canWrite && (
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Button variant="outline" onClick={() => setGrantsOpen(true)}>
+                      共享给成员
+                    </Button>
+                    {currentKb.mine && (
+                      <label className="flex items-center gap-2 text-xs text-tertiary">
+                        可见范围
+                        <VisibilitySelect
+                          value={currentKb.visibility}
+                          disabled={busy}
+                          onChange={(v) => void patchKb(currentKb, { visibility: v })}
+                        />
+                      </label>
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -535,49 +640,100 @@ export function KbPage() {
               </div>
             )}
             {/* 添加文档 */}
-            <Card className="p-5">
-              <div className="flex items-baseline justify-between gap-3">
-                <h3 className="text-[13px] font-medium">添加文档</h3>
-                <span className="text-[11.5px] text-tertiary">可整目录导入</span>
-              </div>
-              <div className="mt-3">
-                <BatchImport kbId={selected} onFinished={() => void refreshDocs()} />
-              </div>
-            </Card>
+            {canWrite && (
+              <Card className="p-5">
+                <div className="flex items-baseline justify-between gap-3">
+                  <h3 className="text-[13px] font-medium">添加文档</h3>
+                  <span className="text-[11.5px] text-tertiary">可整目录导入</span>
+                </div>
+                <div className="mt-3">
+                  <BatchImport kbId={selected} onFinished={() => void refreshDocs()} />
+                </div>
+              </Card>
+            )}
 
             {/* 手动粘贴：保留小文本快速验证的场景 */}
-            <Card className="p-5">
-              <details>
-                <summary className="cursor-pointer text-[13px] font-medium">手动粘贴文本</summary>
-                <div className="mt-3 flex items-center gap-3">
-                  <input
-                    value={docName}
-                    onChange={(e) => setDocName(e.target.value)}
-                    placeholder="文档名称"
-                    className="h-9 w-48 rounded-lg border border-line bg-surface-1 px-3 text-[13px] outline-none placeholder:text-tertiary focus:border-line-strong"
+            {canWrite && (
+              <Card className="p-5">
+                <details>
+                  <summary className="cursor-pointer text-[13px] font-medium">手动粘贴文本</summary>
+                  <div className="mt-3 flex items-center gap-3">
+                    <input
+                      value={docName}
+                      onChange={(e) => setDocName(e.target.value)}
+                      placeholder="文档名称"
+                      className="h-9 w-48 rounded-lg border border-line bg-surface-1 px-3 text-[13px] outline-none placeholder:text-tertiary focus:border-line-strong"
+                    />
+                  </div>
+                  <textarea
+                    value={docContent}
+                    onChange={(e) => setDocContent(e.target.value)}
+                    placeholder="粘贴文档内容，将自动切片并向量化…"
+                    rows={4}
+                    className="mt-3 w-full resize-y rounded-lg border border-line bg-surface-1 p-3 text-[13px] outline-none placeholder:text-tertiary focus:border-line-strong"
                   />
-                </div>
-                <textarea
-                  value={docContent}
-                  onChange={(e) => setDocContent(e.target.value)}
-                  placeholder="粘贴文档内容，将自动切片并向量化…"
-                  rows={4}
-                  className="mt-3 w-full resize-y rounded-lg border border-line bg-surface-1 p-3 text-[13px] outline-none placeholder:text-tertiary focus:border-line-strong"
-                />
-                <div className="mt-3 flex justify-end">
-                  <Button
-                    disabled={busy || !docName.trim() || !docContent.trim()}
-                    onClick={() => void addDoc()}
-                  >
-                    入库
-                  </Button>
-                </div>
-              </details>
-            </Card>
+                  <div className="mt-3 flex justify-end">
+                    <Button
+                      disabled={busy || !docName.trim() || !docContent.trim()}
+                      onClick={() => void addDoc()}
+                    >
+                      入库
+                    </Button>
+                  </div>
+                </details>
+              </Card>
+            )}
 
             {/* 文档列表 */}
             <Card className="p-5">
-              <h3 className="text-[13px] font-medium">文档（{docs.length}）</h3>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-[13px] font-medium">文档（{docs.length}）</h3>
+                {canWrite && docs.length > 0 && (
+                  <div className="flex gap-1">
+                    <Button
+                      variant="outline"
+                      disabled={batchBusy !== null}
+                      onClick={() => void refreshBatch(true)}
+                    >
+                      {batchBusy === "stale" ? "检查中…" : "重抓过期文档"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={batchBusy !== null}
+                      onClick={() => void refreshBatch(false)}
+                    >
+                      {batchBusy === "all" ? "重抓中…" : "全部重抓"}
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {batchResult && (
+                <div className="mt-3 rounded-lg border border-line bg-surface-2 p-3 text-xs">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-secondary">
+                      共 {batchResult.total} 篇，更新 {batchResult.changed} 篇，失败{" "}
+                      {batchResult.failed} 篇
+                    </span>
+                    <button
+                      onClick={() => setBatchResult(null)}
+                      className="shrink-0 text-tertiary transition-colors hover:text-secondary"
+                    >
+                      关闭
+                    </button>
+                  </div>
+                  {batchResult.items.some((it) => !it.ok) && (
+                    <div className="mt-2 space-y-1 border-t border-line pt-2">
+                      {batchResult.items
+                        .filter((it) => !it.ok)
+                        .map((it) => (
+                          <p key={it.id} className="break-words text-danger">
+                            「{it.name}」{it.error || "未知原因"}
+                          </p>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {docs.length === 0 ? (
                 <p className="mt-2 text-xs text-tertiary">还没有文档</p>
               ) : (
@@ -599,17 +755,43 @@ export function KbPage() {
                               {d.source && ` · ${d.source}`}
                               {d.updated_at && ` · ${shortTime(d.updated_at)}`}
                             </div>
+                            {d.source_url && (
+                              <div className="mt-0.5 flex items-center gap-2 text-[11px]">
+                                <a
+                                  href={d.source_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title={d.source_url}
+                                  className="inline-flex min-w-0 items-center gap-1 text-secondary transition-colors duration-150 hover:text-brand"
+                                >
+                                  <LinkIcon className="h-3 w-3 shrink-0" />
+                                  <span className="truncate">{sourceHost(d.source_url)}</span>
+                                </a>
+                                {d.fetched_at && (
+                                  <span className="shrink-0 text-tertiary">
+                                    抓取于 {relativeTime(d.fetched_at)}
+                                  </span>
+                                )}
+                                {d.stale && (
+                                  <span className="shrink-0 rounded bg-warning/15 px-1.5 py-0.5 text-warning">
+                                    可能过期
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
                           <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100">
-                            <button
-                              onClick={() => void togglePanel(d, "chunks")}
-                              className={cn(
-                                "rounded-md px-1.5 py-1 text-xs transition-colors duration-150 hover:bg-surface-1 hover:text-primary",
-                                expanded && panel === "chunks" ? "text-brand" : "text-tertiary",
-                              )}
-                            >
-                              切片
-                            </button>
+                            {canWrite && (
+                              <button
+                                onClick={() => void togglePanel(d, "chunks")}
+                                className={cn(
+                                  "rounded-md px-1.5 py-1 text-xs transition-colors duration-150 hover:bg-surface-1 hover:text-primary",
+                                  expanded && panel === "chunks" ? "text-brand" : "text-tertiary",
+                                )}
+                              >
+                                切片
+                              </button>
+                            )}
                             <button
                               onClick={() => void togglePanel(d, "versions")}
                               className={cn(
@@ -619,20 +801,33 @@ export function KbPage() {
                             >
                               版本
                             </button>
-                            <button
-                              disabled={rowBusy === d.id}
-                              onClick={() => void reindexDoc(d)}
-                              className="rounded-md px-1.5 py-1 text-xs text-tertiary transition-colors duration-150 hover:bg-surface-1 hover:text-primary disabled:opacity-50"
-                            >
-                              {rowBusy === d.id ? "处理中…" : "重建"}
-                            </button>
-                            <button
-                              disabled={rowBusy === d.id}
-                              onClick={() => void removeDoc(d)}
-                              className="rounded-md px-1.5 py-1 text-xs text-tertiary transition-colors duration-150 hover:bg-danger/10 hover:text-danger disabled:opacity-50"
-                            >
-                              删除
-                            </button>
+                            {canWrite && d.source_url && (
+                              <button
+                                disabled={rowBusy === d.id}
+                                onClick={() => void refreshDoc(d)}
+                                className="rounded-md px-1.5 py-1 text-xs text-tertiary transition-colors duration-150 hover:bg-surface-1 hover:text-primary disabled:opacity-50"
+                              >
+                                {rowBusy === d.id ? "抓取中…" : "重抓"}
+                              </button>
+                            )}
+                            {canWrite && (
+                              <button
+                                disabled={rowBusy === d.id}
+                                onClick={() => void reindexDoc(d)}
+                                className="rounded-md px-1.5 py-1 text-xs text-tertiary transition-colors duration-150 hover:bg-surface-1 hover:text-primary disabled:opacity-50"
+                              >
+                                {rowBusy === d.id ? "处理中…" : "重建"}
+                              </button>
+                            )}
+                            {canWrite && (
+                              <button
+                                disabled={rowBusy === d.id}
+                                onClick={() => void removeDoc(d)}
+                                className="rounded-md px-1.5 py-1 text-xs text-tertiary transition-colors duration-150 hover:bg-danger/10 hover:text-danger disabled:opacity-50"
+                              >
+                                删除
+                              </button>
+                            )}
                           </div>
                         </div>
 
@@ -733,13 +928,15 @@ export function KbPage() {
                                     {v.source && ` · ${v.source}`} · {shortTime(v.created_at)}
                                   </p>
                                 </div>
-                                <button
-                                  disabled={rowBusy === d.id}
-                                  onClick={() => void rollbackDoc(d, v.version)}
-                                  className="shrink-0 rounded-md px-1.5 py-1 text-xs text-brand transition-colors duration-150 hover:bg-brand-soft disabled:opacity-50"
-                                >
-                                  回滚到此版
-                                </button>
+                                {canWrite && (
+                                  <button
+                                    disabled={rowBusy === d.id}
+                                    onClick={() => void rollbackDoc(d, v.version)}
+                                    className="shrink-0 rounded-md px-1.5 py-1 text-xs text-brand transition-colors duration-150 hover:bg-brand-soft disabled:opacity-50"
+                                  >
+                                    回滚到此版
+                                  </button>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -850,6 +1047,11 @@ export function KbPage() {
           </div>
         )}
       </div>
+
+      {/* 共享给成员 */}
+      {grantsOpen && selected && (
+        <GrantsPanel kbId={selected} onClose={() => setGrantsOpen(false)} />
+      )}
 
       {/* 新建知识库 */}
       {createOpen && (

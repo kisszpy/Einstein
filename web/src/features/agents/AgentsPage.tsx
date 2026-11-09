@@ -15,6 +15,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { TaskSidebar } from "./components/TaskSidebar";
 import { Composer } from "./components/Composer";
+import {
+  SaveTemplateDialog,
+  TemplateBar,
+  type TaskTemplate,
+} from "./components/TemplateBar";
 import { AssistantTurn } from "./components/AssistantTurn";
 import {
   groupSessions,
@@ -98,6 +103,11 @@ export function AgentsPage() {
   const [query, setQuery] = useState("");
 
   const [task, setTask] = useState("");
+  /** 任务模板：提示"这类活怎么发起"的起步参数，不固化执行步骤 */
+  const [templates, setTemplates] = useState<TaskTemplate[]>([]);
+  const [saveOpen, setSaveOpen] = useState(false);
+  /** 模板带来的工具挂载：与手动勾选的能力合并后一起发给引擎 */
+  const [templateTools, setTemplateTools] = useState<string[]>([]);
   const [submitted, setSubmitted] = useState("");
   const [steps, setSteps] = useState<AgentStep[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -207,6 +217,20 @@ export function AgentsPage() {
   }, [loadProjects, loadRuns]);
 
   // 文件树/预览自动指向最近更新的项目（纯浏览，不影响运行绑定）
+  const loadTemplates = useCallback(async () => {
+    try {
+      const res = await fetch("/api/templates");
+      if (!res.ok) return;
+      setTemplates((await res.json()) as TaskTemplate[]);
+    } catch {
+      // 模板加载失败不该挡住发任务：这里静默，页面上就是没有模板条
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTemplates();
+  }, [loadTemplates]);
+
   useEffect(() => {
     if (browseProject || projects.length === 0) return;
     const latest = [...projects].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
@@ -366,7 +390,7 @@ export function AgentsPage() {
           signal: controller.signal,
           body: JSON.stringify({
             task: text,
-            tool_ids: capabilityTools,
+            tool_ids: Array.from(new Set([...capabilityTools, ...templateTools])),
             kb_ids: selectedKbs,
             skill_ids: selectedSkills,
             project: boundProject,
@@ -398,6 +422,7 @@ export function AgentsPage() {
       error,
       sessionId,
       capabilityTools,
+      templateTools,
       selectedKbs,
       selectedSkills,
       boundProject,
@@ -499,6 +524,24 @@ export function AgentsPage() {
     }
   };
 
+  /** 选一个模板：把起步参数填进表单，执行仍由智能体自己规划。 */
+  const applyTemplate = async (tpl: TaskTemplate) => {
+    if (running) return;
+    setTask(tpl.prompt);
+    setTemplateTools(tpl.tool_ids);
+    setSelectedKbs(tpl.kb_ids);
+    if (tpl.project) setBoundProject(tpl.project);
+    // 计一次使用（失败不影响填表：模板的价值是省打字，不是统计）
+    try {
+      await fetch(`/api/templates/${tpl.id}/use`, { method: "POST" });
+    } catch {
+      /* 忽略 */
+    }
+    setTemplates((prev) =>
+      prev.map((t) => (t.id === tpl.id ? { ...t, use_count: t.use_count + 1 } : t)),
+    );
+  };
+
   const stop = () => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -519,6 +562,7 @@ export function AgentsPage() {
     setError(null);
     setElapsed(null);
     setTask("");
+    setTemplateTools([]);
   };
 
   /** 打开一个任务会话：更早的轮次进历史，最后一轮作为当前轮展示 */
@@ -687,6 +731,14 @@ export function AgentsPage() {
 
           <div className="flex shrink-0 items-center gap-1">
             <button
+              onClick={() => setSaveOpen(true)}
+              disabled={running || !(task.trim() || submitted)}
+              title="把当前任务存成模板，下次一键复用"
+              className="rounded-md px-2 py-1 text-[12px] text-secondary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:opacity-40"
+            >
+              存为模板
+            </button>
+            <button
               onClick={() => browseProject && openProject(browseProject)}
               disabled={!browseProject}
               className="rounded-md px-2 py-1 text-[12px] text-secondary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:opacity-40"
@@ -718,6 +770,8 @@ export function AgentsPage() {
                   把任务交给智能体：自己查资料、写文件、跑代码，直接产出可下载的成果
                 </p>
               </div>
+
+              <TemplateBar items={templates} disabled={running} onPick={(tpl) => void applyTemplate(tpl)} />
 
               <div className="mb-5 flex flex-wrap justify-center gap-1.5">
                 {SUGGESTIONS.map((s) => (
@@ -853,6 +907,13 @@ export function AgentsPage() {
           </aside>
         </>
       )}
+
+      <SaveTemplateDialog
+        open={saveOpen}
+        prompt={task.trim() || submitted}
+        onClose={() => setSaveOpen(false)}
+        onSaved={(tpl) => setTemplates((prev) => [tpl, ...prev])}
+      />
     </div>
   );
 }

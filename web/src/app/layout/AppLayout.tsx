@@ -1,5 +1,6 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import {
+  Activity,
   Blocks,
   Bot,
   Cpu,
@@ -46,6 +47,7 @@ const NAV: { title: string; items: NavEntry[] }[] = [
     title: "平台管理",
     items: [
       { to: "/eval", label: "评测", icon: FlaskConical },
+      { to: "/ops", label: "运营", icon: Activity },
       { to: "/platform", label: "开放平台", icon: KeyRound },
       { to: "/admin", label: "系统管理", icon: Settings2 },
     ],
