@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import shutil
 from pathlib import Path
 
 from pptx import Presentation
@@ -458,6 +459,12 @@ def _slide_images(root: Path, target: Path) -> list[str]:
     except ImportError:
         return []
     cache_dir = root / ".deckpreview" / f"{target.stem}-{int(target.stat().st_mtime)}"
+    # 每个文件只保留最新一份渲染缓存：命中旧 mtime 缓存说明文件已重生成，先清掉历史目录
+    preview_root = root / ".deckpreview"
+    if preview_root.is_dir():
+        for stale in preview_root.glob(f"{target.stem}-*"):
+            if stale != cache_dir:
+                shutil.rmtree(stale, ignore_errors=True)
     if not cache_dir.is_dir() or not any(cache_dir.glob("*.JPG")):
         cache_dir.mkdir(parents=True, exist_ok=True)
         try:

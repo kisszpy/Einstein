@@ -11,3 +11,7 @@ deploy/volumes/
 deploy/.env
 .smoke-tmp/
 .idea/
+server/.slidep/
+**/.deckpreview/
+ppt-preview.html
+server/tools/*_payload.json

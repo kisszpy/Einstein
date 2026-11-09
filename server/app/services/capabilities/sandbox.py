@@ -194,7 +194,7 @@ def delete_project(workspace_id: str, project: str) -> bool:
 # ---------- 文件 ----------
 
 # .deck 存演示文稿的可编辑来源（sidecar），属于实现细节，不进文件树与打包
-_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", ".agent_tmp", ".deck"}
+_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", ".agent_tmp", ".deck", ".deckpreview", ".slidep"}
 
 
 def write_file(workspace_id: str, project: str, rel: str, content: str) -> dict:

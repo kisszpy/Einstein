@@ -142,6 +142,21 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
     };
   }, [hasDesign]);
 
+  // 票据 15 分钟过期：img 挂掉（401）时批量重签一次，页面停留超时后翻页不再裂图
+  const refreshFails = useRef(0);
+  const refreshTimer = useRef<number | null>(null);
+  const onPreviewError = useCallback(() => {
+    if (refreshTimer.current || refreshFails.current >= 2) return;
+    refreshFails.current += 1;
+    refreshTimer.current = window.setTimeout(() => {
+      refreshTimer.current = null;
+      api.getTicket(true).then((v) => setTicket(v));
+    }, 300);
+  }, []);
+  const onPreviewLoad = useCallback(() => {
+    refreshFails.current = 0;
+  }, []);
+
   /** 所有修改都走这里：入栈历史 → 标记未保存。 */
   const mutate = useCallback(
     (updater: (draft: Deck) => Deck) => {
@@ -405,6 +420,8 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                       alt={`第 ${i + 1} 页缩略图`}
                       className="block w-full"
                       loading="lazy"
+                      onError={onPreviewError}
+                      onLoad={onPreviewLoad}
                     />
                   ) : (
                     <div className="aspect-video w-full animate-pulse bg-surface-3" />
@@ -460,6 +477,8 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                           alt={`第 ${i + 1} 页缩略图`}
                           className="block w-full"
                           loading="lazy"
+                          onError={onPreviewError}
+                          onLoad={onPreviewLoad}
                         />
                       ) : (
                         <div className="aspect-video w-full animate-pulse bg-surface-3" />
@@ -522,6 +541,8 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                     src={api.previewUrl(project, previews[selected] ?? previews[0] ?? "", ticket)}
                     alt={`第 ${selected + 1} 页设计稿`}
                     className="w-full rounded-lg border border-line"
+                    onError={onPreviewError}
+                    onLoad={onPreviewLoad}
                   />
                   <p className="mt-2 text-center text-[11.5px] text-tertiary">
                     {readOnlyDesign

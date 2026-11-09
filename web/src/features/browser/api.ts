@@ -67,8 +67,8 @@ export function listThemes(): Promise<ThemePreset[]> {
 /** 票据给 iframe / img 用：这类请求带不了 Authorization 头，只能靠查询参数。 */
 let cached: { ticket: string; expires: number } | null = null;
 
-export async function getTicket(): Promise<string> {
-  if (cached && cached.expires > Date.now()) return cached.ticket;
+export async function getTicket(force = false): Promise<string> {
+  if (!force && cached && cached.expires > Date.now()) return cached.ticket;
   const data = await request<{ ticket: string; expires_in: number }>("/api/browse/ticket");
   // 提前 60 秒续期，避免边界上刚好过期
   cached = { ticket: data.ticket, expires: Date.now() + (data.expires_in - 60) * 1000 };
