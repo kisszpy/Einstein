@@ -438,6 +438,18 @@ def _migration_020(db: Database) -> list[str]:
     ]
 
 
+def _migration_021(db: Database) -> list[str]:
+    from app.db.tables import TABLES
+
+    return [
+        TABLES["run_events"].ddl(),
+        # 重放与跟读都按 (run_id, seq) 顺序扫，这条索引决定重连是不是秒开
+        "CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, seq)",
+        # 「我还有哪次运行没看完」按空间+人查
+        "CREATE INDEX IF NOT EXISTS idx_run_events_owner ON run_events(workspace_id, owner_id)",
+    ]
+
+
 MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (2, _MIGRATION_002),
     (3, _MIGRATION_003),
@@ -458,6 +470,7 @@ MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (18, _migration_018),
     (19, _migration_019),
     (20, _migration_020),
+    (21, _migration_021),
 ]
 
 _TYPE_TOKENS = {

@@ -3,7 +3,7 @@
 > 本文由 `server/tools/gen_api_doc.py` 从应用自身的 OpenAPI schema 生成，**请勿手工编辑**。
 > 改完路由后运行 `python tools/gen_api_doc.py` 重新生成；CI 用 `--check` 校验是否漂移。
 >
-> 接口数：154 个操作 / 122 个路径 · 应用版本 0.8.0
+> 接口数：160 个操作 / 127 个路径 · 应用版本 0.8.0
 
 ## 1. 通用约定
 
@@ -98,6 +98,7 @@ nginx 需 `proxy_buffering off;`，并放宽 `proxy_read_timeout`。
 | `GET` | `/api/conversations/{conversation_id}` | 会话详情（含全部消息） | 会话 |
 | `PATCH` | `/api/conversations/{conversation_id}` | 重命名 / 归档 / 置顶，字段可选只改传了的。 | 会话 |
 | `DELETE` | `/api/conversations/{conversation_id}` | 删除会话 | 会话 |
+| `GET` | `/api/conversations/{conversation_id}/export` | 导出整段会话：`format=md`（默认，给人看）/ `json`（给脚本处理）。 | 会话 |
 | `POST` | `/api/agent/approve` | 对一次待确认的敏感工具调用作出决定。 | 会话 |
 | `POST` | `/api/agent/run` | SSE 运行智能体。事件：meta -> (step|artifact)* -> [cit… | 会话 |
 | `GET` | `/api/agent/runs` | 智能体运行记录 | 会话 |
@@ -232,6 +233,11 @@ nginx 需 `proxy_buffering off;`，并放宽 `proxy_read_timeout`。
 | `PATCH` | `/api/models/{model_id}` | Update Model | 会话 |
 | `DELETE` | `/api/models/{model_id}` | Delete Model | 会话 |
 | `POST` | `/api/models/{model_id}/test` | 真发一次最小请求验证端点可用，结果落库供列表展示。 | 会话 |
+| `GET` | `/api/public/shares/{token}` | 免登录读取：会话正文，或知识库的问答页元信息。 | 会话 |
+| `POST` | `/api/public/shares/{token}/ask` | 匿名追问（仅知识库分享、且分享者显式打开 allow_ask）。 | 会话 |
+| `GET` | `/api/shares` | List Shares | 会话 |
+| `POST` | `/api/shares` | Create Share | 会话 |
+| `DELETE` | `/api/shares/{token}` | Revoke Share | 会话 |
 | `GET` | `/api/templates` | List Templates | 会话 |
 | `POST` | `/api/templates` | Create Template | 会话 |
 | `PATCH` | `/api/templates/{template_id}` | Update Template | 会话 |
@@ -459,6 +465,26 @@ q 为空列出未归档会话；给了 q 就全文搜索（标题+消息正文�
 
 **响应**：`200`
 
+#### `GET /api/conversations/{conversation_id}/export`
+
+导出整段会话：`format=md`（默认，给人看）/ `json`（给脚本处理）。
+
+`inline=true` 时用 inline 而非 attachment——分享面板里想直接预览时用，
+默认 attachment 让浏览器走"另存为"，避免把 Markdown 当网页打开。
+
+**鉴权**：会话
+
+**参数**
+
+| 名称 | 位置 | 类型 | 必填 | 说明 |
+| --- | --- | --- | :---: | --- |
+| `conversation_id` | path | string | 是 | — |
+| `format` | query | string | 否 | 默认 `md` |
+| `inline` | query | boolean | 否 | 默认 `False` |
+| `x-workspace` | header | string? | 否 | — |
+
+**响应**：`200`
+
 ### 3.5 智能体（`agent`）
 
 #### `POST /api/agent/approve`
@@ -536,8 +562,9 @@ SSE 运行智能体。事件：meta -> (step|artifact)* -> [citations] -> answer
 
 当前空间里还没结束的运行。前端刷新后靠它重新挂上 SSE 订阅。
 
-只回本进程的登记簿——多副本部署时命中别的副本仍会 404，这一点在
-运维手册的「副本数=1 或事件外置」里写明。
+内存登记簿与 `run_events` 里未收尾的运行取并集：前者是本进程刚创建的
+（最新），后者补上「在别的副本上创建、本进程没见过」的那些。多副本
+部署时靠这一条才不会刷新即丢。
 
 **鉴权**：会话
 
@@ -570,6 +597,10 @@ SSE 运行智能体。事件：meta -> (step|artifact)* -> [citations] -> answer
 
 用于「刷新页面/切回标签页」：任务一直在后台跑，这里只是重新挂上一个读者。
 别人的 run_id 一律 404（与资源隔离的其它接口同一语义）。
+
+两条路径：本进程创建过这次运行，直接读内存（无延迟、带唤醒信号）；
+否则回落到 `run_events` 表重放 + 短轮询——这正是「刷新后被打到另一个
+副本」的情况，任务在别的进程里好好跑着，不该给用户一个 404。
 
 **鉴权**：会话
 
@@ -2911,7 +2942,99 @@ Delete Model
 
 **响应**：`200`
 
-### 3.20 templates（`templates`）
+### 3.20 public（`public`）
+
+#### `GET /api/public/shares/{token}`
+
+免登录读取：会话正文，或知识库的问答页元信息。
+
+**鉴权**：会话
+
+**参数**
+
+| 名称 | 位置 | 类型 | 必填 | 说明 |
+| --- | --- | --- | :---: | --- |
+| `token` | path | string | 是 | — |
+
+**响应**：`200`
+
+#### `POST /api/public/shares/{token}/ask`
+
+匿名追问（仅知识库分享、且分享者显式打开 allow_ask）。
+
+**鉴权**：会话
+
+**参数**
+
+| 名称 | 位置 | 类型 | 必填 | 说明 |
+| --- | --- | --- | :---: | --- |
+| `token` | path | string | 是 | — |
+
+**请求体**（`application/json`）
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | :---: | --- |
+| `question` | string | 是 | 最长 500；最短 1 |
+
+**响应**：`200`
+
+### 3.21 shares（`shares`）
+
+#### `GET /api/shares`
+
+List Shares
+
+**鉴权**：会话
+
+**参数**
+
+| 名称 | 位置 | 类型 | 必填 | 说明 |
+| --- | --- | --- | :---: | --- |
+| `x-workspace` | header | string? | 否 | — |
+
+**响应**：`200`
+
+#### `POST /api/shares`
+
+Create Share
+
+**鉴权**：会话
+
+**参数**
+
+| 名称 | 位置 | 类型 | 必填 | 说明 |
+| --- | --- | --- | :---: | --- |
+| `x-workspace` | header | string? | 否 | — |
+
+**请求体**（`application/json`）
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | :---: | --- |
+| `kind` | string | 是 | — |
+| `target_id` | string | 是 | — |
+| `title` | string | 否 | — |
+| `allow_ask` | boolean | 否 | 默认 `False` |
+| `expires_days` | integer | 否 | 默认 `0` |
+| `note` | string | 否 | — |
+
+**响应**：`200`
+
+#### `DELETE /api/shares/{token}`
+
+Revoke Share
+
+**鉴权**：会话
+
+**参数**
+
+| 名称 | 位置 | 类型 | 必填 | 说明 |
+| --- | --- | --- | :---: | --- |
+| `token` | path | string | 是 | — |
+| `x-workspace` | header | string? | 否 | — |
+
+**响应**：`200`
+
+### 3.22 templates（`templates`）
 
 #### `GET /api/templates`
 

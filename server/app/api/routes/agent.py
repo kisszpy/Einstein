@@ -446,20 +446,11 @@ async def list_active_runs(
 ) -> list[dict]:
     """当前空间里还没结束的运行。前端刷新后靠它重新挂上 SSE 订阅。
 
-    只回本进程的登记簿——多副本部署时命中别的副本仍会 404，这一点在
-    运维手册的「副本数=1 或事件外置」里写明。
+    内存登记簿与 `run_events` 里未收尾的运行取并集：前者是本进程刚创建的
+    （最新），后者补上「在别的副本上创建、本进程没见过」的那些。多副本
+    部署时靠这一条才不会刷新即丢。
     """
-    return [
-        {
-            "run_id": r.run_id,
-            "session_id": r.session_id,
-            "created_at": r.created_at,
-            "done": r.done,
-            "failed": r.failed,
-            "steps": len(r.events),
-        }
-        for r in run_registry.list_for_owner(ws, uid)
-    ]
+    return run_registry.active(ws, uid)
 
 
 @router.get("/runs/{run_id}/stream")
@@ -472,15 +463,37 @@ async def reconnect_run(
 
     用于「刷新页面/切回标签页」：任务一直在后台跑，这里只是重新挂上一个读者。
     别人的 run_id 一律 404（与资源隔离的其它接口同一语义）。
+
+    两条路径：本进程创建过这次运行，直接读内存（无延迟、带唤醒信号）；
+    否则回落到 `run_events` 表重放 + 短轮询——这正是「刷新后被打到另一个
+    副本」的情况，任务在别的进程里好好跑着，不该给用户一个 404。
     """
     run = run_registry.get(run_id, workspace_id=ws, owner_id=uid)
-    if run is None:
+    if run is not None:
+        return StreamingResponse(
+            _forward(run),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    if not run_registry.has_persisted(run_id, workspace_id=ws, owner_id=uid):
         raise HTTPException(status_code=404, detail="运行不存在或已过期")
     return StreamingResponse(
-        _forward(run),
+        _forward_persisted(run_id, ws=ws, uid=uid),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+async def _forward_persisted(run_id: str, *, ws: str, uid: str) -> AsyncIterator[str]:
+    """跨进程跟读：从库里重放，再轮询新事件。
+
+    事件序与内存路径完全一致（都是 seq 升序），所以前端不需要区分这两条
+    路径——重置状态、从头接收即可。
+    """
+    async for event, data in run_registry.follow_persisted(
+        run_id, workspace_id=ws, owner_id=uid,
+    ):
+        yield _sse(event, data)
 
 
 @router.post("/run")

@@ -622,6 +622,33 @@ SHARES = Table(
     order="created_at",
 )
 
+# ---------------------------------------------------------------- 运行事件
+#
+# 一次运行的事件流（步骤、工具调用、结束）落库，delta 帧不落。
+#
+# 为什么要落库：运行登记簿原本是进程内字典，单进程下工作得很好；一旦
+# 多 worker / 多副本，用户刷新页面被负载均衡打到另一个进程，就"找不到这次运行"
+# 了——任务其实还在跑，只是没人看得见。事件落库之后，任何一个进程都能从
+# 第 0 条重放。
+#
+# 为什么不落 delta：一次回答可能有几千帧，每帧一行会把"流式"变成"写数据库"。
+# 重连时正文本来就会从会话历史里回来，少一段逐字动画不算信息丢失。
+RUN_EVENTS = Table(
+    name="run_events",
+    columns=(
+        _c("id"),                       # run_id:seq
+        _c("run_id"),
+        _c("seq", "int", default="0"),
+        _c("event", default="''"),
+        _c("data", "json", default="'{}'"),
+        _c("workspace_id", default="'default'"),
+        _c("owner_id", default="''"),
+        _c("session_id", default="''"),
+        _c("created_at", default="''"),
+    ),
+    order="created_at",
+)
+
 TABLES: dict[str, Table] = {
     t.name: t
     for t in (
@@ -649,6 +676,7 @@ TABLES: dict[str, Table] = {
         AGENT_APPROVALS,
         RUN_TRACES,
         SHARES,
+        RUN_EVENTS,
     )
 }
 
@@ -667,6 +695,7 @@ DOMAIN_TABLES: dict[str, str] = {
     "task_templates": "task_templates",
     "kb_grants": "kb_grants",
     "shares": "shares",
+    "run_events": "run_events",
     "alert_rules": "alert_rules",
     "alert_events": "alert_events",
     "sessions": "user_sessions",

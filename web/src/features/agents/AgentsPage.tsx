@@ -440,6 +440,13 @@ export function AgentsPage() {
     async (runId: string) => {
       setRunning(true);
       setError(null);
+      // 重连是从第 0 条重放，本地必须清干净——否则「刷新后接回」会看到两遍步骤。
+      // 服务端可能落在另一个副本上（事件从 run_events 表重放），行为与本地一致。
+      setSteps([]);
+      setArtifacts([]);
+      setAnswer("");
+      setCitations([]);
+      setApproval(null);
       startedAtRef.current = Date.now();
       const controller = new AbortController();
       abortRef.current = controller;
