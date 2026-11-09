@@ -354,7 +354,8 @@ export function BatchImport({ kbId, onFinished }: Props) {
           </Button>
         </div>
         <p className="mt-2.5 text-[11.5px] text-tertiary">
-          支持 PDF / Word / Excel / PPT / CSV / HTML / Markdown / TXT · 不限文件数 · 单文件 ≤ 50MB ·
+          支持 PDF / Word / Excel / PPT / CSV / HTML / Markdown / TXT ·
+          图片（PNG / JPG / WebP / TIFF，走 OCR 取字）· 不限文件数 · 单文件 ≤ 50MB ·
           目录结构会保留为文档名
         </p>
         <input

@@ -16,6 +16,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { Markdown } from "@/features/chat/components/Markdown";
+import { normalizeCitations } from "@/features/chat/citation-marks";
 import { cn } from "@/lib/utils";
 import {
   artifactKindLabel,
@@ -260,7 +261,7 @@ export function AssistantTurn({
 
       {answer && (
         <div>
-          <Markdown content={answer} />
+          <Markdown content={normalizeCitations(answer)} />
           {running && (
             <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-brand align-text-bottom" />
           )}

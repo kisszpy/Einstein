@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { ArrowUp, Link2 } from "lucide-react";
 import { Markdown } from "@/features/chat/components/Markdown";
+import { normalizeCitations } from "@/features/chat/citation-marks";
 import type { PublicShare } from "./api";
 
 interface Citation {
@@ -145,7 +146,7 @@ export function PublicPage() {
               {answer && (
                 <div className="space-y-3">
                   <div className="rounded-xl border border-line bg-surface-1 p-4">
-                    <Markdown content={answer} />
+                    <Markdown content={normalizeCitations(answer)} />
                   </div>
                   {citations.length > 0 && (
                     <div className="space-y-1.5">
@@ -182,7 +183,7 @@ export function PublicPage() {
                 {m.role === "user" ? (
                   <p className="whitespace-pre-wrap">{m.content}</p>
                 ) : (
-                  <Markdown content={m.content} />
+                  <Markdown content={normalizeCitations(m.content)} />
                 )}
               </div>
             </div>

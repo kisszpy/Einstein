@@ -10,6 +10,7 @@ import {
   ThumbsUp,
 } from "lucide-react";
 import { Markdown } from "./Markdown";
+import { normalizeCitations } from "../citation-marks";
 import { cn } from "@/lib/utils";
 import type { ChatMessage, WebState } from "../chat-types";
 
@@ -324,7 +325,7 @@ export function MessageBubble({
                 )}
               </div>
             )}
-            <Markdown content={message.content} />
+            <Markdown content={normalizeCitations(message.content)} />
             {message.streaming && (
               <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-brand align-text-bottom" />
             )}
