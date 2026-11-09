@@ -8,6 +8,8 @@ class Settings(BaseSettings):
 
     # 应用
     app_name: str = "Einstein API"
+    # 运行环境：dev | prod。prod 会拒绝默认密钥等不安全配置启动。
+    env: str = "dev"
     # 默认关闭：debug=True 时 Starlette 会忽略自定义异常处理器直接吐堆栈（泄漏服务器路径）
     debug: bool = False
 
@@ -58,8 +60,9 @@ class Settings(BaseSettings):
     # 模型降级链：主端点连不上时依次尝试。格式 `base_url::model::api_key;...`
     llm_fallbacks: str = ""
     # 人工确认：这些智能体工具在执行前需要用户批准（逗号分隔；空 = 关闭）。
-    # 例：APP_AGENT_APPROVAL_TOOLS=code_run
-    agent_approval_tools: str = ""
+    # 出厂默认对 code_run 开启——执行任意代码是本产品最高危的动作，
+    # 默认静默执行等于把安全边界交给用户的自觉。要关掉显式设空。
+    agent_approval_tools: str = "code_run"
     # 批准的时效（分钟）：过期视为未批准。审批是安全边界，不做永久放行。
     agent_approval_ttl_minutes: int = 30
     # 短期记忆（LangGraph 线程状态）存哪：auto（跟主存储走）| sqlite | postgres

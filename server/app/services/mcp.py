@@ -11,6 +11,7 @@
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import os
 import threading
@@ -74,9 +75,16 @@ class McpServer(BaseModel):
         return self.url
 
 
-# ---------- 凭证加密（无第三方依赖：SHA-256 密钥流 XOR + base64） ----------
+# ---------- 凭证加密（零第三方依赖：SHA-256 密钥流 + HMAC 认证） ----------
+#
+# v1 只有"加密"没有"认证"，密文被改一位也能解出一段乱码而不报错；
+# v2 补上 Encrypt-then-MAC：iv+ct 用独立密钥做 HMAC-SHA256 截断 16 字节。
+# 没有引 cryptography 是因为目标环境是离线 pip 源，装不上 Fernet；
+# 生产若要换标准 AEAD，只需在 decrypt_value 里加一条 enc:v3 分支并重加密存量。
 
-_ENC_PREFIX = "enc:v1:"
+_ENC_PREFIX_V1 = "enc:v1:"
+_ENC_PREFIX = "enc:v2:"
+_MAC_LEN = 16
 
 
 def _keystream_xor(key: bytes, iv: bytes, data: bytes) -> bytes:
@@ -90,25 +98,47 @@ def _keystream_xor(key: bytes, iv: bytes, data: bytes) -> bytes:
     return bytes(out)
 
 
+def _env_keys() -> tuple[bytes, bytes]:
+    secret = get_settings().secret_key.encode("utf-8")
+    enc_key = hashlib.sha256(b"mcp-env:" + secret).digest()
+    mac_key = hashlib.sha256(b"mcp-mac:" + secret).digest()
+    return enc_key, mac_key
+
+
 def encrypt_value(value: str) -> str:
     """加密单个凭证值。明文原样返回（向后兼容未加密的存量配置）。"""
-    if not value or value.startswith(_ENC_PREFIX):
+    if not value or value.startswith((_ENC_PREFIX, _ENC_PREFIX_V1)):
         return value
-    key = hashlib.sha256(("mcp-env:" + get_settings().secret_key).encode()).digest()
+    enc_key, mac_key = _env_keys()
     iv = os.urandom(16)
-    ct = _keystream_xor(key, iv, value.encode("utf-8"))
-    return _ENC_PREFIX + base64.urlsafe_b64encode(iv + ct).decode()
+    ct = _keystream_xor(enc_key, iv, value.encode("utf-8"))
+    mac = hmac.new(mac_key, iv + ct, hashlib.sha256).digest()[:_MAC_LEN]
+    return _ENC_PREFIX + base64.urlsafe_b64encode(iv + ct + mac).decode()
 
 
 def decrypt_value(value: str) -> str:
+    if value.startswith(_ENC_PREFIX_V1):
+        # 存量 v1 密文：无 MAC，只能按老逻辑解；下次写入会自动升级到 v2。
+        try:
+            key = hashlib.sha256(("mcp-env:" + get_settings().secret_key).encode()).digest()
+            raw = base64.urlsafe_b64decode(value[len(_ENC_PREFIX_V1):])
+            iv, ct = raw[:16], raw[16:]
+            return _keystream_xor(key, iv, ct).decode("utf-8")
+        except Exception:  # noqa: BLE001 — 密钥不匹配等，返回占位避免崩溃
+            return ""
     if not value.startswith(_ENC_PREFIX):
         return value
     try:
-        key = hashlib.sha256(("mcp-env:" + get_settings().secret_key).encode()).digest()
+        enc_key, mac_key = _env_keys()
         raw = base64.urlsafe_b64decode(value[len(_ENC_PREFIX):])
-        iv, ct = raw[:16], raw[16:]
-        return _keystream_xor(key, iv, ct).decode("utf-8")
-    except Exception:  # noqa: BLE001 — 密钥不匹配等，返回占位避免崩溃
+        iv, ct, mac = raw[:16], raw[16:-_MAC_LEN], raw[-_MAC_LEN:]
+        expect = hmac.new(mac_key, iv + ct, hashlib.sha256).digest()[:_MAC_LEN]
+        if not hmac.compare_digest(mac, expect):
+            # 密钥换了或被篡改：拒绝解密，而不是把乱码当凭证去连 MCP。
+            print("[mcp] 凭证完整性校验失败（密钥变更或密文被改）", flush=True)
+            return ""
+        return _keystream_xor(enc_key, iv, ct).decode("utf-8")
+    except Exception:  # noqa: BLE001
         return ""
 
 

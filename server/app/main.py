@@ -40,6 +40,20 @@ async def lifespan(app: FastAPI):
     """
     from app.services import checkpoints
 
+    # 安全基线：prod 下不允许用默认密钥启动（默认值等于把 MCP 凭证明文放桌上）。
+    _s = get_settings()
+    if _s.secret_key == "einstein-local-secret-change-me":
+        if _s.env == "prod":
+            raise RuntimeError(
+                "APP_ENV=prod 时必须设置 APP_SECRET_KEY（≥32 位随机串），"
+                "否则 MCP 凭证加密形同虚设"
+            )
+        print(
+            "[security] APP_SECRET_KEY 仍是默认值，凭证加密不具备保护作用；"
+            "生产部署请设置 APP_ENV=prod 并配置密钥",
+            flush=True,
+        )
+
     try:
         await checkpoints.purge_expired()
     except Exception as exc:  # noqa: BLE001 — 清理失败不能挡住启动
@@ -67,6 +81,71 @@ async def lifespan(app: FastAPI):
         await checkpoints.close()
 
 
+def _too_many(retry_after: int) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "请求过于频繁，请稍后再试"},
+        headers={"Retry-After": str(max(retry_after, 1))},
+    )
+
+
+async def _rate_limit_login(request: Request) -> JSONResponse | None:
+    """登录按 IP+账号计数，防撞库。
+
+    读 body 之后必须塞回 `request._body`，否则下游登录接口拿到空流——
+    这是 Starlette 的已知行为，不是 hack 的替代品。
+    """
+    settings = get_settings()
+    if not settings.ratelimit_enabled or settings.ratelimit_login <= 0:
+        return None
+    ip = request.client.host if request.client else "unknown"
+    username = ""
+    try:
+        raw = await request.body()
+        request._body = raw  # noqa: SLF001 — Starlette 官方推荐的缓存位
+        import json as _json
+
+        username = str(_json.loads(raw or b"{}").get("username", ""))[:64]
+    except Exception:  # noqa: BLE001 — 解析失败就按空账号计数，不能因此放行
+        pass
+    ok, retry = ratelimit.allow(f"login:{ip}:{username}", settings.ratelimit_login, 60)
+    return None if ok else _too_many(retry)
+
+
+def _rate_limit_user(request: Request, path: str) -> JSONResponse | None:
+    """已登录用户的分钟限流：对话 / 智能体 / 检索 各自独立计数。
+
+    必须在鉴权中间件**内部**调用。放到外层中间件时 `request.state.user`
+    还没写入，`getattr(..., None)` 恒为 None，整段限流会被静默跳过。
+    """
+    settings = get_settings()
+    if not settings.ratelimit_enabled:
+        return None
+    user = getattr(request.state, "user", None)
+    if user is None:
+        return None
+    if path.startswith("/api/chat"):
+        limit, family = settings.ratelimit_chat, "chat"
+    elif path.startswith("/api/agent"):
+        limit, family = settings.ratelimit_agent, "agent"
+    elif path.startswith("/api/kb/search"):
+        limit, family = settings.ratelimit_search, "kb"
+    else:
+        return None
+    ok, retry = ratelimit.allow(f"api:{user.id}:{family}", limit, 60)
+    return None if ok else _too_many(retry)
+
+
+def _rate_limit_v1(request: Request) -> JSONResponse | None:
+    """开放 API 按 Key 计数的分钟限流。"""
+    settings = get_settings()
+    if not settings.ratelimit_enabled or settings.ratelimit_openapi <= 0:
+        return None
+    key = deps._extract_bearer(request.headers.get("authorization"))[:24] or "anon"
+    ok, retry = ratelimit.allow(f"v1:{key}", settings.ratelimit_openapi, 60)
+    return None if ok else _too_many(retry)
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     # debug 固定为 False：Starlette 在 debug=True 时会把完整堆栈直接写进响应体，
@@ -92,6 +171,11 @@ def create_app() -> FastAPI:
         /v1 走 API Key（各路由自带依赖），不放行到这里。
         """
         path = request.url.path
+        # 登录限流必须在鉴权之前（此时还没有用户身份），按 IP+账号计数防撞库。
+        if path == "/api/auth/login" and request.method == "POST":
+            blocked = await _rate_limit_login(request)
+            if blocked is not None:
+                return blocked
         if (
             path.startswith("/api/")
             and path not in PUBLIC_API_PATHS
@@ -137,7 +221,8 @@ def create_app() -> FastAPI:
                     status_code=403,
                     content={"detail": "只读角色无权执行该操作，请联系管理员调整角色"},
                 )
-            # 工作区级每日配额（0 = 不限；chat/agent 在路由内还会记 Token 用量）
+            # 工作区级每日配额（0 = 不限；chat/agent 在路由内还会记 Token 用量）。
+            # 通过后立刻累加——只 check 不 incr 等于把开关悬空。
             if path.startswith(("/api/chat", "/api/agent")):
                 allowed, _used = ratelimit.quota_check(effective_ws, "requests")
                 if not allowed:
@@ -145,55 +230,16 @@ def create_app() -> FastAPI:
                         status_code=429,
                         content={"detail": "已达当日请求配额，请明天再试或联系管理员调整"},
                     )
-        return await call_next(request)
-
-    @app.middleware("http")
-    async def _ratelimit_middleware(request: Request, call_next):
-        """按端点族的固定窗口限流：防爆破、防打爆，Redis 计数、内存兜底。
-
-        键维度不同：登录按 IP+账号（防撞库），其余按用户（登录态）或
-        API Key（/v1）。设为 0 即关闭对应限流。
-        """
-        settings = get_settings()
-        if not settings.ratelimit_enabled:
-            return await call_next(request)
-        path = request.url.path
-        window = 60  # 秒
-        if path == "/api/auth/login" and request.method == "POST":
-            ip = request.client.host if request.client else "unknown"
-            username = ""
-            try:
-                # 读掉 body 后必须塞回 request._body，否则下游登录接口拿到空流
-                raw = await request.body()
-                request._body = raw  # noqa: SLF001 — Starlette 官方推荐的缓存位
-                import json as _json
-
-                username = str(_json.loads(raw or b"{}").get("username", ""))[:64]
-            except Exception:  # noqa: BLE001
-                pass
-            ok, retry = ratelimit.allow(f"login:{ip}:{username}", settings.ratelimit_login, window)
+                ratelimit.quota_incr(effective_ws, "requests")
+            # 用户级分钟限流。必须放在鉴权之后——放在外层中间件时
+            # request.state.user 还没被写入，取不到用户就整段放行了。
+            blocked = _rate_limit_user(request, path)
+            if blocked is not None:
+                return blocked
         elif path.startswith("/v1/"):
-            key = deps._extract_bearer(request.headers.get("authorization"))[:24] or "anon"
-            ok, retry = ratelimit.allow(f"v1:{key}", settings.ratelimit_openapi, window)
-        elif path.startswith(("/api/chat", "/api/kb/search", "/api/agent/run")):
-            user = getattr(request.state, "user", None)
-            if user is None:   # 未登录请求由鉴权中间件处理，这里不重复拦
-                return await call_next(request)
-            if path.startswith("/api/chat"):
-                limit = settings.ratelimit_chat
-            elif path.startswith("/api/agent"):
-                limit = settings.ratelimit_agent
-            else:
-                limit = settings.ratelimit_search
-            ok, retry = ratelimit.allow(f"api:{user.id}:{path.split('/')[2]}", limit, window)
-        else:
-            ok, retry = True, 0
-        if not ok:
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "请求过于频繁，请稍后再试"},
-                headers={"Retry-After": str(retry)},
-            )
+            blocked = _rate_limit_v1(request)
+            if blocked is not None:
+                return blocked
         return await call_next(request)
 
     @app.middleware("http")

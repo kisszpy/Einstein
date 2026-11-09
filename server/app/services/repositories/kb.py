@@ -215,6 +215,8 @@ class JsonKbRepository:
             for did in doc_ids:
                 self.documents.pop(did, None)
             self.chunks = [c for c in self.chunks if c.kb_id != kb_id]
+            # 版本快照存的是文档正文，删库不清等于"删了但内容还在"
+            self.versions = [v for v in self.versions if v.get("kb_id") != kb_id]
             return True
 
     def owns(self, kb_id: str, workspace_id: str, owner_id: str | None = None) -> bool:
@@ -276,6 +278,7 @@ class JsonKbRepository:
             self.documents.pop(doc_id, None)
             before = len(self.chunks)
             self.chunks = [c for c in self.chunks if c.document_id != doc_id]
+            self.versions = [v for v in self.versions if v.get("document_id") != doc_id]
             return before - len(self.chunks)
 
     # ---- 切片 ----
@@ -445,6 +448,7 @@ class SqlKbRepository:
     def delete_kb(self, kb_id: str) -> bool:
         with self.db.transaction():
             self.db.execute("DELETE FROM chunks WHERE kb_id = ?", (kb_id,))
+            self.db.execute("DELETE FROM document_versions WHERE kb_id = ?", (kb_id,))
             self.db.execute("DELETE FROM documents WHERE kb_id = ?", (kb_id,))
             affected = self.db.execute("DELETE FROM knowledge_bases WHERE id = ?", (kb_id,))
         return affected > 0
@@ -524,6 +528,7 @@ class SqlKbRepository:
     def delete_document(self, doc_id: str) -> int:
         with self.db.transaction():
             removed = self.db.execute("DELETE FROM chunks WHERE document_id = ?", (doc_id,))
+            self.db.execute("DELETE FROM document_versions WHERE document_id = ?", (doc_id,))
             self.db.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
         return max(removed, 0)
 
