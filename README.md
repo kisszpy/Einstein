@@ -166,6 +166,9 @@ APP_QUEUE_BACKEND=redis
 | `verify_ingest.py` | 摄取全链路：格式 / 去重 / 版本 / 回滚 / 切片编辑 / 异步任务 / 批量导入 |
 | `verify_contracts.py` | 每个协议的所有后端实现是否齐全（防「只在某个后端漏方法」） |
 | `gen_api_doc.py --check` | `docs/API参考.md` 与路由是否同步 |
+| `backup.py verify` | 备份能否真恢复：manifest 逐项核对、sqlite integrity_check、pg_dump 是否含数据 |
+| `backup.py prune` | 保留策略：留 N 份 + 不超 N 天，`list` 带大小与"几天前" |
+| `report_capacity.py` | 规模（库/文档/切片/向量）、磁盘占用、`--probe` 实测检索延迟 |
 | `full_sweep.py --skip-live` | 91 条接口巡检（契约 + 安全边界） |
 | `web/ui-sweep.cjs` | 10 个前端路由 58 条页面断言 |
 | `web/kb-batch-check.cjs` | 目录导入 UI：选目录 → 预览 → 进度 → 落库 9 条断言 |
