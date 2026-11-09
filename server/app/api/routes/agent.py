@@ -88,11 +88,13 @@ async def approve_tool(payload: dict, ws: str = Depends(current_workspace)) -> d
     return {"ok": True, "session_id": session_id, "tool": tool}
 
 
-def _resolve_mounts(ws: str, req: AgentRunRequest) -> tuple[str, list[str], float | None]:
-    """解析人设与技能挂载，返回 (persona 段, pinned 技能名, temperature)。
+def _resolve_mounts(ws: str, req: AgentRunRequest) -> tuple[str, list[str], float | None, list[str]]:
+    """解析人设与技能挂载，返回 (persona 段, pinned 技能名, temperature, 专家 kb_ids)。
 
     规则：显式请求参数覆盖专家默认；技能集合 = 去重(req ∪ expert.skill_ids)；
     无效/跨工作区技能静默丢弃（与 kb_ids 同一防探测原则）。
+    专家挂载的知识库随专家带出，与请求 kb_ids 合并——chat 链路（chat.py）
+    同样语义：专家挂的 KB 在两条链路里都必须生效。
     """
     from app.services import skill_publisher
     from app.services.experts import get_expert_store
@@ -100,6 +102,7 @@ def _resolve_mounts(ws: str, req: AgentRunRequest) -> tuple[str, list[str], floa
     persona = ""
     temperature: float | None = None
     default_skill_ids: list[str] = []
+    expert_kb_ids: list[str] = []
     if req.expert_id:
         expert = get_expert_store().get(req.expert_id)
         if expert and expert.enabled and expert.workspace_id == ws:
@@ -107,6 +110,7 @@ def _resolve_mounts(ws: str, req: AgentRunRequest) -> tuple[str, list[str], floa
                 persona = f"【人设】{expert.persona.strip()}"
             temperature = expert.temperature
             default_skill_ids = list(expert.skill_ids)
+            expert_kb_ids = list(expert.kb_ids)
 
     skill_ids = list(dict.fromkeys([*req.skill_ids, *default_skill_ids]))
 
@@ -123,7 +127,7 @@ def _resolve_mounts(ws: str, req: AgentRunRequest) -> tuple[str, list[str], floa
                 break
 
     pinned = skill_publisher.pinned_slugs(ws, skill_ids)
-    return persona, pinned, temperature
+    return persona, pinned, temperature, expert_kb_ids
 
 
 async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
@@ -145,8 +149,8 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
             lc_history.append({"role": "assistant", "content": r.answer[:1500]})
     try:
         # 只允许检索当前工作区的知识库；项目名给定时必须已存在
-        kb_ids = get_store().owned_kb_ids(ws, req.kb_ids)
-        persona, pinned_skills, temperature = _resolve_mounts(ws, req)
+        persona, pinned_skills, temperature, expert_kb_ids = _resolve_mounts(ws, req)
+        kb_ids = get_store().owned_kb_ids(ws, [*req.kb_ids, *expert_kb_ids])
 
         ctx = AgentContext(workspace_id=ws, project=req.project)
         ctx.approved_tools = {t for (sid, t) in _APPROVALS if sid == session_id}
