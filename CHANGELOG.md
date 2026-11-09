@@ -2,6 +2,57 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.1.0] - 2026-11-10
+
+一轮 UI/UX 大修 + 沙箱与专家体系补全。触发点是用户与设计团队两份评审报告
+（`docs/UI-UX-走查-2026-11-10.md`、`docs/ui-ux-review-2026-11-10.md`），全部可执行项
+落地后经 playwright 全站走查回归（12 路由 × 亮暗，22 页中 20 页零异常）。
+
+### 新增
+
+- **七位内置专家**：前端/后端/测试工程师、高级 UI/交互设计师、产品经理、系统架构师。
+  `ensure_presets()` 首次加载幂等种子（同名跳过，删除后不复活），live 状态、
+  预置语义（全员可见、仅管理员可改）；人设含开场白、推荐问题与可验收的工作方式，
+  工具按角色挂载（产品经理带演示文稿，可产出评审 PPT）
+- **交互基建**：`ui/dialog.tsx`（Modal：Portal + Escape + 滚动锁定）与
+  `lib/confirm.tsx`（promise 化 `confirmDialog` / `promptDialog` + 全局 DialogHost），
+  替换全部 22 处 `window.confirm/alert/prompt`；MembersCard 明文输密码改显隐切换；
+  删除会话/知识库/项目/任务/专家/成员等破坏性操作一律确认 + danger 红键
+- **联网分段控件**：三态循环按钮改 segmented control（自动/始终/关闭，状态可见可点）
+- **流中切换提示**：生成中点历史会话给提示条（带「停止生成」），不再静默吞掉
+- **继续生成**：SSE 报错后气泡内提供「继续生成」，已收文本保留不丢
+- **窄屏会话抽屉**：聊天页会话列表 <768px 由直接消失改为滑入式抽屉（汉堡入口 + 遮罩）
+
+### 变更
+
+- **流式渲染链重做**：MessageBubble/Markdown `memo` + 稳定回调 + delta rAF 合帧 +
+  `normalizeCitations` useMemo——流式时不再逐字符重渲染整个消息列表；
+  滚动改贴底跟随（上滚回看不被拽回），离底时浮出「回到最新」
+- **路由级代码分割**（React.lazy + Suspense）：首屏 **815KB → 337KB（gzip 236KB → 106KB）**，
+  浏览器页重模块按需加载
+- **对比度全站达标**：亮色品牌绿文字约 25 处改 `text-brand-deep dark:text-brand`，
+  `brand-deep` 加深、tertiary 45%→61%、语义色加深至 ≥4.5:1；170 处 ≤11.5px 小字统一
+  12px；9 处小点击目标加高到 ≥24px；admin 操作列裸文字改按钮
+- **正文与输入框严格对齐**：助手卡片 85% 宽改满宽同边距，滚动条占位差 10px 用
+  `scrollbar-gutter: stable` 消除；撤掉刺眼的输入框品牌绿聚焦描边
+- **引用编号上标化**：正文的 `【w1/w2/w4】`、`[W1]` 渲染成 Unicode 上标，代码块与
+  链接护栏内不动；联网提示词同步收紧
+- **登录页**：`admin123` 提示加 `import.meta.env.DEV` 门禁；成功跳转延迟 640→400ms
+- **favicon**：蓝 `#2f6bdc` → 品牌青绿，与界面一致
+- **ops 趋势图**：单日数据限宽 + 渐隐，不再整块实心绿
+
+### 修复
+
+- **产物下载 401**：`<a href>` 原生导航带不了 Authorization 头，下载接口返回
+  「需要登录」；`downloadUrl` 补短期票据（与预览同机制），ArtifactView 三处、
+  DeckEditor pptx、TaskSidebar 整包 zip 全部修复
+- **搜索竞态**：防抖请求加 AbortController，旧响应不再覆盖新结果
+- **delta 流中断丢字**：合帧缓冲在中断/出错时先落盘已收文本
+
+### 文档
+
+- 全站走查报告、设计团队评审的逐条核实意见（`docs/` 下三份）
+
 ## [1.0.0] - 2026-11-09
 
 能上线。0.8.0 之后功能已经够用，剩下的全是「一个人在本机跑得好、交给十个人用就出事」
