@@ -41,12 +41,13 @@ def main() -> None:
         skill_ids=[],
         temperature=0.5,
         workspace_id=WS,
+        owner_id="",  # 预置专家：全员可见
     )
     orig_get = experts_mod.get_expert_store
     experts_mod.get_expert_store = lambda: store
 
     req = AgentRunRequest(task="测试任务", expert_id=expert.id, kb_ids=[req_kb])
-    persona, pinned, temperature, expert_kb_ids = _resolve_mounts(WS, req)
+    persona, pinned, temperature, expert_kb_ids = _resolve_mounts(WS, "u-test", req)
     assert expert_kb_ids == [expert_kb], f"专家 kb_ids 丢失: {expert_kb_ids}"
     assert "测试人设" in persona and temperature == 0.5
     print(f"PASS-1 专家 kb_ids 带出: {expert_kb_ids}")
@@ -59,9 +60,9 @@ def main() -> None:
     print(f"PASS-2 合并收敛: {kb_ids}；越权过滤: {kb_ids_leak}")
 
     # 3) 跨工作区专家不生效（防探测），kb_ids 不带出
-    other = store.add(name="别处专家", kb_ids=[expert_kb], workspace_id="ws-other")
+    other = store.add(name="别处专家", kb_ids=[expert_kb], workspace_id="ws-other", owner_id="")
     req2 = AgentRunRequest(task="x", expert_id=other.id, kb_ids=[req_kb])
-    persona2, _, _, expert_kb2 = _resolve_mounts(WS, req2)
+    persona2, _, _, expert_kb2 = _resolve_mounts(WS, "u-test", req2)
     assert expert_kb2 == [] and persona2 == "", f"跨工作区专家泄漏: {expert_kb2!r}"
     print("PASS-3 跨工作区专家忽略")
 

@@ -2,7 +2,7 @@
 
 直接驱动 _WorkspaceBackend（不跑 LLM）：
 1. 未挂载项目时：ls 根目录看不到其他项目；读其他项目被拒；写被拒；
-   /skills/ 可读；glob/grep 根级搜索被引导。
+   /.agent/skills/ 可读；glob/grep 根级搜索被引导。
 2. 挂载项目 A 后：A 内读写正常、产物登记；B 读写搜索删除全部被拒。
 3. 运行中 project_create（模拟 ctx.project 更新）后新项目即刻可写。
 """
@@ -27,7 +27,7 @@ def main() -> int:
         (root / "proj-a" / "a.md").write_text("A 内容", encoding="utf-8")
         (root / "proj-b").mkdir()
         (root / "proj-b" / "secret.md").write_text("B 机密", encoding="utf-8")
-        skills = root / "skills" / "demo"
+        skills = root / ".agent" / "skills" / "demo"
         skills.mkdir(parents=True)
         (skills / "SKILL.md").write_text("---\nname: demo\n---\nhello", encoding="utf-8")
 
@@ -39,14 +39,14 @@ def main() -> int:
         names = {Path(e["path"]).name for e in (ls.entries or [])}
         if "proj-a" in names or "proj-b" in names:
             fails.append(f"未挂载时根目录可见项目: {sorted(names)}")
-        if "skills" not in names:
-            fails.append(f"未挂载时根目录应显示 skills: {sorted(names)}")
+        if ".agent" in names or "skills" in names:
+            fails.append(f"根目录不应出现运行时目录: {sorted(names)}")
 
         # 2. 读其他项目被拒；读 skills 放行
         r = be.read("/proj-b/secret.md")
         if not r.error:
             fails.append("未挂载时读 proj-b 未被拒")
-        r = be.read("/skills/demo/SKILL.md")
+        r = be.read("/.agent/skills/demo/SKILL.md")
         if r.error:
             fails.append(f"skills 读取被误拒: {r.error}")
 
@@ -120,7 +120,7 @@ def main() -> int:
         for f in fails:
             print(" -", f)
         return 1
-    print("PASS: 项目边界成立——未挂载看不到也碰不到其他项目，挂载/创建后仅限活动项目 + /skills/ 只读")
+    print("PASS: 项目边界成立——未挂载看不到也碰不到其他项目，挂载/创建后仅限活动项目 + /.agent/skills/ 只读")
     return 0
 
 

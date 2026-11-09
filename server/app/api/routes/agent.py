@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.api.deps import current_uid, current_workspace
+from app.services import projects
 from app.services.agent import chunk_text, run_agent
 from app.services.capabilities import AgentContext, sandbox
 from app.services.history import get_history_store
@@ -168,8 +169,9 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
         ctx = AgentContext(workspace_id=ws, owner_id=uid, project=req.project)
         ctx.approved_tools = {t for (sid, t) in _APPROVALS if sid == session_id}
         if ctx.project:
+            # 挂载的项目必须属于当前用户：别人的项目名一律当「不存在」
             try:
-                sandbox.project_dir(ws, ctx.project)
+                projects.require(ws, ctx.project, uid)
             except sandbox.SandboxError as exc:
                 yield _sse("error", {"message": str(exc)})
                 return

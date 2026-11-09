@@ -232,6 +232,19 @@ def create_app() -> FastAPI:
         )
     except Exception as exc:  # noqa: BLE001 — 迁移失败不阻塞启动，但要把原因打出来
         print(f"[startup] RBAC 迁移失败：{exc}", flush=True)
+
+    # 项目登记自愈：存量目录收养进 projects 表（归空间所有者），运行时目录
+    # （.agent、_scratch 等）跳过——没有这一步，老项目会在升级后集体消失。
+    try:
+        from app.services import projects as project_registry
+
+        stats = project_registry.adopt_orphans()
+        print(
+            f"[startup] 项目登记就绪：本次收养 {stats['adopted']} 个，跳过内部目录 {stats['skipped']} 个",
+            flush=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — 同上，不让元数据问题挡住服务
+        print(f"[startup] 项目登记迁移失败：{exc}", flush=True)
     return app
 
 

@@ -37,6 +37,7 @@ CLEAR_TABLES = [
     "document_versions",
     "documents",
     "knowledge_bases",
+    "projects",
     "api_keys",
     "audit_logs",
     "eval_sets",

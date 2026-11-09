@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
-import time
 from pathlib import Path
 
 from app.services.store import DATA_DIR
@@ -68,7 +66,8 @@ def resolve_in(root: Path, rel: str) -> Path:
     return target
 
 
-def _project_bytes(root: Path) -> int:
+def dir_size(root: Path) -> int:
+    """目录内所有文件字节数（配额与列表展示共用）。"""
     total = 0
     for p in root.rglob("*"):
         if p.is_file():
@@ -136,10 +135,11 @@ def _render(content: str, ctx: dict[str, str]) -> str:
     return content
 
 
-def create_project(
-    workspace_id: str, name: str, template: str = "blank", description: str = ""
+def scaffold_project(
+    workspace_id: str, slug: str, template: str = "blank", description: str = ""
 ) -> dict:
-    pid = slugify(name)
+    """按模板铺一份项目骨架。只管文件，不登记项目（登记在 services/projects.py）。"""
+    pid = slugify(slug)
     if pid in RESERVED:
         raise SandboxError("项目名无效")
     if template not in _TEMPLATES:
@@ -148,7 +148,7 @@ def create_project(
     existed = root.is_dir()
     root.mkdir(parents=True, exist_ok=True)
     files = _TEMPLATES[template]
-    ctx = {"title": name.strip() or pid, "description": description.strip() or "（待补充）"}
+    ctx = {"title": pid, "description": description.strip() or "（待补充）"}
     written: list[str] = []
     for rel, content in files.items():
         target = resolve_in(root, rel)
@@ -166,35 +166,14 @@ def create_project(
     }
 
 
-def list_projects(workspace_id: str) -> list[dict]:
-    root = workspace_root(workspace_id)
-    out: list[dict] = []
-    for p in sorted(root.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-        if not p.is_dir() or p.name.startswith("_"):
-            continue  # 下划线开头的是内部沙盒（如 _scratch），不对用户展示
-        stat = p.stat()
-        out.append(
-            {
-                "id": p.name,
-                "name": p.name,
-                "files": sum(1 for f in p.rglob("*") if f.is_file()),
-                "size": human_size(_project_bytes(p)),
-                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
-            }
-        )
-    return out
-
-
-def delete_project(workspace_id: str, project: str) -> bool:
-    root = project_dir(workspace_id, project)
-    shutil.rmtree(root, ignore_errors=True)
-    return not root.exists()
-
-
 # ---------- 文件 ----------
 
-# .deck 存演示文稿的可编辑来源（sidecar），属于实现细节，不进文件树与打包
-_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", ".agent_tmp", ".deck", ".deckpreview", ".slidep"}
+# .deck 存演示文稿的可编辑来源（sidecar），属于实现细节，不进文件树与打包；
+# .agent 是工作区级的运行时目录（技能同步、临时沙盒），同样不属于用户内容
+SKIP_DIRS = {
+    ".git", "__pycache__", "node_modules", ".venv",
+    ".agent", ".agent_tmp", ".deck", ".deckpreview", ".slidep",
+}
 
 
 def write_file(workspace_id: str, project: str, rel: str, content: str) -> dict:
@@ -205,7 +184,7 @@ def write_file(workspace_id: str, project: str, rel: str, content: str) -> dict:
     target = resolve_in(root, rel)
     if target.is_dir():
         raise SandboxError("目标路径是目录")
-    if _project_bytes(root) + len(data) > MAX_PROJECT_BYTES:
+    if dir_size(root) + len(data) > MAX_PROJECT_BYTES:
         raise SandboxError(f"项目总体积超过 {human_size(MAX_PROJECT_BYTES)} 上限")
     target.parent.mkdir(parents=True, exist_ok=True)
     existed = target.exists()
@@ -255,7 +234,7 @@ def list_files(workspace_id: str, project: str, rel: str = "") -> dict:
         for child in children:
             if len(entries) >= MAX_TREE_ENTRIES:
                 return
-            if child.name in _SKIP_DIRS:
+            if child.name in SKIP_DIRS:
                 continue
             relpath = f"{prefix}{child.name}"
             if child.is_dir():
@@ -282,7 +261,7 @@ def project_summary(workspace_id: str, project: str) -> dict:
     return {
         "project": project,
         "files": len(files),
-        "size": human_size(_project_bytes(root)),
+        "size": human_size(dir_size(root)),
         "artifacts": [
             {
                 "path": str(p.relative_to(root)).replace("\\", "/"),

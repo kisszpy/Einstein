@@ -16,7 +16,13 @@ from pathlib import Path
 from app.services.capabilities.sandbox import workspace_root
 from app.services.skills import Skill, SkillStore, get_skill_store
 
-SKILLS_SUBDIR = "skills"  # 工作区内技能目录名（对应后端虚拟路径 /skills/）
+# 技能同步目录：**不进用户的项目命名空间**。
+#
+# 早先它是工作区根下的 `skills/`，和用户项目平级——于是「目录即项目」的列表
+# 把技能目录当成了一个项目，用户点进去看到的是平台自己的技能文件。运行时
+# 产物一律收进 `.agent/` 这个点开头的隐藏目录：用户看到的根目录里只有他自己
+# 创建的项目，模型侧仍可按 `/.agent/skills/` 读取（渐进披露不变）。
+SKILLS_SUBDIR = ".agent/skills"
 
 
 def slug_of(skill: Skill) -> str:
@@ -77,7 +83,7 @@ def _publish_one(skill: Skill, target: Path) -> None:
 def sync_skills(
     ws: str, store: SkillStore | None = None, owner_id: str | None = None,
 ) -> list[str]:
-    """把工作区内 enabled 的技能同步到 <workspace>/skills/，返回已发布的 name 清单。
+    """把工作区内 enabled 的技能同步到 <workspace>/.agent/skills/，返回已发布的 name 清单。
 
     全量对比：DB 里不存在或已停用的技能，其目录会被清掉。同步是幂等的，
     未变化的技能重写一遍内容（数量级小，毫秒级开销换一致性，值得）。

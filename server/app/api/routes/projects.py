@@ -17,8 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from app.api.deps import current_workspace
-from app.services import browser
+from app.api.deps import current_uid, current_workspace
+from app.services import browser, projects
 from app.services.capabilities import deck as deck_service
 from app.services.capabilities import sandbox
 
@@ -80,23 +80,36 @@ def _guard(exc: sandbox.SandboxError, code: int = 400) -> HTTPException:
     return HTTPException(code, str(exc))
 
 
+def _require(ws: str, project: str, uid: str) -> None:
+    """项目归属校验：不是自己的项目一律 404（不泄露存在性）。"""
+    try:
+        projects.require(ws, project, uid)
+    except sandbox.SandboxError as exc:
+        raise _guard(exc, 404) from exc
+
+
 @router.get("")
-async def list_projects(ws: str = Depends(current_workspace)) -> list[dict]:
-    return sandbox.list_projects(ws)
+async def list_projects(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
+    """当前用户可见的项目。别人创建的项目、平台运行时目录都不会出现。"""
+    return projects.list_projects(ws, uid)
 
 
 @router.post("")
-async def create_project(req: ProjectCreateRequest, ws: str = Depends(current_workspace)) -> dict:
+async def create_project(
+    req: ProjectCreateRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
+) -> dict:
     try:
-        return sandbox.create_project(ws, req.name, req.template, req.description)
+        return projects.create_project(ws, req.name, req.template, req.description, owner_id=uid)
     except sandbox.SandboxError as exc:
         raise _guard(exc) from exc
 
 
 @router.delete("/{project}")
-async def delete_project(project: str, ws: str = Depends(current_workspace)) -> dict:
+async def delete_project(
+    project: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
+) -> dict:
     try:
-        ok = sandbox.delete_project(ws, project)
+        ok = projects.delete_project(ws, project, uid)
     except sandbox.SandboxError as exc:
         raise _guard(exc, 404) from exc
     if not ok:
@@ -105,7 +118,10 @@ async def delete_project(project: str, ws: str = Depends(current_workspace)) -> 
 
 
 @router.get("/{project}/tree")
-async def project_tree(project: str, ws: str = Depends(current_workspace)) -> dict:
+async def project_tree(
+    project: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
+) -> dict:
+    _require(ws, project, uid)
     try:
         return sandbox.list_files(ws, project)
     except sandbox.SandboxError as exc:
@@ -113,7 +129,10 @@ async def project_tree(project: str, ws: str = Depends(current_workspace)) -> di
 
 
 @router.get("/{project}/file")
-async def read_file(project: str, path: str, ws: str = Depends(current_workspace)) -> dict:
+async def read_file(
+    project: str, path: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
+) -> dict:
+    _require(ws, project, uid)
     try:
         return sandbox.read_file(ws, project, path)
     except sandbox.SandboxError as exc:
@@ -121,7 +140,10 @@ async def read_file(project: str, path: str, ws: str = Depends(current_workspace
 
 
 @router.put("/{project}/file")
-async def write_file(project: str, req: FileWriteRequest, ws: str = Depends(current_workspace)) -> dict:
+async def write_file(
+    project: str, req: FileWriteRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
+) -> dict:
+    _require(ws, project, uid)
     try:
         return sandbox.write_file(ws, project, req.path, req.content)
     except sandbox.SandboxError as exc:
@@ -129,10 +151,11 @@ async def write_file(project: str, req: FileWriteRequest, ws: str = Depends(curr
 
 
 @router.get("/{project}/download")
-async def download_file(project: str, path: str, ws: str = Depends(current_workspace)) -> FileResponse:
+async def download_file(
+    project: str, path: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
+) -> FileResponse:
     try:
-        root = sandbox.project_dir(ws, project)
-        target = sandbox.resolve_in(root, path)
+        target = projects.resolve_rel(ws, project, path, uid)
     except sandbox.SandboxError as exc:
         raise _guard(exc, 404) from exc
     if not target.is_file():
@@ -145,7 +168,10 @@ async def download_file(project: str, path: str, ws: str = Depends(current_works
 
 
 @router.get("/{project}/archive")
-async def download_archive(project: str, ws: str = Depends(current_workspace)) -> StreamingResponse:
+async def download_archive(
+    project: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
+) -> StreamingResponse:
+    _require(ws, project, uid)
     try:
         root = sandbox.project_dir(ws, project)
     except sandbox.SandboxError as exc:
@@ -154,7 +180,7 @@ async def download_archive(project: str, ws: str = Depends(current_workspace)) -
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for file in sorted(root.rglob("*")):
-            if file.is_file() and ".agent_tmp" not in file.parts and ".deck" not in file.parts:
+            if file.is_file() and not (set(file.parts) & sandbox.SKIP_DIRS):
                 zf.write(file, file.relative_to(root))
     buf.seek(0)
     # RFC 5987：中文项目名放进 filename*，ASCII 名做 fallback
@@ -188,12 +214,15 @@ def _inline_response(target: Path) -> Response:
 
 @router.get("/{project}/preview")
 async def preview_file(
-    project: str, path: str, ticket: str = "", ws: str = Depends(current_workspace)
+    project: str,
+    path: str,
+    ticket: str = "",
+    ws: str = Depends(current_workspace),
+    uid: str = Depends(current_uid),
 ) -> Response:
     """预览入口：HTML 注入 base 后渲染（沙箱隔离），其他类型按 MIME 内联返回。"""
     try:
-        root = sandbox.project_dir(ws, project)
-        target = sandbox.resolve_in(root, path)
+        target = projects.resolve_rel(ws, project, path, uid)
     except sandbox.SandboxError as exc:
         raise _guard(exc, 404) from exc
     if not target.is_file():
@@ -216,11 +245,16 @@ async def preview_file(
 
 
 @router.get("/{project}/file/{ticket}/{file_path:path}")
-async def serve_asset(project: str, ticket: str, file_path: str, ws: str = Depends(current_workspace)) -> Response:
+async def serve_asset(
+    project: str,
+    ticket: str,
+    file_path: str,
+    ws: str = Depends(current_workspace),
+    uid: str = Depends(current_uid),
+) -> Response:
     """静态资源与站内跳转的落点（ticket 由中间件校验，这里只是路径占位）。"""
     try:
-        root = sandbox.project_dir(ws, project)
-        target = sandbox.resolve_in(root, file_path)
+        target = projects.resolve_rel(ws, project, file_path, uid)
     except sandbox.SandboxError as exc:
         raise _guard(exc, 404) from exc
     if not target.is_file():
@@ -235,9 +269,11 @@ class DeckSaveRequest(BaseModel):
 
 
 @router.get("/{project}/deck")
-async def read_deck(project: str, path: str, ws: str = Depends(current_workspace)) -> dict:
+async def read_deck(
+    project: str, path: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
+) -> dict:
     try:
-        root = sandbox.project_dir(ws, project)
+        root = projects.require(ws, project, uid)
         # load_deck 首次会触发 PowerPoint COM 导出预览图（秒级），放线程避免阻塞事件循环
         return await asyncio.to_thread(deck_service.load_deck, root, path)
     except sandbox.SandboxError as exc:
@@ -246,10 +282,14 @@ async def read_deck(project: str, path: str, ws: str = Depends(current_workspace
 
 @router.put("/{project}/deck")
 async def write_deck(
-    project: str, path: str, req: DeckSaveRequest, ws: str = Depends(current_workspace)
+    project: str,
+    path: str,
+    req: DeckSaveRequest,
+    ws: str = Depends(current_workspace),
+    uid: str = Depends(current_uid),
 ) -> dict:
     try:
-        root = sandbox.project_dir(ws, project)
+        root = projects.require(ws, project, uid)
         return deck_service.save_deck(root, path, req.deck)
     except sandbox.SandboxError as exc:
         raise _guard(exc, 400) from exc

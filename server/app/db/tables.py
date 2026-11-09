@@ -170,6 +170,36 @@ SESSIONS = Table(
 
 # ---------------------------------------------------------------- 智能体配置
 
+# 项目（用户可见的「工作台产物目录」）。
+#
+# 为什么项目要有自己的表：早先「目录即项目」——`data/projects/<ws>/` 下有什么
+# 目录，界面就列什么。可这个根目录同时住着运行时目录（技能、临时沙盒），
+# 于是技能目录被当成项目列出来，用户在「文件」里能看到 `skills/`；而且项目
+# 没有归属，同一空间的两个用户互相看得见对方的项目。
+#
+# 现在项目是先登记再创建的资源：只有本表里存在且属于当前用户的行才会出现在
+# 列表里，磁盘目录只是它的落点。`internal=1` 的是运行时目录（如 _scratch），
+# 永远不对外展示。
+PROJECTS = Table(
+    name="projects",
+    columns=(
+        _c("workspace_id", default="'default'"),
+        _c("slug"),
+        # 创建者 user_id。与专家/技能不同，项目没有「系统预置」这一档：
+        # 每一个项目都归属于某个人，空间管理员也看不到别人的项目。
+        _c("owner_id", default="''"),
+        _c("name", default="''"),
+        _c("description", default="''"),
+        _c("template", default="'blank'"),
+        _c("internal", "bool", default="0"),
+        _c("created_at", default="''"),
+        _c("updated_at", default="''"),
+    ),
+    key=("workspace_id", "slug"),
+    key_sep="@",
+    order="updated_at DESC",
+)
+
 EXPERTS = Table(
     name="experts",
     columns=(
@@ -361,6 +391,7 @@ TABLES: dict[str, Table] = {
         WORKSPACE_MEMBERS,
         WORKSPACE_INVITES,
         SESSIONS,
+        PROJECTS,
         EXPERTS,
         SKILLS,
         MCP_SERVERS,
@@ -402,6 +433,7 @@ def ddl_all() -> list[str]:
     """全部建表语句（含必建索引），由迁移 008 展开执行。"""
     statements = [t.ddl() for t in TABLES.values()]
     statements += [
+        "CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(workspace_id, owner_id)",
         "CREATE INDEX IF NOT EXISTS idx_experts_ws ON experts(workspace_id)",
         "CREATE INDEX IF NOT EXISTS idx_skills_ws ON skills(workspace_id)",
         "CREATE INDEX IF NOT EXISTS idx_apikeys_ws ON api_keys(workspace_id, created_at)",

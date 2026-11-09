@@ -232,7 +232,13 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
 
     if "project_create" in wanted:
         def _project_create(name: str, template: str = "blank", description: str = "") -> str:
-            info = sandbox.create_project(ws, name, template, description)
+            # 延迟导入：projects 依赖沙箱，模块顶层互相 import 会成环
+            from app.services import projects
+
+            # 项目登记在当前用户名下：同空间的其他成员看不到、也进不来
+            info = projects.create_project(
+                ws, name, template, description, owner_id=ctx.owner_id
+            )
             ctx.project = info["project"]
             return sandbox.dumps(info)
 
@@ -284,12 +290,14 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
                 if ctx.project:
                     project = ctx.project
                 else:
-                    # 无绑定项目时的临时沙盒：纯计算不污染任何用户项目
-                    try:
-                        sandbox.project_dir(ws, "_scratch")
-                    except sandbox.SandboxError:
-                        sandbox.create_project(ws, "_scratch", description="智能体临时计算沙盒（自动创建）")
-                    project = "_scratch"
+                    # 无绑定项目时的临时沙盒：纯计算不污染任何用户项目。
+                    # 按用户各留一个，避免两个人的临时文件互相看得见
+                    from app.services import projects
+
+                    scratch = f"_scratch-{ctx.owner_id[:8]}" if ctx.owner_id else "_scratch"
+                    project = projects.ensure_internal(
+                        ws, scratch, ctx.owner_id, description="智能体临时计算沙盒（自动创建）"
+                    )
                 result = code_exec.run_code(ws, project, code, path, language, timeout)
                 return sandbox.dumps(result)
 

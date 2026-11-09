@@ -182,7 +182,10 @@ def main() -> None:
             for e, d in events:
                 if e == "error":
                     print(f"    [debug] error={d}")
-        check("端到端工具调用", {"project_create", "fs_write", "code_run"} <= set(names), str(names))
+        # deep 引擎下 fs_* 被 harness 工具取代（SUPERSEDED_TOOLS），且模型可能直接
+        # 用 code_run 落盘脚本——写文件是否发生由下面的「端到端产物落盘」断言把关，
+        # 这里只要求建了项目、跑了代码
+        check("端到端工具调用", {"project_create", "code_run"} <= set(names), str(names))
         check("端到端完成", done is not None)
         if done:
             check("端到端项目归属", done.get("project") == "冒烟端到端", str(done)[:100])

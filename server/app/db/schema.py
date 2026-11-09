@@ -11,7 +11,10 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from app.db.engine import Database
+from app.db.tables import PROJECTS as _PROJECTS_TABLE
 from app.db.tables import ddl_all as _domain_tables_ddl
+
+_PROJECTS_DDL = _PROJECTS_TABLE.ddl()
 
 SCHEMA_VERSION_TABLE = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -257,6 +260,21 @@ def _migration_009(db: Database) -> list[str]:
 # 迁移条目可以是静态语句列表，也可以是 (db) -> 语句列表 的函数（按现有结构决定 DDL）
 Migration = list[str] | Callable[[Database], list[str]]
 
+# 010：项目登记表 —— 「目录即项目」改为「登记过的才是项目」
+#
+# 工作区根目录既是用户项目的家，也是运行时目录的家（技能同步目录、临时计算
+# 沙盒）。早先按目录列举项目，结果 `skills/` 被当成项目出现在界面上，而且
+# 项目没有归属，同空间的成员互相看得见。现在项目先登记再创建：
+# - 只有 projects 表里存在、且 owner_id = 当前用户的行才会列出；
+# - internal=1 的运行时目录（_scratch）永不展示；
+# - 存量目录由启动时的 projects.adopt_orphans() 收养（归空间 owner）。
+#
+# 新库由迁移 008 的 ddl_all() 一并建表，这里用 IF NOT EXISTS 保持幂等。
+_MIGRATION_010 = [
+    _PROJECTS_DDL,
+    "CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(workspace_id, owner_id)",
+]
+
 MIGRATIONS: list[tuple[int, Migration]] = [
     (1, _MIGRATION_001),
     (2, _MIGRATION_002),
@@ -267,6 +285,7 @@ MIGRATIONS: list[tuple[int, Migration]] = [
     (7, _MIGRATION_007),
     (8, _MIGRATION_008),
     (9, _migration_009),
+    (10, _MIGRATION_010),
 ]
 
 _TYPE_TOKENS = {

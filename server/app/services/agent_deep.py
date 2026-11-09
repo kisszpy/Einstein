@@ -59,7 +59,7 @@ class _WorkspaceBackend(FilesystemBackend):
     逃逸由父类挡掉。这里额外做两件事：
 
     1. **项目边界（防穿项目）**：本次任务只能访问「活动项目」（用户挂载的
-       项目，或运行中 project_create 创建的项目）与 `/skills/` 技能目录
+       项目，或运行中 project_create 创建的项目）与 `/.agent/skills/` 技能目录
        （只读，供技能渐进披露）。工作区其他项目读/写/搜索/删除全部拒绝。
     2. **产物登记**：落盘成功的文件告诉 AgentContext，前端产物区、预览、
        下载才照旧可用。
@@ -76,17 +76,32 @@ class _WorkspaceBackend(FilesystemBackend):
         return slugify(self.ctx.project) if self.ctx.project else ""
 
     @staticmethod
-    def _head(virtual_path: str) -> str:
+    def _rel(virtual_path: str) -> str:
+        return (virtual_path or "").replace("\\", "/").strip("/")
+
+    def _head(self, virtual_path: str) -> str:
         """虚拟路径首段（项目名/特殊目录名）。"""
-        rel = (virtual_path or "").replace("\\", "/").lstrip("/")
+        rel = self._rel(virtual_path)
         return rel.split("/", 1)[0] if rel else ""
 
+    def _in_skills(self, virtual_path: str) -> bool:
+        """是否落在运行时的技能目录里。
+
+        只认目录本身与它的下面，不认上级——根目录 ls 因此不会列出 `.agent`：
+        模型看到的工作区根目录里只有它自己的项目。
+        """
+        rel = self._rel(virtual_path)
+        sub = skill_publisher.SKILLS_SUBDIR
+        if not rel:
+            return False
+        return rel == sub or rel.startswith(sub + "/")
+
     def _in_scope(self, virtual_path: str) -> bool:
-        """读取范围：活动项目内 或 /skills/（技能渐进披露要读 SKILL.md）。"""
+        """读取范围：活动项目内 或 /.agent/skills/（技能渐进披露要读 SKILL.md）。"""
+        if self._in_skills(virtual_path):
+            return True
         head = self._head(virtual_path)
         if not head:
-            return True
-        if head == skill_publisher.SKILLS_SUBDIR:
             return True
         allowed = self._allowed()
         return bool(allowed) and slugify(head) == allowed
@@ -107,9 +122,10 @@ class _WorkspaceBackend(FilesystemBackend):
         )
 
     def _write_blocked(self, virtual_path: str) -> str | None:
+        rel = self._rel(virtual_path)
+        if rel == ".agent" or rel.startswith(".agent/"):
+            return "/.agent/ 是平台运行时目录（技能等），只读，禁止写入。"
         head = self._head(virtual_path)
-        if head == skill_publisher.SKILLS_SUBDIR:
-            return f"/{skill_publisher.SKILLS_SUBDIR}/ 是技能目录（只读），禁止写入。"
         allowed = self._allowed()
         if not allowed:
             return (
@@ -128,9 +144,11 @@ class _WorkspaceBackend(FilesystemBackend):
 
         返回 (收敛后的搜索路径或 None, 错误消息或 None)。
         """
-        head = self._head(path or "")
-        if head == skill_publisher.SKILLS_SUBDIR or (head and self._in_scope(path or "")):
+        # 注意 path 为空时 _in_scope 会返回 True（根目录本身允许 ls），
+        # 但根级搜索必须收敛到活动项目，不能顺手把整个工作区扫了
+        if path and (self._in_skills(path) or self._in_scope(path)):
             return path, None
+        head = self._head(path or "")
         allowed = self._allowed()
         if not head and allowed:
             return f"/{allowed}", None  # 根级搜索限定到活动项目
@@ -231,7 +249,7 @@ DEEP_SYSTEM_PROMPT = """你是 Einstein 的工作型智能体。你能调用工�
 你有一个以工作区为根的文件系统：`ls` 看目录、`read_file` 读（带行号，可 offset/limit）、`write_file` 新建或整体覆盖、`edit_file` 精确替换、`glob` / `grep` 找文件内容、`delete` 删文件。路径写虚拟绝对路径，比如 `/周报/2026-W45.md`。项目目录由 `project_create` 创建，之后的文件都放在 `/项目名/...` 下。
 
 【项目边界】
-你只能访问本次任务的活动项目（用户挂载的项目，或你本次用 project_create 创建的项目）与 `/skills/` 技能目录（只读）。工作区里的其他项目对你不可见也不可写，访问会被拒绝——不要尝试绕过。glob/grep 从根搜索时系统会自动限定到活动项目内。若用户已挂载项目，直接在该项目内读和产出，不要再 project_create 新建项目。
+你只能访问本次任务的活动项目（用户挂载的项目，或你本次用 project_create 创建的项目）与 `/.agent/skills/` 技能目录（只读，平台运行时目录，不要写）。工作区里的其他项目对你不可见也不可写，访问会被拒绝——不要尝试绕过。glob/grep 从根搜索时系统会自动限定到活动项目内。若用户已挂载项目，直接在该项目内读和产出，不要再 project_create 新建项目。
 
 【任务路由】
 1. 问答/解释/比较/观点/规划（用户要一个回答）→ 直接回答。不建项目、不写文件。需要外部信息时先查已挂载的知识库（kb_search），查不到再 web_search；关键结论用 web_fetch 打开原文核实（max_chars 2500 左右，检索类最多 2 次），核完就答。
@@ -285,7 +303,7 @@ def _build_agent(
     lc_tools = [t for t in build_lc_tools(tool_ids, kb_ids, workspace_id, ctx)
                 if t.name not in SUPERSEDED_TOOLS]
     # 技能：引擎原生 SkillsMiddleware。发布器已在任务开始时把 DB 技能同步到
-    # <workspace>/skills/（热加载），这里只挂目录；模型按 description 自主
+    # <workspace>/.agent/skills/（热加载），这里只挂目录；模型按 description 自主
     # 选取，被点名的技能由 pinned_skills 状态强制装载。
     extras = f"\n\n{persona.strip()}" if persona.strip() else ""
     agent = create_deep_agent(
