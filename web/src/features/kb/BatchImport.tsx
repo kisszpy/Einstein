@@ -6,8 +6,11 @@ import { cn } from "@/lib/utils";
 const SUPPORTED = [
   ".pdf", ".docx", ".xlsx", ".pptx", ".csv", ".html", ".htm",
   ".txt", ".md", ".markdown",
+  // 图片要走 OCR：识别质量取决于后端是否配了视觉模型 / tesseract
+  ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff",
 ];
 /** 后端也会再过滤一遍，这里提前拦住可以少传垃圾文件 */
+const IMAGE_EXT = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"]);
 const SKIP_DIRS = new Set([
   "__MACOSX", ".git", ".svn", "node_modules", ".venv", "venv",
   "__pycache__", ".idea", ".vscode", ".pytest_cache", ".mypy_cache",
@@ -147,6 +150,21 @@ export function BatchImport({ kbId, onFinished }: Props) {
   const [dirPath, setDirPath] = useState("");
   const [dirOpen, setDirOpen] = useState(false);
   const [showSkipped, setShowSkipped] = useState(false);
+  /** 服务端能不能 OCR。不能时选图片会 400，提前在这里说比让用户等报错好 */
+  const [ocrReady, setOcrReady] = useState(true);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/kb/ocr");
+        if (!res.ok) return; // 老版本后端没有这个接口，按可用处理
+        const data = (await res.json()) as { available?: boolean };
+        setOcrReady(data.available !== false);
+      } catch {
+        // 探测失败不拦人：真不能用时上传会给出具体原因
+      }
+    })();
+  }, []);
 
   // webkitdirectory 不是标准 React 属性，用 ref 显式设置；顺带关掉目录选择框里"选文件"的默认行为
   useEffect(() => {
@@ -156,6 +174,7 @@ export function BatchImport({ kbId, onFinished }: Props) {
 
   const running = jobIds.length > 0;
   const totalBytes = picked.reduce((sum, p) => sum + p.file.size, 0);
+  const imageCount = picked.filter((p) => IMAGE_EXT.has(ext(p.path))).length;
 
   const take = useCallback((items: Array<{ file: File; path: string }>, extra: Skipped[] = []) => {
     const { picked: ok, skipped: bad } = classify(items);
@@ -394,6 +413,12 @@ export function BatchImport({ kbId, onFinished }: Props) {
               </Button>
             </div>
           </div>
+          {!ocrReady && imageCount > 0 && (
+            <p className="mt-2 rounded-md bg-warning/10 px-2.5 py-1.5 text-[11.5px] text-warning">
+              其中 {imageCount} 个是图片，但服务端未启用 OCR，导入会失败。
+              配置 <code className="font-mono">APP_OCR_MODEL</code> 或安装 pytesseract 后可自动识别文字。
+            </p>
+          )}
           <ul className="mt-2 max-h-32 space-y-0.5 overflow-y-auto text-[11.5px] text-tertiary">
             {picked.slice(0, 50).map((p) => (
               <li key={p.path} className="truncate">{p.path}</li>

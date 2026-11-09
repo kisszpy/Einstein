@@ -18,7 +18,6 @@ from typing import Protocol
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.services.parsers import OcrProvider  # noqa: E402
 from app.services.queue.base import JobQueue  # noqa: E402
 from app.services.queue.local import LocalQueue  # noqa: E402
 from app.services.queue.redis_queue import RedisQueue  # noqa: E402
@@ -45,7 +44,6 @@ CONTRACTS: list[tuple[type, list[type]]] = [
     (VectorIndex, [MemoryIndex, MilvusIndex]),
     # 两种后端：JSON 文件（降级路径）与按域拆表的 TableState（sqlite/postgres）
     (StateBackend, [JsonState, TableState]),
-    (OcrProvider, []),  # 由外部注册，不强制实现
 ]
 
 

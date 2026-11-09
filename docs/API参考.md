@@ -3,7 +3,7 @@
 > 本文由 `server/tools/gen_api_doc.py` 从应用自身的 OpenAPI schema 生成，**请勿手工编辑**。
 > 改完路由后运行 `python tools/gen_api_doc.py` 重新生成；CI 用 `--check` 校验是否漂移。
 >
-> 接口数：160 个操作 / 127 个路径 · 应用版本 0.8.0
+> 接口数：161 个操作 / 128 个路径 · 应用版本 1.0.0
 
 ## 1. 通用约定
 
@@ -109,6 +109,7 @@ nginx 需 `proxy_buffering off;`，并放宽 `proxy_read_timeout`。
 | `GET` | `/api/kb` | 知识库列表 | 会话 |
 | `POST` | `/api/kb` | 新建知识库 | 会话 |
 | `GET` | `/api/kb/citations/{chunk_id}` | 引用定位：切片 → 原文段落（前后各带 200 字上下文，便于前端高亮）。 | 会话 |
+| `GET` | `/api/kb/ocr` | 当前环境能不能把图片变成文字，走哪条路。 | 会话 |
 | `POST` | `/api/kb/search` | 检索测试台：直接看召回效果，可切换检索模式对比。 | 会话 |
 | `POST` | `/api/kb/search_compare` | 多策略并排对比：同一查询在各检索模式下的召回 diff（测试台用）。 | 会话 |
 | `PATCH` | `/api/kb/{kb_id}` | 改名称/描述/可见性。只有创建者或工作区管理员能改。 | 会话 |
@@ -677,6 +678,17 @@ SSE 运行智能体。事件：meta -> (step|artifact)* -> [citations] -> answer
 | --- | --- | --- | :---: | --- |
 | `chunk_id` | path | string | 是 | — |
 | `x-workspace` | header | string? | 否 | — |
+
+**响应**：`200`
+
+#### `GET /api/kb/ocr`
+
+当前环境能不能把图片变成文字，走哪条路。
+
+前端据此在选文件时提示：没有 OCR 时传图片会直接 400，不如提前说清。
+必须声明在 `GET /{kb_id}` 之前，否则 "ocr" 会被当成一个知识库 id。
+
+**鉴权**：会话
 
 **响应**：`200`
 

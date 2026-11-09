@@ -184,7 +184,7 @@ def create_app() -> FastAPI:
     # debug 固定为 False：Starlette 在 debug=True 时会把完整堆栈直接写进响应体，
     # 泄漏绝对路径与依赖版本。服务端仍会由 uvicorn 打印完整 traceback。
     app = FastAPI(
-        title=settings.app_name, version="0.8.0", debug=False, lifespan=lifespan
+        title=settings.app_name, version="1.0.0", debug=False, lifespan=lifespan
     )
 
     @app.exception_handler(Exception)

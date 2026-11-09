@@ -1,13 +1,14 @@
 """文档解析器：把各种格式统一抽成带结构的纯文本。
 
 支持：
-- .pdf   → pypdf 逐页抽取（扫描件无文本层时提示需 OCR）
+- .pdf   → pypdf 逐页抽取；无文本层（扫描件）时按页渲染成图走 OCR
 - .docx  → python-docx 抽段落 + 表格
 - .xlsx  → openpyxl 每个 sheet 转 markdown 表格
 - .csv   → 转 markdown 表格
 - .pptx  → python-pptx 逐页抽文本框与表格
 - .html  → bs4 去脚本/样式/导航后取正文
 - .txt/.md 等文本 → UTF-8 / GBK 兜底解码
+- 图片    → OCR（详见 `services/ocr.py`：视觉模型或本地 tesseract）
 - URL    → 抓取网页后按 html 处理
 
 解析完统一过一遍 `clean_text`：去控制字符、合并空行、按频次剔除页眉页脚。
@@ -20,40 +21,26 @@ import csv
 import io
 import re
 from pathlib import Path
-from typing import Protocol
+
+from app.services import ocr as ocr_service
 
 MAX_BYTES = 50 * 1024 * 1024  # 50MB 上限
 MAX_TABLE_ROWS = 5000          # 单表最多抽这么多行，避免超大表吃满内存
 MAX_URL_BYTES = 8 * 1024 * 1024
 
+# 图片单独列一份：它们要过 OCR，而不是"读文本"
+IMAGE_EXTENSIONS = ocr_service.IMAGE_EXTENSIONS
+
 SUPPORTED_EXTENSIONS = {
     ".pdf", ".docx", ".xlsx", ".pptx", ".csv", ".html", ".htm",
     ".txt", ".md", ".markdown",
-}
+} | IMAGE_EXTENSIONS
 
-_EXT_LABEL = "PDF / Word / Excel / PPT / CSV / HTML / Markdown / 纯文本"
+_EXT_LABEL = "PDF / Word / Excel / PPT / CSV / HTML / Markdown / 纯文本 / 图片（PNG·JPG 等）"
 
 
 class ParseError(Exception):
     """解析失败（含用户可读的原因）。"""
-
-
-class OcrProvider(Protocol):
-    """OCR 预留接口：默认不启用，接入 PaddleOCR/Tesseract 时实现它即可。"""
-
-    def extract(self, image: bytes) -> str: ...
-
-
-_ocr: OcrProvider | None = None
-
-
-def set_ocr(provider: OcrProvider | None) -> None:
-    global _ocr
-    _ocr = provider
-
-
-def get_ocr() -> OcrProvider | None:
-    return _ocr
 
 
 # ---------------------------------------------------------------- 清洗
@@ -114,12 +101,62 @@ def _parse_pdf(raw: bytes, filename: str) -> str:
         if text.strip():
             pages.append(f"【第 {i + 1} 页】\n{text.strip()}")
     if not pages:
-        hint = "" if get_ocr() is None else "（已启用 OCR 但未取到文本）"
-        raise ParseError(
-            f"{filename}: 未抽取到文本——可能是扫描件（无文本层）{hint}，"
-            "请先做 OCR 或上传可复制文本的版本"
-        )
+        # 没有文本层：扫描件。能 OCR 就 OCR，不能就报一个照着做就能解决的错。
+        return _ocr_pdf(raw, filename)
     return "\n\n".join(pages)
+
+
+def _ocr_pdf(raw: bytes, filename: str) -> str:
+    """整份 PDF 都没有文本层时的兜底：渲染成图逐页 OCR。"""
+    from app.core.config import get_settings
+
+    if not ocr_service.available():
+        raise ParseError(
+            f"{filename}: 未抽取到文本——这份 PDF 没有文本层（多半是扫描件），"
+            f"需要 OCR 才能入库；但当前环境没有可用的 OCR（{ocr_service.status()['reason']}）。"
+            "要么上传可复制文本的版本，要么配置 APP_OCR_MODEL / 安装 pytesseract。"
+        )
+
+    total, images = ocr_service.render_pdf_pages(
+        raw, max_pages=int(get_settings().ocr_max_pages or 20),
+    )
+    if not images:
+        raise ParseError(
+            f"{filename}: 未抽取到文本，需要把页面渲染成图再 OCR，"
+            "但当前未安装 pymupdf。安装后即可自动处理扫描件：pip install pymupdf"
+        )
+
+    parts: list[str] = []
+    for index, image in enumerate(images, start=1):
+        try:
+            text = ocr_service.extract(image, filename=f"{filename} 第 {index} 页")
+        except ocr_service.OcrError as exc:
+            raise ParseError(str(exc)) from exc
+        if text.strip():
+            parts.append(f"【第 {index} 页 · OCR】\n{text.strip()}")
+
+    if not parts:
+        raise ParseError(f"{filename}: 扫描件 OCR 完成但没识别到文字，请确认页面不是整页图片/空白")
+    if total > len(images):
+        parts.append(
+            f"（本文件共 {total} 页，只识别了前 {len(images)} 页。"
+            f"需要更多请调大 APP_OCR_MAX_PAGES 后重试。）"
+        )
+    return "\n\n".join(parts)
+
+
+def _parse_image(raw: bytes, filename: str) -> str:
+    """图片 → OCR 文本。识别失败一律转成 ParseError（上层只认这一种）。"""
+    try:
+        text = ocr_service.extract(raw, filename=filename)
+    except ocr_service.OcrError as exc:
+        raise ParseError(str(exc)) from exc
+    if not text.strip():
+        raise ParseError(
+            f"{filename}: 图里没有识别到文字（可能是照片、图表或纯图形）。"
+            "图片类资料需要文字才能检索；若确有文字，试着放大后重新截图。"
+        )
+    return f"【图片：{filename}】\n{text}"
 
 
 def _parse_docx(raw: bytes, filename: str) -> str:
@@ -267,6 +304,8 @@ def parse_document(raw: bytes, filename: str) -> str:
         return clean_text(parse_html(raw, filename))
     if ext in (".txt", ".md", ".markdown"):
         return clean_text(_decode_text(raw, filename))
+    if ext in IMAGE_EXTENSIONS:
+        return clean_text(_parse_image(raw, filename))
     if ext == ".doc":
         raise ParseError(f"{filename}: 旧版 .doc 不支持，请在 Word 中另存为 .docx 后上传")
     raise ParseError(f"{filename}: 不支持的格式（支持 {_EXT_LABEL}）")

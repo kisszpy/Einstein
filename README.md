@@ -3,7 +3,8 @@
 自托管的知识库 + 智能体平台：把散落的文档变成可检索、可调用、可计量的能力，同时提供
 控制台与 OpenAI 兼容的开放接口。
 
-- **知识库**：多格式摄取（PDF / Word / Excel / PPT / CSV / HTML / Markdown / 网页），
+- **知识库**：多格式摄取（PDF / Word / Excel / PPT / CSV / HTML / Markdown / 网页 /
+  **图片与扫描件 OCR**），
   **整目录 / ZIP 批量导入**（保留目录结构作文档名）、sha256 去重、文档版本与回滚、
   切片预览与编辑、异步摄取队列
 - **检索**：向量 + BM25 混合召回（RRF 融合），向量层可切 numpy 暴力检索或 Milvus HNSW
@@ -22,7 +23,7 @@
 | 文档 | 内容 |
 |---|---|
 | `README.md` | 起步、配置、验收、排障（本文） |
-| [docs/API参考.md](docs/API参考.md) | 154 个接口的路径、参数、请求体字段、鉴权与 SSE 协议（由代码生成） |
+| [docs/API参考.md](docs/API参考.md) | 161 个接口的路径、参数、请求体字段、鉴权与 SSE 协议（由代码生成） |
 | [docs/运维手册.md](docs/运维手册.md) | 部署拓扑、巡检、备份恢复、升级、性能基线、故障手册 |
 
 ## 架构
@@ -145,6 +146,10 @@ APP_QUEUE_BACKEND=redis
 | `APP_RERANK_PROVIDER` | `auto` | `auto` / `none` / `http`（OpenAI 兼容 `/rerank`）/ `onnx`（本机 bge-reranker） |
 | `APP_RERANK_ENDPOINT` | 空 | `http` 档的重排端点，如 `http://127.0.0.1:8080/v1/rerank` |
 | `APP_KB_STALE_DAYS` | `30` | 网页来源文档超过这么多天没重抓就在列表里标"可能过期"，`0` 关闭 |
+| `APP_OCR_PROVIDER` | `auto` | `auto`（配了模型走视觉，否则看 pytesseract）/ `vision` / `tesseract` / `off` |
+| `APP_OCR_MODEL` | 空 | 支持图片输入的模型名（如 `qwen2.5-vl-7b`）；空 = 不启用视觉档 |
+| `APP_OCR_BASE_URL` | 空 | 视觉模型端点，空 = 跟随 `APP_LLM_BASE_URL` |
+| `APP_OCR_MAX_PAGES` | `20` | 扫描件最多 OCR 前 N 页，超出部分在正文里标注被截断 |
 | `APP_ALERT_INTERVAL_MINUTES` | `10` | 后台告警评估间隔，`0` 只留手动检查（规则本身在「运营 → 告警」里配） |
 | `APP_AGENT_CODE_EXEC` | `true` | 关掉后智能体不注册代码执行工具 |
 | `APP_AGENT_ENGINE` | `deepagents` | `deepagents`（计划/子智能体/压缩）/ `react`（旧单循环回滚用） |

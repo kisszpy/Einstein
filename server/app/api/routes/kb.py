@@ -9,6 +9,7 @@
 旧内容快照进 document_versions，可按版本回滚。
 """
 
+import asyncio
 import uuid
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from app.api.deps import current_uid, current_user, current_workspace, workspace
 from app.core.config import get_settings
 from app.services import batch as batch_io, members
 from app.services import kb_access, sources
+from app.services import ocr as ocr_service
 from app.services.parsers import MAX_BYTES, ParseError, fetch_url, parse_document
 from app.services.queue import get_queue
 from app.services.rag import ingest_document, reembed_chunk, reindex_document, search
@@ -183,6 +185,16 @@ def _cleanup_dir(path: Path) -> None:
     import shutil
 
     shutil.rmtree(path, ignore_errors=True)
+
+
+@router.get("/ocr")
+async def ocr_capability(uid: str = Depends(current_uid)) -> dict:
+    """当前环境能不能把图片变成文字，走哪条路。
+
+    前端据此在选文件时提示：没有 OCR 时传图片会直接 400，不如提前说清。
+    必须声明在 `GET /{kb_id}` 之前，否则 "ocr" 会被当成一个知识库 id。
+    """
+    return ocr_service.status()
 
 
 @router.get("")
@@ -387,7 +399,9 @@ async def upload_document(
     raw = await file.read()
     name = file.filename or "未命名"
     try:
-        content = parse_document(raw, name)
+        # 丢线程池：图片要过 OCR、扫描件要逐页渲染，几秒到几十秒不奇怪。
+        # 直接在事件循环里跑会把整个 API 卡住（其它请求连带超时）。
+        content = await asyncio.to_thread(parse_document, raw, name)
     except ParseError as exc:
         raise HTTPException(400, str(exc)) from exc
     try:

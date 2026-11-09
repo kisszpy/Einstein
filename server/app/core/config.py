@@ -54,6 +54,19 @@ class Settings(BaseSettings):
     rerank_model: str = "reranker"
     rerank_api_key: str = ""
     rerank_model_dir: str = ""      # onnx 模型目录（含 model.onnx + tokenizer）
+    # OCR（图片与扫描件取字）：auto（配了模型走视觉模型，否则看 pytesseract）
+    # | vision（OpenAI 兼容多模态端点）| tesseract（本地）| off
+    ocr_provider: str = "auto"
+    # 空 = 跟随 llm_base_url / llm_api_key。视觉模型常与聊天模型同一个端点，
+    # 但本地起两个（文本 8080、视觉 8082）更常见，所以留了单独的覆盖位。
+    ocr_base_url: str = ""
+    ocr_api_key: str = ""
+    ocr_model: str = ""             # 必须支持图片输入，如 qwen2.5-vl-7b
+    ocr_timeout: float = 120.0      # 一页扫描件的视觉推理可能几十秒
+    ocr_max_tokens: int = 4096      # 单图最多转录多少 token（约 4000 汉字）
+    ocr_max_side: int = 2000        # 长边缩到这个像素再发，0 = 不缩
+    ocr_max_pages: int = 20         # 扫描件最多 OCR 前 N 页，防止 200 页跑一下午
+    ocr_lang: str = "chi_sim+eng"   # 仅 tesseract 用，需装对应语言包
     # 限流（每分钟；0 = 不限）。Redis 计数，Redis 不可用自动回落内存
     ratelimit_enabled: bool = True
     ratelimit_login: int = 10       # 登录尝试，按 IP+账号
