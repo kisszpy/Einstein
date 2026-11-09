@@ -18,12 +18,29 @@ class EvalItemIn(BaseModel):
     expected_doc: str = ""
     expected_contains: list[str] = Field(default_factory=list)
     expected_text: str = ""
+    # 负例：库里没有答案，正确行为是判为未命中。用来证明"不乱答"
+    expect_miss: bool = False
 
 
 class EvalSetIn(BaseModel):
     kb_id: str
     name: str
     items: list[EvalItemIn]
+
+
+@router.post("/sets/{set_id}/items")
+async def append_item(
+    set_id: str, req: EvalItemIn,
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> dict:
+    """追加一条用例。对话里点「差评 → 建用例」时走这里，不用重建整个集合。"""
+    _require_visible(set_id, ws, uid)
+    if not req.query.strip():
+        raise HTTPException(400, "问题不能为空")
+    es = eval_service.append_item(set_id, eval_service.EvalItem(**req.model_dump()))
+    if es is None:
+        raise HTTPException(404, "评测集不存在")
+    return eval_service.set_payload(es)
 
 
 def _visible_ids(ws: str, uid: str) -> set[str]:

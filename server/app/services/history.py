@@ -54,10 +54,11 @@ class HistoryStore:
     # ---------- 会话 ----------
     def upsert_conversation(
         self, conversation_id: str, user_text: str, assistant_text: str, title: str,
-        workspace_id: str = "default", owner_id: str = "",
+        workspace_id: str = "default", owner_id: str = "", *, append_user: bool = True,
     ) -> Conversation:
         conv = self.repo.upsert_conversation(
             conversation_id, user_text, assistant_text, title, workspace_id, owner_id,
+            append_user=append_user,
         )
         self.repo.save()
         return conv

@@ -36,7 +36,7 @@ def _new_id() -> str:
 class HistoryRepository(Protocol):
     def upsert_conversation(
         self, conversation_id: str, user_text: str, assistant_text: str, title: str,
-        workspace_id: str = "default", owner_id: str = "",
+        workspace_id: str = "default", owner_id: str = "", *, append_user: bool = True,
     ) -> Conversation: ...
     def list_conversations(
         self, workspace_id: str | None = None, owner_id: str | None = None,
@@ -122,7 +122,7 @@ class JsonHistoryRepository:
     # ---- 会话 ----
     def upsert_conversation(
         self, conversation_id: str, user_text: str, assistant_text: str, title: str,
-        workspace_id: str = "default", owner_id: str = "",
+        workspace_id: str = "default", owner_id: str = "", *, append_user: bool = True,
     ) -> Conversation:
         now = _now()
         with self._lock:
@@ -133,7 +133,8 @@ class JsonHistoryRepository:
                     workspace_id=workspace_id, owner_id=owner_id,
                 )
                 self.conversations[conversation_id] = conv
-            conv.messages.append(StoredMessage("user", user_text, now))
+            if append_user:
+                conv.messages.append(StoredMessage("user", user_text, now))
             conv.messages.append(StoredMessage("assistant", assistant_text, now))
             conv.message_count = len(conv.messages)
             conv.updated_at = now
@@ -321,7 +322,7 @@ class SqlHistoryRepository:
     # ---- 会话 ----
     def upsert_conversation(
         self, conversation_id: str, user_text: str, assistant_text: str, title: str,
-        workspace_id: str = "default", owner_id: str = "",
+        workspace_id: str = "default", owner_id: str = "", *, append_user: bool = True,
     ) -> Conversation:
         now = _now()
         with self.db.transaction():
@@ -345,13 +346,14 @@ class SqlHistoryRepository:
                 (conversation_id,),
             )
             start = int(base if base is not None else -1) + 1
+            rows = [(_new_id(), conversation_id, "assistant", assistant_text,
+                     start + (1 if append_user else 0), now)]
+            if append_user:
+                rows.insert(0, (_new_id(), conversation_id, "user", user_text, start, now))
             self.db.executemany(
                 "INSERT INTO messages (id, conversation_id, role, content, seq, created_at)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
-                [
-                    (_new_id(), conversation_id, "user", user_text, start, now),
-                    (_new_id(), conversation_id, "assistant", assistant_text, start + 1, now),
-                ],
+                rows,
             )
             total = self.db.scalar(
                 "SELECT count(*) AS n FROM messages WHERE conversation_id = ?", (conversation_id,),

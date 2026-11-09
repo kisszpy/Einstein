@@ -144,9 +144,21 @@ class OnnxRerank:
 
 
 def get_reranker() -> RerankProvider:
-    """按配置构造 provider；构造失败一律退 none。"""
+    """按配置构造 provider；构造失败一律退 none。
+
+    auto（默认）：配了端点走 http，配了 onnx 目录走 onnx，都没有才关闭。
+    这样"装了就生效"，不必让用户再回来改一个配置项——重排默认关着，
+    代码却按"已重排"的语义写，是之前排序质量上不去的直接原因。
+    """
     settings = get_settings()
-    kind = (settings.rerank_provider or "none").lower()
+    kind = (settings.rerank_provider or "auto").lower()
+    if kind == "auto":
+        if settings.rerank_endpoint:
+            kind = "http"
+        elif settings.rerank_model_dir:
+            kind = "onnx"
+        else:
+            return NoopRerank()
     if kind == "http" and settings.rerank_endpoint:
         return HttpRerank(settings.rerank_endpoint, settings.rerank_model,
                           settings.rerank_api_key)

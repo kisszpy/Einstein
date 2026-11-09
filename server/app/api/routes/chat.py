@@ -51,6 +51,9 @@ class ChatRequest(BaseModel):
     kb_ids: list[str] = []
     # 联网：auto 按需判断（默认）/ on 本轮必查 / off 本轮不查
     web_mode: str = web_augment.MODE_AUTO
+    # 重新生成：保留旧答案（作为另一个版本），只补一条新的助手消息，
+    # 且不让模型看见自己上一版答案（否则它会复读）
+    regenerate: bool = False
 
 
 def _sse(event: str, data: dict) -> str:
@@ -121,6 +124,13 @@ async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[st
         if existing is not None and (existing.workspace_id != ws or existing.owner_id != uid):
             conversation_id = uuid.uuid4().hex
     yield _sse("meta", {"conversation_id": conversation_id})
+
+    if req.regenerate:
+        # 末尾可能是上一版答案：截到最后一个 user，模型只看到"问题 + 更早的上下文"
+        msgs = list(req.messages)
+        while len(msgs) > 1 and msgs[-1].role == "assistant":
+            msgs.pop()
+        req = req.model_copy(update={"messages": msgs})
 
     # 所有耗时环节（判定联网、检索、RAG、生成）都在生产者任务里跑，
     # 消费端 15 秒拿不到事件就发一帧注释心跳——否则首字延迟长时
@@ -256,6 +266,7 @@ async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[st
                         title=user_text[:20] or "新会话",
                         workspace_id=ws,
                         owner_id=uid,
+                        append_user=not req.regenerate,
                     )
                     history_store.save()
                 except Exception as exc:  # noqa: BLE001 — 持久化失败不回滚回答

@@ -41,8 +41,9 @@ class Settings(BaseSettings):
     retrieval_min_score: float = 0.35
     # 同一文档最多贡献几个片段：结构重复的文档（制度/合同模板）会占满名额
     retrieval_max_per_doc: int = 2
-    # 重排序：none 关闭；http 走 OpenAI 兼容 /rerank 端点；onnx 本机 bge-reranker
-    rerank_provider: str = "none"
+    # 重排序：auto（自动：配了端点走 http、配了目录走 onnx、都没有则关）
+    # | none | http（OpenAI 兼容 /rerank）| onnx（本机 bge-reranker）
+    rerank_provider: str = "auto"
     rerank_endpoint: str = ""       # 如 http://127.0.0.1:8080/v1/rerank
     rerank_model: str = "reranker"
     rerank_api_key: str = ""

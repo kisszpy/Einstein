@@ -65,6 +65,9 @@ class EvalItem:
     expected_doc: str = ""
     expected_contains: list[str] = field(default_factory=list)
     expected_text: str = ""  # 命中切片须包含的原文片段（比文档名更细，单文档库也能区分）
+    # 负例：库里确实没有答案，正确行为是"未命中/回答不知道"。
+    # 没有负例的评测集只能证明"能召回"，证明不了"不乱答"。
+    expect_miss: bool = False
 
 
 @dataclass
@@ -141,6 +144,18 @@ def add_set(kb_id: str, name: str, items: list[EvalItem]) -> EvalSet:
     return es
 
 
+def append_item(set_id: str, item: EvalItem) -> EvalSet | None:
+    """往已有集合追加一条用例。差评回流评测集走这条路径。"""
+    registry = _registry()
+    with _lock:
+        es = registry.get(set_id)
+        if es is None:
+            return None
+        es.items.append(item)
+        _save()
+    return es
+
+
 def update_set(set_id: str, name: str | None = None, items: list[EvalItem] | None = None) -> EvalSet | None:
     registry = _registry()
     es = registry.get(set_id)
@@ -206,6 +221,27 @@ async def run_eval(
 
     for item in es.items:
         hits = await search(store, [es.kb_id], item.query, top_k=EVAL_TOP_K, mode=mode)  # type: ignore[arg-type]
+        if item.expect_miss:
+            # 负例只测检索层：库外问题不该被"最相似的 3 条"糊弄过去。
+            # 不做生成，省 token，也避免把"模型很会说"当成"系统很准"。
+            results.append(
+                {
+                    "query": item.query,
+                    "expected_doc": "",
+                    "expected_text": "",
+                    "expected_contains": [],
+                    "expect_miss": True,
+                    "rank": None,
+                    "hit": None,
+                    "negative_pass": len(hits) == 0,
+                    "sources": [h.document_name for h in hits],
+                    "answer": "（负例，跳过回答）",
+                    "answer_pass": None,
+                    "faithful": None,
+                    "faith_reason": None,
+                }
+            )
+            continue
         rank = _judge_rank(item.expected_doc, item.expected_text, hits)
 
         answer = ""
@@ -237,6 +273,7 @@ async def run_eval(
                 "expected_doc": item.expected_doc,
                 "expected_text": item.expected_text,
                 "expected_contains": item.expected_contains,
+                "expect_miss": False,
                 "rank": rank,
                 "hit": rank is not None,
                 "sources": [h.document_name for h in hits],
@@ -248,10 +285,12 @@ async def run_eval(
         )
 
     duration_ms = (time.perf_counter() - t0) * 1000
-    n = len(results)
-    ranks = [r["rank"] for r in results if r["rank"] is not None]
-    answer_items = [r for r in results if r["answer_pass"] is not None]
-    faith_items = [r for r in results if r["faithful"] is not None]
+    positives = [r for r in results if not r.get("expect_miss")]
+    negatives = [r for r in results if r.get("expect_miss")]
+    n = len(positives)
+    ranks = [r["rank"] for r in positives if r["rank"] is not None]
+    answer_items = [r for r in positives if r["answer_pass"] is not None]
+    faith_items = [r for r in positives if r["faithful"] is not None]
 
     # context precision：命中时排名越靠前越好（P@rank 的均值）；未命中记 0
     ctx_precision = (
@@ -266,7 +305,15 @@ async def run_eval(
         "mode": mode or "default",
         "ran_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "duration_ms": round(duration_ms),
-        "total": n,
+        "total": len(results),
+        "positive_total": n,
+        "negative_total": len(negatives),
+        # 负例通过率 = 库外问题被判为未命中的比例。没有负例时为 None（而不是 0）
+        "negative_pass_rate": (
+            round(sum(1 for r in negatives if r["negative_pass"]) / len(negatives), 3)
+            if negatives
+            else None
+        ),
         "recall_at_1": round(sum(1 for r in ranks if r == 1) / n, 3) if n else 0,
         "recall_at_k": round(len(ranks) / n, 3) if n else 0,
         "mrr": round(sum(1.0 / r for r in ranks) / n, 3) if n else 0,
