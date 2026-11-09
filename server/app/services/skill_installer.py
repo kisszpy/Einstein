@@ -383,8 +383,14 @@ def parse_frontmatter(text: str) -> tuple[dict[str, object], str]:
     return fields, body
 
 
-def _skill_id(workspace_id: str, repo: str, subpath: str) -> str:
-    digest = hashlib.sha1(f"{workspace_id}|{repo}|{subpath}".encode("utf-8")).hexdigest()
+def _skill_id(workspace_id: str, repo: str, subpath: str, owner_id: str = "") -> str:
+    """技能 id = 工作区 + 仓库 + 目录（+ 归属）。
+
+    归属拼进种子是必须的：同一空间的两个人装同一个技能，如果不区分归属会
+    命中同一个 id、互相覆盖内容。预置安装 owner 为空，id 与历史一致。
+    """
+    seed = f"{workspace_id}|{repo}|{subpath}" + (f"|{owner_id}" if owner_id else "")
+    digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()
     return f"gh-{digest[:10]}"
 
 
@@ -525,6 +531,7 @@ def install(
     url: str,
     ref: str = "",
     path: str = "",
+    owner_id: str = "",
 ) -> tuple[Skill, bool]:
     """安装或更新技能，返回 (技能, 是否新建)。"""
     info, tree, candidates, subpath = _plan(url, ref, path)
@@ -553,7 +560,7 @@ def install(
     if len(prompt) > MAX_PROMPT_CHARS:
         prompt = prompt[:MAX_PROMPT_CHARS] + "\n\n（技能说明较长，已截断；完整内容可在技能文件中查看）"
 
-    skill_id = _skill_id(workspace_id, info.repo, candidate.path)
+    skill_id = _skill_id(workspace_id, info.repo, candidate.path, owner_id)
     manifest = _write_files(skill_id, payload)
 
     name = str(front.get("name") or candidate.name or info.repo).strip()[:80]
@@ -583,6 +590,7 @@ def install(
         files=manifest,
         installed_at=now,
         updated_at=now,
+        owner_id=owner_id,
     )
     created = store.upsert(skill)
     store.save()
@@ -625,7 +633,9 @@ def export_zip(skill: Skill) -> bytes:
 MAX_IMPORT_BYTES = 50 * 1024 * 1024  # zip 解压后总大小上限（防炸弹）
 
 
-def import_zip(data: bytes, store: SkillStore, workspace_id: str) -> Skill:
+def import_zip(
+    data: bytes, store: SkillStore, workspace_id: str, owner_id: str = "",
+) -> Skill:
     """从 zip 导入技能：skill.json 元数据 + 其余文件原样落盘。"""
     import io
     import zipfile
@@ -648,6 +658,7 @@ def import_zip(data: bytes, store: SkillStore, workspace_id: str) -> Skill:
             system_prompt=str(meta.get("system_prompt") or "")[:MAX_PROMPT_CHARS],
             tools=[str(t) for t in meta.get("tools", [])],
             workspace_id=workspace_id,
+            owner_id=owner_id,
         )
         skill.source = "zip"
         skill.source_url = str(meta.get("source_url") or "")

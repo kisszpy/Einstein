@@ -66,6 +66,11 @@ def workspace_role(user: users.User, ws_id: str) -> str | None:
     return None
 
 
+def current_uid(user: users.User = Depends(current_user)) -> str:
+    """当前用户 id。资源级隔离（会话/知识库/专家/技能/MCP）靠它做归属过滤。"""
+    return user.id
+
+
 def current_workspace(
     request: Request,
     x_workspace: str | None = Header(default=None),

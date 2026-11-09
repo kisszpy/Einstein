@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
-from app.api.deps import current_workspace
+from app.api.deps import current_uid, current_workspace
 from app.services import web_augment
 from app.services.experts import get_expert_store
 from app.services.history import get_history_store
@@ -68,7 +68,7 @@ def _to_lc_messages(messages: list[ChatMessage], system_text: str) -> list:
 
 
 def _compose_system(
-    expert_id: str | None, kb_hit: bool, ws: str
+    expert_id: str | None, kb_hit: bool, ws: str, uid: str
 ) -> tuple[str, float, list[str], list[str]]:
     """合成系统提示，返回 (system, temperature, kb_ids, tool_ids)。
 
@@ -82,16 +82,16 @@ def _compose_system(
     store = get_store()
 
     if expert_id:
-        expert = get_expert_store().get(expert_id)
-        if expert and expert.enabled and expert.workspace_id == ws:
+        expert = get_expert_store().visible(expert_id, ws, uid)
+        if expert and expert.enabled:
             temperature = expert.temperature
-            kb_ids = store.owned_kb_ids(ws, list(expert.kb_ids))
+            kb_ids = store.owned_kb_ids(ws, list(expert.kb_ids), uid)
             tool_ids = list(expert.tool_ids)
             if expert.persona:
                 parts.append(expert.persona)
             skill_store = get_skill_store()
             for sid in expert.skill_ids:
-                skill = skill_store.get(sid)
+                skill = skill_store.visible(sid, ws, uid)
                 if skill and skill.enabled and skill.system_prompt:
                     block = f"【{skill.name}】\n{skill.system_prompt}"
                     # 安装的技能包可能带参考资料：短文本内联，长资源只提示存在
@@ -112,8 +112,13 @@ def _compose_system(
     return "\n\n".join(parts), temperature, kb_ids, tool_ids
 
 
-async def _event_stream(req: ChatRequest, ws: str) -> AsyncIterator[str]:
+async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[str]:
     conversation_id = req.conversation_id or uuid.uuid4().hex
+    if req.conversation_id:
+        # 续写别人的会话属于越权写入：直接开新会话，不提示也不泄露原会话存在
+        existing = get_history_store().get_conversation(req.conversation_id)
+        if existing is not None and (existing.workspace_id != ws or existing.owner_id != uid):
+            conversation_id = uuid.uuid4().hex
     yield _sse("meta", {"conversation_id": conversation_id})
 
     # 所有耗时环节（判定联网、检索、RAG、生成）都在生产者任务里跑，
@@ -127,9 +132,9 @@ async def _event_stream(req: ChatRequest, ws: str) -> AsyncIterator[str]:
         try:
             store = get_store()
             user_text = req.messages[-1].content
-            req_kb_ids = store.owned_kb_ids(ws, req.kb_ids or [])
+            req_kb_ids = store.owned_kb_ids(ws, req.kb_ids or [], uid)
             system_text, temperature, expert_kb_ids, expert_tool_ids = _compose_system(
-                req.expert_id, kb_hit=bool(req_kb_ids), ws=ws
+                req.expert_id, kb_hit=bool(req_kb_ids), ws=ws, uid=uid
             )
             # 显式传的 kb_ids 优先于专家挂载
             effective_kb_ids = req_kb_ids or expert_kb_ids
@@ -249,6 +254,7 @@ async def _event_stream(req: ChatRequest, ws: str) -> AsyncIterator[str]:
                         assistant_text="".join(answer_parts),
                         title=user_text[:20] or "新会话",
                         workspace_id=ws,
+                        owner_id=uid,
                     )
                     history_store.save()
                 except Exception as exc:  # noqa: BLE001 — 持久化失败不回滚回答
@@ -283,14 +289,16 @@ async def _event_stream(req: ChatRequest, ws: str) -> AsyncIterator[str]:
 
 
 @router.post("")
-async def chat(req: ChatRequest, ws: str = Depends(current_workspace)) -> StreamingResponse:
+async def chat(
+    req: ChatRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> StreamingResponse:
     """SSE 流式对话。
 
     事件：meta -> web(状态) -> [citations] -> (reasoning|delta)* -> done | error
     web 的 status 依次为 checking / searching / done / skipped / failed。
     """
     return StreamingResponse(
-        _event_stream(req, ws),
+        _event_stream(req, ws, uid),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

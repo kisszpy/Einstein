@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.api.deps import current_workspace
+from app.api.deps import current_uid, current_workspace
 from app.services.agent import chunk_text, run_agent
 from app.services.capabilities import AgentContext, sandbox
 from app.services.history import get_history_store
@@ -36,12 +36,16 @@ def _sse(event: str, data: dict) -> str:
 
 
 @router.get("/tools")
-async def get_tools(ws: str = Depends(current_workspace)) -> dict:
-    return list_tools(ws)
+async def get_tools(
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> dict:
+    return list_tools(ws, uid)
 
 
 @router.get("/runs")
-async def list_runs(ws: str = Depends(current_workspace)) -> list[dict]:
+async def list_runs(
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> list[dict]:
     history = get_history_store()
     return [
         {
@@ -57,18 +61,20 @@ async def list_runs(ws: str = Depends(current_workspace)) -> list[dict]:
             "session_id": history.session_key(r),
             "turn": r.turn,
         }
-        for r in history.list_agent_runs(ws)
+        for r in history.list_agent_runs(ws, uid)
     ]
 
 
 @router.delete("/runs/{run_id}")
-async def delete_run(run_id: str, ws: str = Depends(current_workspace)) -> dict:
+async def delete_run(
+    run_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> dict:
     """删除一个任务会话（含所有追问轮次）。参数可以是会话 id 或任一轮次的 run id。"""
     history = get_history_store()
-    runs = history.list_session_runs(run_id, ws)
+    runs = history.list_session_runs(run_id, ws, uid)
     if not runs:
         raise HTTPException(status_code=404, detail="run not found")
-    deleted = history.delete_session(run_id, ws)
+    deleted = history.delete_session(run_id, ws, uid)
     return {"ok": True, "deleted": deleted}
 
 
@@ -88,7 +94,9 @@ async def approve_tool(payload: dict, ws: str = Depends(current_workspace)) -> d
     return {"ok": True, "session_id": session_id, "tool": tool}
 
 
-def _resolve_mounts(ws: str, req: AgentRunRequest) -> tuple[str, list[str], float | None, list[str]]:
+def _resolve_mounts(
+    ws: str, uid: str, req: AgentRunRequest,
+) -> tuple[str, list[str], float | None, list[str]]:
     """解析人设与技能挂载，返回 (persona 段, pinned 技能名, temperature, 专家 kb_ids)。
 
     规则：显式请求参数覆盖专家默认；技能集合 = 去重(req ∪ expert.skill_ids)；
@@ -104,24 +112,30 @@ def _resolve_mounts(ws: str, req: AgentRunRequest) -> tuple[str, list[str], floa
     default_skill_ids: list[str] = []
     expert_kb_ids: list[str] = []
     if req.expert_id:
-        expert = get_expert_store().get(req.expert_id)
-        if expert and expert.enabled and expert.workspace_id == ws:
+        expert = get_expert_store().visible(req.expert_id, ws, uid)
+        if expert and expert.enabled:
             if expert.persona.strip():
                 persona = f"【人设】{expert.persona.strip()}"
             temperature = expert.temperature
             default_skill_ids = list(expert.skill_ids)
             expert_kb_ids = list(expert.kb_ids)
 
-    skill_ids = list(dict.fromkeys([*req.skill_ids, *default_skill_ids]))
+    # 点名技能与专家挂载技能都要收敛到「调用者可见」：别人的自定义技能
+    # 不能靠 id 挂进来（预置 '' 与自己创建的才通过）
+    from app.services.skills import get_skill_store
+
+    skill_store = get_skill_store()
+    skill_ids = [
+        sid for sid in dict.fromkeys([*req.skill_ids, *default_skill_ids])
+        if skill_store.visible(sid, ws, uid)
+    ]
 
     # PPT 类任务自动钉装 slidep 版式技能：本地模型极少主动渐进披露去读
     # SKILL.md，不钉装则 DSL 语法与设计规范根本不进上下文——质量与
     # 「不用脚本手搓」的合规都塌。钉装 = SKILL.md 全文强制装载。
     task_text = req.task or ""
     if any(k in task_text for k in ("PPT", "ppt", "幻灯", "演示文稿", "slide", "deck", "Slides")):
-        from app.services.skills import get_skill_store
-
-        for sk in get_skill_store().list_skills(ws):
+        for sk in skill_store.list_skills(ws, uid):
             if sk.enabled and sk.name == "slidep 演示文稿设计" and sk.id not in skill_ids:
                 skill_ids.append(sk.id)
                 break
@@ -130,11 +144,11 @@ def _resolve_mounts(ws: str, req: AgentRunRequest) -> tuple[str, list[str], floa
     return persona, pinned, temperature, expert_kb_ids
 
 
-async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
+async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterator[str]:
     history = get_history_store()
     # 会话：追问沿用同一会话，新任务分配新 id
     session_id = req.session_id or uuid.uuid4().hex[:12]
-    prior_runs = history.list_session_runs(session_id, ws) if req.session_id else []
+    prior_runs = history.list_session_runs(session_id, ws, uid) if req.session_id else []
     run_id = uuid.uuid4().hex
     print(
         f"[agent-stream] {run_id} start session={session_id} turn={len(prior_runs) + 1} task={req.task[:40]!r}",
@@ -149,10 +163,9 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
             lc_history.append({"role": "assistant", "content": r.answer[:1500]})
     try:
         # 只允许检索当前工作区的知识库；项目名给定时必须已存在
-        persona, pinned_skills, temperature, expert_kb_ids = _resolve_mounts(ws, req)
-        kb_ids = get_store().owned_kb_ids(ws, [*req.kb_ids, *expert_kb_ids])
-
-        ctx = AgentContext(workspace_id=ws, project=req.project)
+        persona, pinned_skills, temperature, expert_kb_ids = _resolve_mounts(ws, uid, req)
+        kb_ids = get_store().owned_kb_ids(ws, [*req.kb_ids, *expert_kb_ids], uid)
+        ctx = AgentContext(workspace_id=ws, owner_id=uid, project=req.project)
         ctx.approved_tools = {t for (sid, t) in _APPROVALS if sid == session_id}
         if ctx.project:
             try:
@@ -254,6 +267,7 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
             artifacts=artifacts,
             session_id=session_id,
             turn=len(prior_runs) + 1,
+            owner_id=uid,
         )
     except Exception as exc:  # noqa: BLE001 — 统一转 SSE error 事件
         print(f"[agent-stream] {run_id} run-error: {type(exc).__name__}: {exc}", flush=True)
@@ -261,10 +275,12 @@ async def _event_stream(req: AgentRunRequest, ws: str) -> AsyncIterator[str]:
 
 
 @router.post("/run")
-async def run(req: AgentRunRequest, ws: str = Depends(current_workspace)) -> StreamingResponse:
+async def run(
+    req: AgentRunRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> StreamingResponse:
     """SSE 运行智能体。事件：meta -> (step|artifact)* -> answer_start -> delta* -> done | error。"""
     return StreamingResponse(
-        _event_stream(req, ws),
+        _event_stream(req, ws, uid),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

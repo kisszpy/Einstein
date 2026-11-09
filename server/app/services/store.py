@@ -47,23 +47,26 @@ class KBStore:
         return self.repo.list_chunks()
 
     # ---------- 知识库 ----------
-    def add_kb(self, name: str, workspace_id: str = DEFAULT_WS) -> KnowledgeBase:
-        kb = self.repo.create_kb(name, workspace_id)
+    def add_kb(self, name: str, workspace_id: str = DEFAULT_WS, owner_id: str = "") -> KnowledgeBase:
+        kb = self.repo.create_kb(name, workspace_id, owner_id=owner_id)
         self.repo.save()
         return kb
 
     def get_kb(self, kb_id: str) -> KnowledgeBase | None:
         return self.repo.get_kb(kb_id)
 
-    def owns(self, kb_id: str, workspace_id: str) -> bool:
-        return self.repo.owns(kb_id, workspace_id)
+    def owns(self, kb_id: str, workspace_id: str, owner_id: str | None = None) -> bool:
+        return self.repo.owns(kb_id, workspace_id, owner_id)
 
-    def owned_kb_ids(self, workspace_id: str, kb_ids: list[str]) -> list[str]:
-        """把外部传入的 kb_ids 收敛到当前工作区实际拥有的集合，防止跨租户越权检索。"""
-        return [i for i in kb_ids if self.repo.owns(i, workspace_id)]
+    def owned_kb_ids(self, workspace_id: str, kb_ids: list[str], owner_id: str | None = None) -> list[str]:
+        """把外部传入的 kb_ids 收敛到「当前工作区 + 当前用户」可见的集合。
 
-    def list_kbs(self, workspace_id: str | None = None) -> list[KnowledgeBase]:
-        return self.repo.list_kbs(workspace_id)
+        两个维度缺一不可：workspace 防跨空间越权，owner 防同空间里看别人的库。
+        """
+        return [i for i in kb_ids if self.repo.owns(i, workspace_id, owner_id)]
+
+    def list_kbs(self, workspace_id: str | None = None, owner_id: str | None = None) -> list[KnowledgeBase]:
+        return self.repo.list_kbs(workspace_id, owner_id)
 
     def delete_kb(self, kb_id: str) -> int:
         """删除知识库及其文档/切片，返回被删文档数。"""

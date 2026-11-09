@@ -273,10 +273,18 @@ async def delete_user(user_id: str, admin: users.User = Depends(current_admin)) 
         raise HTTPException(400, "至少保留一个所有者账号")
     sessions.get_session_store().revoke_user(target.id)
     sessions.get_session_store().save()
-    # 成员关系随账号一并清理（个人空间保留为孤立空间，不删数据）
+    # 成员关系随账号一并清理；个人空间也一并删掉（否则切换器里堆一排
+    # 「某某 的空间」的孤儿空间，资源本体不跟着删，避免误删数据）
+    personal = members.get_member_store().personal_of(target.id)
     for item in list(members.get_member_store().memberships_of(target.id)):
         members.get_member_store().remove(target.id, item.workspace_id)
     members.get_member_store().save()
+    if personal is not None:
+        members.get_member_store().drop_workspace(personal.workspace_id)
+        members.get_member_store().save()
+        ws_store = workspaces.get_workspace_store()
+        if ws_store.delete(personal.workspace_id):
+            ws_store.save()
     store.delete(user_id)
     store.save()
     return {"ok": True}

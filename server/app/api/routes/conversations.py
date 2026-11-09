@@ -1,15 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.api.deps import current_workspace
+from app.api.deps import current_uid, current_workspace
 from app.services.history import get_history_store
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 
-def _require_own(conv_id: str, ws: str):
+def _require_own(conv_id: str, ws: str, uid: str):
+    """会话是私有数据：空间不对或不是本人创建，一律 404（不暴露存在性）。"""
     conv = get_history_store().get_conversation(conv_id)
-    if conv is None or conv.workspace_id != ws:
+    if conv is None or conv.workspace_id != ws or conv.owner_id != uid:
         raise HTTPException(404, "会话不存在")
     return conv
 
@@ -17,12 +18,12 @@ def _require_own(conv_id: str, ws: str):
 @router.get("")
 async def list_conversations(
     q: str | None = None, archived: bool = False,
-    ws: str = Depends(current_workspace),
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> list[dict]:
     """q 为空列出未归档会话；给了 q 就全文搜索（标题+消息正文）。"""
     history = get_history_store()
-    convs = (history.search_conversations(ws, q, include_archived=archived)
-             if q else history.list_conversations(ws))
+    convs = (history.search_conversations(ws, q, include_archived=archived, owner_id=uid)
+             if q else history.list_conversations(ws, uid))
     if archived and not q:
         convs = [c for c in convs if c.archived]
     elif not q:
@@ -49,10 +50,11 @@ class ConversationPatch(BaseModel):
 @router.patch("/{conversation_id}")
 async def patch_conversation(
     conversation_id: str, req: ConversationPatch, ws: str = Depends(current_workspace),
+    uid: str = Depends(current_uid),
 ) -> dict:
     """重命名 / 归档 / 置顶，字段可选只改传了的。"""
     history = get_history_store()
-    _require_own(conversation_id, ws)
+    _require_own(conversation_id, ws, uid)
     conv = None
     if req.title is not None:
         if not req.title.strip():
@@ -68,8 +70,10 @@ async def patch_conversation(
 
 
 @router.get("/{conversation_id}")
-async def get_conversation(conversation_id: str, ws: str = Depends(current_workspace)) -> dict:
-    conv = _require_own(conversation_id, ws)
+async def get_conversation(
+    conversation_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> dict:
+    conv = _require_own(conversation_id, ws, uid)
     return {
         "id": conv.id,
         "title": conv.title,
@@ -81,7 +85,9 @@ async def get_conversation(conversation_id: str, ws: str = Depends(current_works
 
 
 @router.delete("/{conversation_id}")
-async def delete_conversation(conversation_id: str, ws: str = Depends(current_workspace)) -> dict:
-    _require_own(conversation_id, ws)
+async def delete_conversation(
+    conversation_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> dict:
+    _require_own(conversation_id, ws, uid)
     get_history_store().delete_conversation(conversation_id)
     return {"deleted": conversation_id}

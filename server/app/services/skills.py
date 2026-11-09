@@ -97,6 +97,8 @@ class Skill:
     # ---- 版本管理（semver + 快照回滚） ----
     version: str = "0.1.0"
     versions: list[dict] = field(default_factory=list)  # [{version, description, system_prompt, tools, commit, saved_at, note}]
+    # 归属账号：'' = 预置技能（内置/GitHub 预装，全员可见）；其余为安装者 id
+    owner_id: str = ""
 
 
 class SkillStore:
@@ -110,18 +112,39 @@ class SkillStore:
             if s["id"] not in self.skills:
                 self.skills[s["id"]] = Skill(**s)
 
-    def list_skills(self, workspace_id: str | None = None) -> list[Skill]:
-        """内置技能全局可见，自定义技能只在所属工作区内可见。"""
+    def list_skills(
+        self, workspace_id: str | None = None, user_id: str | None = None,
+    ) -> list[Skill]:
+        """内置技能全局可见；其余技能限所属工作区，给了 user_id 时再限归属。"""
         rows = list(self.skills.values())
         if workspace_id:
             rows = [s for s in rows if s.builtin or s.workspace_id == workspace_id]
+        if user_id is not None:
+            rows = [s for s in rows if s.builtin or s.owner_id in ("", user_id)]
         return rows
+
+    def visible(self, skill_id: str, workspace_id: str, user_id: str) -> Skill | None:
+        """按 id 取技能并校验可见性；不可见一律当不存在。"""
+        skill = self.skills.get(skill_id)
+        if skill is None:
+            return None
+        if skill.builtin:
+            return skill
+        if skill.workspace_id != workspace_id:
+            return None
+        return skill if skill.owner_id in ("", user_id) else None
+
+    def can_edit(self, skill: Skill, user_id: str, is_admin: bool = False) -> bool:
+        """创建者能改自己的；预置技能（'' ）只有管理员能改。"""
+        if skill.owner_id == user_id:
+            return True
+        return skill.owner_id == "" and is_admin
 
     def get(self, skill_id: str) -> Skill | None:
         return self.skills.get(skill_id)
 
     def add(self, name: str, description: str, system_prompt: str,
-            tools: list[str], workspace_id: str = "default") -> Skill:
+            tools: list[str], workspace_id: str = "default", owner_id: str = "") -> Skill:
         skill = Skill(
             id=uuid.uuid4().hex[:12],
             name=name,
@@ -129,6 +152,7 @@ class SkillStore:
             system_prompt=system_prompt,
             tools=tools,
             workspace_id=workspace_id,
+            owner_id=owner_id,
         )
         self.skills[skill.id] = skill
         return skill

@@ -44,6 +44,8 @@ class Expert:
     suggestions: list[str] = field(default_factory=list)  # 推荐问题（点击即发送）
     status: str = "draft"     # draft | testing | live
     published_at: str = ""    # 首次上线时间
+    # 归属账号：'' = 预置专家（全员可见）；其余为创建者 id（仅本人可见）
+    owner_id: str = ""
 
 
 class ExpertStore:
@@ -52,11 +54,31 @@ class ExpertStore:
     def __init__(self) -> None:
         self.experts = {}
 
-    def list_experts(self, workspace_id: str | None = None) -> list[Expert]:
+    def list_experts(
+        self, workspace_id: str | None = None, user_id: str | None = None,
+    ) -> list[Expert]:
+        """列出空间内专家。给了 user_id 时再叠加归属：预置（''）+ 自己的。"""
         rows = list(self.experts.values())
         if workspace_id:
             rows = [e for e in rows if e.workspace_id == workspace_id]
+        if user_id is not None:
+            rows = [e for e in rows if e.owner_id in ("", user_id)]
         return rows
+
+    def visible(self, expert_id: str, workspace_id: str, user_id: str) -> Expert | None:
+        """按 id 取专家并校验可见性；不可见一律当不存在（防越权探测）。"""
+        expert = self.experts.get(expert_id)
+        if expert is None or expert.workspace_id != workspace_id:
+            return None
+        if expert.owner_id not in ("", user_id):
+            return None
+        return expert
+
+    def can_edit(self, expert: Expert, user_id: str, is_admin: bool = False) -> bool:
+        """创建者能改自己的；预置专家（'' ）只有管理员能改。"""
+        if expert.owner_id == user_id:
+            return True
+        return expert.owner_id == "" and is_admin
 
     def get(self, expert_id: str) -> Expert | None:
         return self.experts.get(expert_id)
@@ -76,6 +98,7 @@ class ExpertStore:
             greeting=kwargs.get("greeting", ""),  # type: ignore[arg-type]
             suggestions=kwargs.get("suggestions", []),  # type: ignore[arg-type]
             status=kwargs.get("status", "draft"),  # type: ignore[arg-type]
+            owner_id=kwargs.get("owner_id", ""),  # type: ignore[arg-type]
         )
         self.experts[expert.id] = expert
         return expert

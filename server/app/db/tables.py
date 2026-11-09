@@ -175,6 +175,8 @@ EXPERTS = Table(
     columns=(
         _c("id"),
         _c("workspace_id", default="'default'"),
+        # '' = 预置专家（全员可见）；其余为创建者 user_id（仅本人可见）
+        _c("owner_id", default="''"),
         _c("name"),
         _c("description", default="''"),
         _c("emoji", default="'🤖'"),
@@ -197,6 +199,8 @@ SKILLS = Table(
     columns=(
         _c("id"),
         _c("workspace_id", default="'default'"),
+        # '' = 预置技能（内置/GitHub 预装，全员可见）；其余为安装者 user_id
+        _c("owner_id", default="''"),
         _c("name"),
         _c("description", default="''"),
         _c("system_prompt", default="''"),
@@ -225,6 +229,8 @@ MCP_SERVERS = Table(
     columns=(
         _c("id"),
         _c("workspace_id", default="'default'"),
+        # '' = 平台预置连接（全员可见）；其余为添加者 user_id（仅本人可见）
+        _c("owner_id", default="''"),
         _c("name"),
         _c("transport", default="'stdio'"),
         _c("command", default="''"),
@@ -246,6 +252,8 @@ API_KEYS = Table(
     columns=(
         _c("id"),
         _c("workspace_id", default="'default'"),
+        # 签发者：密钥继承签发者的资源可见范围（防止一把 key 读遍整个空间）
+        _c("owner_id", default="''"),
         _c("name"),
         _c("key_hash"),
         _c("prefix", default="''"),

@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from app.db.engine import Database
 from app.db.tables import ddl_all as _domain_tables_ddl
 
@@ -201,7 +203,61 @@ _MIGRATION_007 = [
 # 存量数据由 `app/db/legacy.py` 从 domain_state 拆进新表（幂等）。
 _MIGRATION_008 = _domain_tables_ddl()
 
-MIGRATIONS: list[tuple[int, list[str]]] = [
+# 009：资源归属 owner_id —— 用户级隔离
+#
+# 原先所有资源只按 workspace 过滤，同一空间的两个用户互相全见。现在：
+# - 配置类资源（专家/技能/MCP/知识库）owner_id='' 表示系统预置、全员可见，
+#   其余为创建者 user_id，只有本人可见（管理员也不越权，与个人空间边界一致）；
+# - 运行类数据（会话/智能体运行）一律有 owner_id，只有创建者本人可见。
+#
+# 为什么用可调用对象而不是静态 SQL：`ddl_all()`（迁移 008）在新库上已经带着
+# owner_id 建表，静态 ALTER 会在新库重复加列报错。这里按「列是否存在」决定，
+# 老库补列、新库只建索引，两种库都幂等。
+_OWNER_TABLES = (
+    "conversations",
+    "agent_runs",
+    "knowledge_bases",
+    "experts",
+    "skills",
+    "mcp_servers",
+    "api_keys",
+)
+
+_OWNER_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_conv_owner ON conversations(owner_id, workspace_id)",
+    "CREATE INDEX IF NOT EXISTS idx_run_owner ON agent_runs(owner_id, workspace_id)",
+    "CREATE INDEX IF NOT EXISTS idx_kb_owner ON knowledge_bases(owner_id, workspace_id)",
+    "CREATE INDEX IF NOT EXISTS idx_experts_owner ON experts(owner_id)",
+    "CREATE INDEX IF NOT EXISTS idx_skills_owner ON skills(owner_id)",
+    "CREATE INDEX IF NOT EXISTS idx_mcp_owner ON mcp_servers(owner_id)",
+    "CREATE INDEX IF NOT EXISTS idx_apikeys_owner ON api_keys(owner_id)",
+]
+
+
+def _column_exists(db: Database, table: str, column: str) -> bool:
+    if db.dialect == "postgres":
+        row = db.query_one(
+            "SELECT count(*) AS n FROM information_schema.columns"
+            " WHERE table_name = ? AND column_name = ?",
+            (table, column),
+        )
+        return bool(row and int(row["n"] or 0))
+    return any(r.get("name") == column for r in db.query(f"PRAGMA table_info({table})"))
+
+
+def _migration_009(db: Database) -> list[str]:
+    statements = [
+        f"ALTER TABLE {table} ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''"
+        for table in _OWNER_TABLES
+        if not _column_exists(db, table, "owner_id")
+    ]
+    return statements + _OWNER_INDEXES
+
+
+# 迁移条目可以是静态语句列表，也可以是 (db) -> 语句列表 的函数（按现有结构决定 DDL）
+Migration = list[str] | Callable[[Database], list[str]]
+
+MIGRATIONS: list[tuple[int, Migration]] = [
     (1, _MIGRATION_001),
     (2, _MIGRATION_002),
     (3, _MIGRATION_003),
@@ -210,6 +266,7 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
     (6, _MIGRATION_006),
     (7, _MIGRATION_007),
     (8, _MIGRATION_008),
+    (9, _migration_009),
 ]
 
 _TYPE_TOKENS = {
@@ -256,7 +313,8 @@ def migrate(db: Database, target: int | None = None) -> list[int]:
     for number, statements in MIGRATIONS:
         if number <= version or number > limit:
             continue
-        db.execute_ddl(_render(statements, db.dialect))
+        ddl = statements(db) if callable(statements) else statements
+        db.execute_ddl(_render(ddl, db.dialect))
         db.execute(
             "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
             (number, _now()),

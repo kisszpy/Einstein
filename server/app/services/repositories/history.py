@@ -36,28 +36,37 @@ def _new_id() -> str:
 class HistoryRepository(Protocol):
     def upsert_conversation(
         self, conversation_id: str, user_text: str, assistant_text: str, title: str,
-        workspace_id: str = "default",
+        workspace_id: str = "default", owner_id: str = "",
     ) -> Conversation: ...
-    def list_conversations(self, workspace_id: str | None = None) -> list[Conversation]: ...
+    def list_conversations(
+        self, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> list[Conversation]: ...
     def rename_conversation(self, conversation_id: str, title: str) -> Conversation | None: ...
     def set_conversation_flags(
         self, conversation_id: str, *, archived: bool | None = None, pinned: bool | None = None,
     ) -> Conversation | None: ...
     def search_conversations(
         self, workspace_id: str, query: str, include_archived: bool = False,
+        owner_id: str | None = None,
     ) -> list[Conversation]: ...
     def get_conversation(self, conversation_id: str) -> Conversation | None: ...
     def delete_conversation(self, conversation_id: str) -> bool: ...
     def add_agent_run(
         self, task: str, tool_ids: list[str], steps: list[dict], answer: str, status: str,
         workspace_id: str = "default", project: str = "", artifacts: list[dict] | None = None,
-        session_id: str = "", turn: int = 1,
+        session_id: str = "", turn: int = 1, owner_id: str = "",
     ) -> AgentRun: ...
-    def list_agent_runs(self, workspace_id: str | None = None) -> list[AgentRun]: ...
+    def list_agent_runs(
+        self, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> list[AgentRun]: ...
     def get_agent_run(self, run_id: str) -> AgentRun | None: ...
     def delete_agent_run(self, run_id: str) -> bool: ...
-    def list_session_runs(self, session_id: str, workspace_id: str | None = None) -> list[AgentRun]: ...
-    def delete_session(self, session_id: str, workspace_id: str | None = None) -> int: ...
+    def list_session_runs(
+        self, session_id: str, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> list[AgentRun]: ...
+    def delete_session(
+        self, session_id: str, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> int: ...
     def save(self) -> None: ...
 
 
@@ -113,7 +122,7 @@ class JsonHistoryRepository:
     # ---- 会话 ----
     def upsert_conversation(
         self, conversation_id: str, user_text: str, assistant_text: str, title: str,
-        workspace_id: str = "default",
+        workspace_id: str = "default", owner_id: str = "",
     ) -> Conversation:
         now = _now()
         with self._lock:
@@ -121,7 +130,7 @@ class JsonHistoryRepository:
             if conv is None:
                 conv = Conversation(
                     id=conversation_id, title=title, created_at=now, updated_at=now,
-                    workspace_id=workspace_id,
+                    workspace_id=workspace_id, owner_id=owner_id,
                 )
                 self.conversations[conversation_id] = conv
             conv.messages.append(StoredMessage("user", user_text, now))
@@ -130,10 +139,14 @@ class JsonHistoryRepository:
             conv.updated_at = now
             return conv
 
-    def list_conversations(self, workspace_id: str | None = None) -> list[Conversation]:
+    def list_conversations(
+        self, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> list[Conversation]:
         rows = list(self.conversations.values())
         if workspace_id:
             rows = [c for c in rows if c.workspace_id == workspace_id]
+        if owner_id is not None:
+            rows = [c for c in rows if c.owner_id == owner_id]
         # 列表只给计数：返回副本并清空 messages，保证与 SQL 实现语义一致
         # （否则长会话列表会把全部正文带进列表接口）
         out = [replace(c, messages=[], message_count=len(c.messages)) for c in rows]
@@ -165,12 +178,15 @@ class JsonHistoryRepository:
 
     def search_conversations(
         self, workspace_id: str, query: str, include_archived: bool = False,
+        owner_id: str | None = None,
     ) -> list[Conversation]:
         q = query.strip().lower()
         hits: list[Conversation] = []
         with self._lock:
             for conv in self.conversations.values():
                 if workspace_id and conv.workspace_id != workspace_id:
+                    continue
+                if owner_id is not None and conv.owner_id != owner_id:
                     continue
                 if conv.archived and not include_archived:
                     continue
@@ -191,7 +207,7 @@ class JsonHistoryRepository:
     def add_agent_run(
         self, task: str, tool_ids: list[str], steps: list[dict], answer: str, status: str,
         workspace_id: str = "default", project: str = "", artifacts: list[dict] | None = None,
-        session_id: str = "", turn: int = 1,
+        session_id: str = "", turn: int = 1, owner_id: str = "",
     ) -> AgentRun:
         run = AgentRun(
             id=uuid.uuid4().hex[:12],
@@ -206,15 +222,20 @@ class JsonHistoryRepository:
             artifacts=artifacts or [],
             session_id=session_id,
             turn=turn,
+            owner_id=owner_id,
         )
         with self._lock:
             self.agent_runs[run.id] = run
         return run
 
-    def list_agent_runs(self, workspace_id: str | None = None) -> list[AgentRun]:
+    def list_agent_runs(
+        self, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> list[AgentRun]:
         rows = list(self.agent_runs.values())
         if workspace_id:
             rows = [r for r in rows if r.workspace_id == workspace_id]
+        if owner_id is not None:
+            rows = [r for r in rows if r.owner_id == owner_id]
         return sorted(rows, key=lambda r: r.created_at, reverse=True)
 
     def get_agent_run(self, run_id: str) -> AgentRun | None:
@@ -224,7 +245,9 @@ class JsonHistoryRepository:
         with self._lock:
             return self.agent_runs.pop(run_id, None) is not None
 
-    def list_session_runs(self, session_id: str, workspace_id: str | None = None) -> list[AgentRun]:
+    def list_session_runs(
+        self, session_id: str, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> list[AgentRun]:
         if not session_id:
             return []
         rows = [
@@ -233,10 +256,14 @@ class JsonHistoryRepository:
         ]
         if workspace_id:
             rows = [r for r in rows if r.workspace_id == workspace_id]
+        if owner_id is not None:
+            rows = [r for r in rows if r.owner_id == owner_id]
         return sorted(rows, key=lambda r: (r.created_at, r.turn))
 
-    def delete_session(self, session_id: str, workspace_id: str | None = None) -> int:
-        targets = [r.id for r in self.list_session_runs(session_id, workspace_id)]
+    def delete_session(
+        self, session_id: str, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> int:
+        targets = [r.id for r in self.list_session_runs(session_id, workspace_id, owner_id)]
         with self._lock:
             for rid in targets:
                 self.agent_runs.pop(rid, None)
@@ -244,10 +271,10 @@ class JsonHistoryRepository:
 
 
 # ---------------------------------------------------------------- SQL 实现
-CONV_COLUMNS = "id, title, workspace_id, created_at, updated_at, archived, pinned"
+CONV_COLUMNS = "id, title, workspace_id, created_at, updated_at, archived, pinned, owner_id"
 RUN_COLUMNS = (
     "id, session_id, turn, task, tool_ids, steps, answer, status,"
-    " workspace_id, project, artifacts, created_at"
+    " workspace_id, project, artifacts, created_at, owner_id"
 )
 
 
@@ -273,6 +300,7 @@ class SqlHistoryRepository:
             updated_at=row["updated_at"], workspace_id=row["workspace_id"] or "default",
             message_count=int(row.get("message_count") or 0),
             archived=bool(row.get("archived")), pinned=bool(row.get("pinned")),
+            owner_id=row.get("owner_id") or "",
         )
 
     @staticmethod
@@ -287,12 +315,13 @@ class SqlHistoryRepository:
             created_at=row["created_at"], workspace_id=row["workspace_id"] or "default",
             project=row["project"] or "", artifacts=_json_list(row["artifacts"], []),
             session_id=row["session_id"] or "", turn=int(row["turn"] or 1),
+            owner_id=row.get("owner_id") or "",
         )
 
     # ---- 会话 ----
     def upsert_conversation(
         self, conversation_id: str, user_text: str, assistant_text: str, title: str,
-        workspace_id: str = "default",
+        workspace_id: str = "default", owner_id: str = "",
     ) -> Conversation:
         now = _now()
         with self.db.transaction():
@@ -301,9 +330,9 @@ class SqlHistoryRepository:
             )
             if exists is None:
                 self.db.execute(
-                    "INSERT INTO conversations (id, title, workspace_id, created_at, updated_at)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (conversation_id, title, workspace_id, now, now),
+                    "INSERT INTO conversations (id, title, workspace_id, created_at, updated_at, owner_id)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (conversation_id, title, workspace_id, now, now, owner_id),
                 )
                 created_at = now
             else:
@@ -329,18 +358,25 @@ class SqlHistoryRepository:
             )
         return Conversation(
             id=conversation_id, title=title, created_at=created_at, updated_at=now,
-            workspace_id=workspace_id, message_count=int(total or 0),
+            workspace_id=workspace_id, message_count=int(total or 0), owner_id=owner_id,
         )
 
-    def list_conversations(self, workspace_id: str | None = None) -> list[Conversation]:
-        where, params = "", ()
+    def list_conversations(
+        self, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> list[Conversation]:
+        where, params = [], []
         if workspace_id:
-            where, params = " WHERE c.workspace_id = ?", (workspace_id,)
+            where.append("c.workspace_id = ?")
+            params.append(workspace_id)
+        if owner_id is not None:
+            where.append("c.owner_id = ?")
+            params.append(owner_id)
+        clause = f" WHERE {' AND '.join(where)}" if where else ""
         rows = self.db.query(
             f"SELECT c.id, c.title, c.workspace_id, c.created_at, c.updated_at,"
-            f" c.archived, c.pinned,"
+            f" c.archived, c.pinned, c.owner_id,"
             f" (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count"
-            f" FROM conversations c{where} ORDER BY c.pinned DESC, c.updated_at DESC",
+            f" FROM conversations c{clause} ORDER BY c.pinned DESC, c.updated_at DESC",
             params,
         )
         return [self._conv(r) for r in rows]
@@ -372,20 +408,25 @@ class SqlHistoryRepository:
 
     def search_conversations(
         self, workspace_id: str, query: str, include_archived: bool = False,
+        owner_id: str | None = None,
     ) -> list[Conversation]:
         q = f"%{query.strip()}%"
         if not query.strip():
             return []
         arch = "" if include_archived else " AND c.archived = 0"
+        owned = " AND c.owner_id = ?" if owner_id is not None else ""
+        params: list = [workspace_id, q, q]
+        if owner_id is not None:
+            params.append(owner_id)
         rows = self.db.query(
             "SELECT c.id, c.title, c.workspace_id, c.created_at, c.updated_at,"
-            " c.archived, c.pinned,"
+            " c.archived, c.pinned, c.owner_id,"
             " (SELECT count(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count"
             " FROM conversations c WHERE c.workspace_id = ?"
             f" AND (c.title LIKE ? OR EXISTS (SELECT 1 FROM messages m"
-            f" WHERE m.conversation_id = c.id AND m.content LIKE ?)){arch}"
+            f" WHERE m.conversation_id = c.id AND m.content LIKE ?)){owned}{arch}"
             " ORDER BY c.pinned DESC, c.updated_at DESC",
-            (workspace_id, q, q),
+            params,
         )
         return [self._conv(r) for r in rows]
 
@@ -417,36 +458,42 @@ class SqlHistoryRepository:
     def add_agent_run(
         self, task: str, tool_ids: list[str], steps: list[dict], answer: str, status: str,
         workspace_id: str = "default", project: str = "", artifacts: list[dict] | None = None,
-        session_id: str = "", turn: int = 1,
+        session_id: str = "", turn: int = 1, owner_id: str = "",
     ) -> AgentRun:
         run = AgentRun(
             id=uuid.uuid4().hex[:12], task=task, tool_ids=list(tool_ids), steps=steps,
             answer=answer, status=status, created_at=_now(), workspace_id=workspace_id,
             project=project, artifacts=artifacts or [], session_id=session_id, turn=turn,
+            owner_id=owner_id,
         )
         self.db.execute(
             "INSERT INTO agent_runs (id, session_id, turn, task, tool_ids, steps, answer,"
-            " status, workspace_id, project, artifacts, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " status, workspace_id, project, artifacts, created_at, owner_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run.id, run.session_id, run.turn, run.task,
                 json.dumps(run.tool_ids, ensure_ascii=False),
                 json.dumps(run.steps, ensure_ascii=False),
                 run.answer, run.status, run.workspace_id, run.project,
-                json.dumps(run.artifacts, ensure_ascii=False), run.created_at,
+                json.dumps(run.artifacts, ensure_ascii=False), run.created_at, run.owner_id,
             ),
         )
         return run
 
-    def list_agent_runs(self, workspace_id: str | None = None) -> list[AgentRun]:
+    def list_agent_runs(
+        self, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> list[AgentRun]:
+        where, params = [], []
         if workspace_id:
-            rows = self.db.query(
-                f"SELECT {RUN_COLUMNS} FROM agent_runs WHERE workspace_id = ?"
-                " ORDER BY created_at DESC",
-                (workspace_id,),
-            )
-        else:
-            rows = self.db.query(f"SELECT {RUN_COLUMNS} FROM agent_runs ORDER BY created_at DESC")
+            where.append("workspace_id = ?")
+            params.append(workspace_id)
+        if owner_id is not None:
+            where.append("owner_id = ?")
+            params.append(owner_id)
+        clause = f" WHERE {' AND '.join(where)}" if where else ""
+        rows = self.db.query(
+            f"SELECT {RUN_COLUMNS} FROM agent_runs{clause} ORDER BY created_at DESC", params,
+        )
         return [self._run(r) for r in rows]
 
     def get_agent_run(self, run_id: str) -> AgentRun | None:
@@ -456,7 +503,9 @@ class SqlHistoryRepository:
     def delete_agent_run(self, run_id: str) -> bool:
         return self.db.execute("DELETE FROM agent_runs WHERE id = ?", (run_id,)) > 0
 
-    def list_session_runs(self, session_id: str, workspace_id: str | None = None) -> list[AgentRun]:
+    def list_session_runs(
+        self, session_id: str, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> list[AgentRun]:
         if not session_id:
             return []
         where = " WHERE (id = ? OR session_id = ?)"
@@ -464,13 +513,18 @@ class SqlHistoryRepository:
         if workspace_id:
             where += " AND workspace_id = ?"
             params.append(workspace_id)
+        if owner_id is not None:
+            where += " AND owner_id = ?"
+            params.append(owner_id)
         rows = self.db.query(
             f"SELECT {RUN_COLUMNS} FROM agent_runs{where} ORDER BY created_at, turn", params,
         )
         return [self._run(r) for r in rows]
 
-    def delete_session(self, session_id: str, workspace_id: str | None = None) -> int:
-        runs = self.list_session_runs(session_id, workspace_id)
+    def delete_session(
+        self, session_id: str, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> int:
+        runs = self.list_session_runs(session_id, workspace_id, owner_id)
         if not runs:
             return 0
         marks = ", ".join("?" for _ in runs)

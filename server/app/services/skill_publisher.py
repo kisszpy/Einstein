@@ -74,7 +74,9 @@ def _publish_one(skill: Skill, target: Path) -> None:
     )
 
 
-def sync_skills(ws: str, store: SkillStore | None = None) -> list[str]:
+def sync_skills(
+    ws: str, store: SkillStore | None = None, owner_id: str | None = None,
+) -> list[str]:
     """把工作区内 enabled 的技能同步到 <workspace>/skills/，返回已发布的 name 清单。
 
     全量对比：DB 里不存在或已停用的技能，其目录会被清掉。同步是幂等的，
@@ -86,7 +88,9 @@ def sync_skills(ws: str, store: SkillStore | None = None) -> list[str]:
 
     published: list[str] = []
     keep: set[str] = set()
-    for skill in store.list_skills(ws):
+    # owner_id 给定时只发布「预置 + 本人」的技能：工作区 skills/ 目录是共享的，
+    # 把别人的自定义技能写进去等于文件级越权
+    for skill in store.list_skills(ws, owner_id):
         if not skill.enabled or not skill.system_prompt.strip():
             continue
         slug = slug_of(skill)

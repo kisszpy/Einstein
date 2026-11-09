@@ -194,7 +194,8 @@ def main() -> None:
     for item in list(member_store.memberships_of(probe.id)):
         member_store.remove(probe.id, item.workspace_id)
     member_store.save()
-    for ws_id in (team_id, own):
+    # 探针账号的个人空间可能在请求过程中被 ensure 重建过，按 p-<uid> 兜底再删一次
+    for ws_id in (team_id, own, f"p-{probe.id}"):
         ws_store.delete(ws_id)
     ws_store.save()
     user_store.delete(probe.id)

@@ -60,6 +60,8 @@ CAPABILITY_TOOL_IDS = {t for cap in CAPABILITIES for t in cap["tools"]}
 @dataclass
 class AgentContext:
     workspace_id: str
+    # 当前用户：项目目录、MCP 连接等个人资源都按它做归属过滤
+    owner_id: str = ""
     project: str = ""
     artifacts: list[dict] = field(default_factory=list)
     # 人工确认：本会话已批准过的敏感工具（如 code_run）。未批准时调用会抛

@@ -54,16 +54,18 @@ class HistoryStore:
     # ---------- 会话 ----------
     def upsert_conversation(
         self, conversation_id: str, user_text: str, assistant_text: str, title: str,
-        workspace_id: str = "default",
+        workspace_id: str = "default", owner_id: str = "",
     ) -> Conversation:
         conv = self.repo.upsert_conversation(
-            conversation_id, user_text, assistant_text, title, workspace_id,
+            conversation_id, user_text, assistant_text, title, workspace_id, owner_id,
         )
         self.repo.save()
         return conv
 
-    def list_conversations(self, workspace_id: str | None = None) -> list[Conversation]:
-        return self.repo.list_conversations(workspace_id)
+    def list_conversations(
+        self, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> list[Conversation]:
+        return self.repo.list_conversations(workspace_id, owner_id)
 
     def rename_conversation(self, conversation_id: str, title: str) -> Conversation | None:
         return self.repo.rename_conversation(conversation_id, title)
@@ -75,8 +77,9 @@ class HistoryStore:
 
     def search_conversations(
         self, workspace_id: str, query: str, include_archived: bool = False,
+        owner_id: str | None = None,
     ) -> list[Conversation]:
-        return self.repo.search_conversations(workspace_id, query, include_archived)
+        return self.repo.search_conversations(workspace_id, query, include_archived, owner_id)
 
     def get_conversation(self, conversation_id: str) -> Conversation | None:
         return self.repo.get_conversation(conversation_id)
@@ -90,17 +93,19 @@ class HistoryStore:
     def add_agent_run(
         self, task: str, tool_ids: list[str], steps: list[dict], answer: str, status: str,
         workspace_id: str = "default", project: str = "", artifacts: list[dict] | None = None,
-        session_id: str = "", turn: int = 1,
+        session_id: str = "", turn: int = 1, owner_id: str = "",
     ) -> AgentRun:
         run = self.repo.add_agent_run(
             task, tool_ids, steps, answer, status, workspace_id, project, artifacts,
-            session_id, turn,
+            session_id, turn, owner_id,
         )
         self.repo.save()
         return run
 
-    def list_agent_runs(self, workspace_id: str | None = None) -> list[AgentRun]:
-        return self.repo.list_agent_runs(workspace_id)
+    def list_agent_runs(
+        self, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> list[AgentRun]:
+        return self.repo.list_agent_runs(workspace_id, owner_id)
 
     def get_agent_run(self, run_id: str) -> AgentRun | None:
         return self.repo.get_agent_run(run_id)
@@ -115,13 +120,17 @@ class HistoryStore:
         """会话 id：老数据没有 session_id 时用它自己的 id。"""
         return run.session_id or run.id
 
-    def list_session_runs(self, session_id: str, workspace_id: str | None = None) -> list[AgentRun]:
+    def list_session_runs(
+        self, session_id: str, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> list[AgentRun]:
         """取一个会话的全部轮次，按时间正序（含把自身 id 当会话 id 的老数据）。"""
-        return self.repo.list_session_runs(session_id, workspace_id)
+        return self.repo.list_session_runs(session_id, workspace_id, owner_id)
 
-    def delete_session(self, session_id: str, workspace_id: str | None = None) -> int:
+    def delete_session(
+        self, session_id: str, workspace_id: str | None = None, owner_id: str | None = None,
+    ) -> int:
         """删除整个会话（所有轮次），返回删除条数。"""
-        deleted = self.repo.delete_session(session_id, workspace_id)
+        deleted = self.repo.delete_session(session_id, workspace_id, owner_id)
         self.repo.save()
         return deleted
 

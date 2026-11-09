@@ -460,7 +460,7 @@ async def run_deep_agent(
 
     # 热加载：每个任务开始时把 DB 技能同步到工作区 skills/ 目录，
     # 增删改回滚即时生效；同时把点名的技能翻译成引擎可用的 name。
-    skill_publisher.sync_skills(ws)
+    skill_publisher.sync_skills(ws, owner_id=ctx.owner_id or None)
     pinned = [n for n in (pinned_skills or []) if n]
 
     agent = _build_agent(ctx, tool_ids, kb_ids, ws, persona=persona, temperature=temperature)

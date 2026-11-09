@@ -41,15 +41,21 @@ class ApiKeyCreate(BaseModel):
     scopes: list[str] = Field(default_factory=lambda: ["*"])
 
 
-def _usage_of(ws_id: str) -> dict:
+def _usage_of(ws_id: str, uid: str | None = None) -> dict:
+    """空间资源用量。
+
+    uid 给定时按「这个账号看得见多少」统计（切换器展示用）；不给就是整个
+    空间的真实占用（删除前的非空校验必须用这个，否则会把别人的资源当空）。
+    """
     store = get_store()
+    kbs = store.list_kbs(ws_id, uid)
     return {
-        "kb": len(store.list_kbs(ws_id)),
-        "doc": sum(len(store.documents_of_kb(k.id)) for k in store.list_kbs(ws_id)),
-        "skill": len([s for s in get_skill_store().list_skills(ws_id) if not s.builtin]),
-        "expert": len(get_expert_store().list_experts(ws_id)),
-        "mcp": len(list_servers(ws_id)),
-        "eval": len([s for s in list_sets() if store.owns(s.kb_id, ws_id)]),
+        "kb": len(kbs),
+        "doc": sum(len(store.documents_of_kb(k.id)) for k in kbs),
+        "skill": len([s for s in get_skill_store().list_skills(ws_id, uid) if not s.builtin]),
+        "expert": len(get_expert_store().list_experts(ws_id, uid)),
+        "mcp": len(list_servers(ws_id, uid)),
+        "eval": len([s for s in list_sets() if store.owns(s.kb_id, ws_id, uid)]),
     }
 
 
@@ -68,7 +74,7 @@ async def list_workspaces(user: users.User = Depends(current_user)) -> list[dict
             "role": workspace_role(user, w.id) or "",
             "is_personal": w.id == personal_id,
             "member_count": len(members.get_member_store().members_of(w.id)),
-            "usage": _usage_of(w.id),
+            "usage": _usage_of(w.id, user.id),
         }
         for w in workspaces.get_workspace_store().list()
         if w.id in visible
@@ -91,7 +97,7 @@ async def create_workspace(
     members.get_member_store().save()
     return {"id": ws.id, "name": ws.name, "description": ws.description,
             "created_at": ws.created_at, "role": "owner", "is_personal": False,
-            "member_count": 1, "usage": _usage_of(ws.id)}
+            "member_count": 1, "usage": _usage_of(ws.id, admin.id)}
 
 
 class InviteCreate(BaseModel):
@@ -272,7 +278,7 @@ async def issue_api_key(
     if not members.at_least(workspace_role(user, target), "admin"):
         raise HTTPException(403, "无权为该工作区签发密钥（需要该空间 admin）")
     store = apikeys.get_api_key_store()
-    key, token = store.issue(req.name.strip() or "未命名密钥", target, req.scopes)
+    key, token = store.issue(req.name.strip() or "未命名密钥", target, req.scopes, user.id)
     store.save()
     # 明文只在此刻返回一次
     return {"key": key.to_public(), "token": token}

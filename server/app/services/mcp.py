@@ -65,6 +65,8 @@ class McpServer(BaseModel):
     last_error: str = ""
     refreshed_at: str = ""
     workspace_id: str = "default"
+    # 归属账号：'' = 平台预置连接（全员可见）；其余为添加者 id（仅本人可见）
+    owner_id: str = ""
 
     def connection_summary(self) -> str:
         if self.transport == "stdio":
@@ -147,15 +149,34 @@ def _registry() -> dict[str, McpServer]:
 
 # ---------- CRUD ----------
 
-def list_servers(workspace_id: str | None = None) -> list[McpServer]:
+def list_servers(
+    workspace_id: str | None = None, owner_id: str | None = None,
+) -> list[McpServer]:
     rows = list(_registry().values())
     if workspace_id:
         rows = [s for s in rows if s.workspace_id == workspace_id]
+    if owner_id is not None:
+        rows = [s for s in rows if s.owner_id in ("", owner_id)]
     return rows
 
 
 def get_server(server_id: str) -> McpServer | None:
     return _registry().get(server_id)
+
+
+def visible_server(server_id: str, workspace_id: str, owner_id: str) -> McpServer | None:
+    """按 id 取连接并校验可见性；不可见一律当不存在（防越权探测）。"""
+    server = _registry().get(server_id)
+    if server is None or server.workspace_id != workspace_id:
+        return None
+    return server if server.owner_id in ("", owner_id) else None
+
+
+def can_edit(server: McpServer, owner_id: str, is_admin: bool = False) -> bool:
+    """创建者能改自己的；预置连接（'' ）只有管理员能改。"""
+    if server.owner_id == owner_id:
+        return True
+    return server.owner_id == "" and is_admin
 
 
 def add_server(
@@ -166,6 +187,7 @@ def add_server(
     env: dict[str, str] | None = None,
     url: str = "",
     workspace_id: str = "default",
+    owner_id: str = "",
 ) -> McpServer:
     server = McpServer(
         id=uuid.uuid4().hex[:12],
@@ -176,6 +198,7 @@ def add_server(
         env=_encrypt_env(env or {}),  # 凭证加密落盘
         url=url,
         workspace_id=workspace_id,
+        owner_id=owner_id,
     )
     registry = _registry()
     with _lock:

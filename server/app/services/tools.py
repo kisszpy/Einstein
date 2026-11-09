@@ -184,7 +184,7 @@ def _tool_def(name: str, description: str, schema: dict) -> dict:
     return {"type": "function", "function": {"name": name, "description": description, "parameters": schema}}
 
 
-def list_tools(workspace_id: str | None = None) -> dict:
+def list_tools(workspace_id: str | None = None, owner_id: str | None = None) -> dict:
     """返回可展示的工具清单：基础工具 + 能力分组 + 已同步的 MCP 工具。"""
     tools = [
         {
@@ -217,7 +217,7 @@ def list_tools(workspace_id: str | None = None) -> dict:
                 "default": cap["default"],
             }
         )
-    for server in mcp_service.list_servers(workspace_id):
+    for server in mcp_service.list_servers(workspace_id, owner_id):
         if not server.enabled:
             continue
         for t in server.tools:
@@ -237,6 +237,7 @@ def build_lc_tools(
     kb_ids: list[str],
     workspace_id: str | None = None,
     ctx: AgentContext | None = None,
+    owner_id: str | None = None,
 ) -> list[StructuredTool]:
     """按选中的工具 ID 构建 LangChain 工具实例。
 
@@ -246,6 +247,8 @@ def build_lc_tools(
     （联网/项目文件/代码/PPT），产物都收进 ctx.artifacts。
     """
     lc_tools: list[StructuredTool] = []
+    # 归属：显式参数优先，其次取执行上下文里带的当前用户
+    owner = owner_id if owner_id is not None else (ctx.owner_id if ctx else None)
     mcp_ids = [tid for tid in tool_ids if tid.startswith(MCP_TOOL_PREFIX)]
     builtin_ids = [tid for tid in tool_ids if not tid.startswith(MCP_TOOL_PREFIX)]
 
@@ -270,7 +273,11 @@ def build_lc_tools(
             _, server_id, tool_name = tid.split(":", 2)
             wanted.setdefault(server_id, []).append(tool_name)
         for server_id, tool_names in wanted.items():
-            server = mcp_service.get_server(server_id)
+            if owner is not None and workspace_id:
+                # 只能调用自己可见的连接（预置 '' + 自己的），别人的一律当不存在
+                server = mcp_service.visible_server(server_id, workspace_id, owner)
+            else:
+                server = mcp_service.get_server(server_id)
             if server is None or not server.enabled:
                 continue
             if workspace_id and server.workspace_id != workspace_id:

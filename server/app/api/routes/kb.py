@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.api.deps import current_workspace
+from app.api.deps import current_uid, current_workspace
 from app.core.config import get_settings
 from app.services import batch as batch_io
 from app.services.parsers import MAX_BYTES, ParseError, fetch_url, parse_document
@@ -74,9 +74,9 @@ class SearchRequest(BaseModel):
     parent_expand: bool = False  # 父子切片命中后回填父片上下文
 
 
-def _require_kb(store: KBStore, kb_id: str, ws: str) -> None:
-    """跨工作区的访问一律按"不存在"处理，不泄露其他租户的资源存在性。"""
-    if not store.owns(kb_id, ws):
+def _require_kb(store: KBStore, kb_id: str, ws: str, uid: str) -> None:
+    """跨工作区、跨用户的访问一律按"不存在"处理，不泄露他人资源的存在性。"""
+    if not store.owns(kb_id, ws, uid):
         raise HTTPException(404, "知识库不存在")
 
 
@@ -166,7 +166,7 @@ def _cleanup_dir(path: Path) -> None:
 
 
 @router.get("")
-async def list_knowledge_bases(ws: str = Depends(current_workspace)) -> list[dict]:
+async def list_knowledge_bases(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
     store = get_store()
     return [
         {
@@ -174,22 +174,22 @@ async def list_knowledge_bases(ws: str = Depends(current_workspace)) -> list[dic
             "name": kb.name,
             "document_count": len(store.documents_of_kb(kb.id)),
         }
-        for kb in store.list_kbs(ws)
+        for kb in store.list_kbs(ws, uid)
     ]
 
 
 @router.post("")
-async def create_kb(req: KBCreate, ws: str = Depends(current_workspace)) -> dict:
+async def create_kb(req: KBCreate, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     store = get_store()
-    kb = store.add_kb(req.name.strip(), workspace_id=ws)
+    kb = store.add_kb(req.name.strip(), workspace_id=ws, owner_id=uid)
     store.save()
     return {"id": kb.id, "name": kb.name}
 
 
 @router.get("/{kb_id}/documents")
-async def list_documents(kb_id: str, ws: str = Depends(current_workspace)) -> list[dict]:
+async def list_documents(kb_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
     return [
         {
             "id": d.id,
@@ -207,11 +207,11 @@ async def list_documents(kb_id: str, ws: str = Depends(current_workspace)) -> li
 
 @router.post("/{kb_id}/documents")
 async def add_document(
-    kb_id: str, req: DocCreate, ws: str = Depends(current_workspace)
+    kb_id: str, req: DocCreate, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     """粘贴文本入库（同步）。"""
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
     try:
         result = await ingest_document(
             store, kb_id, req.name, req.content,
@@ -226,11 +226,11 @@ async def add_document(
 async def upload_document(
     kb_id: str, file: UploadFile,
     strategy: str = "recursive", chunk_size: int = 500, chunk_overlap: int = 50,
-    ws: str = Depends(current_workspace),
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
     """上传并同步解析入库（小文件用；大文件走 /documents/async）。"""
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
     raw = await file.read()
     name = file.filename or "未命名"
     try:
@@ -249,14 +249,14 @@ async def upload_document(
 
 @router.post("/{kb_id}/documents/async")
 async def upload_document_async(
-    kb_id: str, file: UploadFile, ws: str = Depends(current_workspace)
+    kb_id: str, file: UploadFile, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     """上传即返回：文件落盘 + 入队，解析/切片/嵌入全部交给 worker。
 
     50MB 的 PDF 也不会占住 HTTP worker；前端拿 job_id 轮询进度。
     """
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
 
     settings = get_settings()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -301,7 +301,7 @@ async def upload_documents_batch(
     strategy: str = Form("recursive", description="recursive | fixed | semantic"),
     chunk_size: int = Form(500),
     chunk_overlap: int = Form(50),
-    ws: str = Depends(current_workspace),
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
     """批量导入：一次收一个目录（多文件），或一个 ZIP 包。
 
@@ -310,7 +310,7 @@ async def upload_documents_batch(
     进度用 GET /jobs/{id} 看 done/total 与失败清单。
     """
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
 
     settings = get_settings()
     max_files = settings.import_batch_max_files      # 0 = 不限制
@@ -397,7 +397,7 @@ async def upload_documents_batch(
 
 @router.post("/{kb_id}/documents/dir")
 async def import_directory(
-    kb_id: str, req: DirImport, ws: str = Depends(current_workspace)
+    kb_id: str, req: DirImport, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     """导入服务端目录（本地部署用）：不复制文件，直接按相对路径入库。
 
@@ -405,7 +405,7 @@ async def import_directory(
     未配置时返回 403 并说明怎么开。符号链接与依赖目录（node_modules/.git 等）会跳过。
     """
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
     settings = get_settings()
     try:
         root = batch_io.resolve_allowed_root(req.path, settings.import_roots)
@@ -448,11 +448,11 @@ async def import_directory(
 
 @router.post("/{kb_id}/documents/url")
 async def import_url(
-    kb_id: str, req: UrlImport, ws: str = Depends(current_workspace)
+    kb_id: str, req: UrlImport, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     """抓网页入库（同步，限制 8MB）。"""
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
     try:
         title, content = fetch_url(req.url)
     except ParseError as exc:
@@ -468,11 +468,11 @@ async def import_url(
 
 @router.get("/{kb_id}/documents/{doc_id}/chunks")
 async def list_document_chunks(
-    kb_id: str, doc_id: str, ws: str = Depends(current_workspace)
+    kb_id: str, doc_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> list[dict]:
     """切片预览：前端切片编辑器与引用定位都靠它。"""
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
     _require_doc(store, kb_id, doc_id)
     return [
         {
@@ -492,11 +492,11 @@ async def list_document_chunks(
 
 @router.patch("/{kb_id}/chunks/{chunk_id}")
 async def update_chunk(
-    kb_id: str, chunk_id: str, req: ChunkPatch, ws: str = Depends(current_workspace)
+    kb_id: str, chunk_id: str, req: ChunkPatch, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     """改切片文本并重算向量，改完立刻可被检索命中。"""
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
     text = req.text.strip()
     if not text:
         raise HTTPException(400, "切片文本不能为空")
@@ -511,11 +511,11 @@ async def update_chunk(
 
 @router.delete("/{kb_id}/documents/{doc_id}")
 async def delete_document(
-    kb_id: str, doc_id: str, ws: str = Depends(current_workspace)
+    kb_id: str, doc_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     """删文档并级联清理切片与向量。"""
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
     _require_doc(store, kb_id, doc_id)
     removed = store.delete_document(doc_id)
     try:
@@ -527,11 +527,11 @@ async def delete_document(
 
 @router.post("/{kb_id}/documents/{doc_id}/reindex")
 async def reindex_one(
-    kb_id: str, doc_id: str, ws: str = Depends(current_workspace)
+    kb_id: str, doc_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     """按当前切片策略重建这一篇（版本号不变）。"""
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
     _require_doc(store, kb_id, doc_id)
     try:
         count = await reindex_document(store, doc_id)
@@ -542,10 +542,10 @@ async def reindex_one(
 
 @router.get("/{kb_id}/documents/{doc_id}/versions")
 async def list_versions(
-    kb_id: str, doc_id: str, ws: str = Depends(current_workspace)
+    kb_id: str, doc_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> list[dict]:
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
     _require_doc(store, kb_id, doc_id)
     return [
         {
@@ -562,11 +562,11 @@ async def list_versions(
 
 @router.post("/{kb_id}/documents/{doc_id}/rollback")
 async def rollback_document(
-    kb_id: str, doc_id: str, req: RollbackRequest, ws: str = Depends(current_workspace)
+    kb_id: str, doc_id: str, req: RollbackRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     """回滚到指定版本：把那份内容作为新版本重新入库（历史不丢）。"""
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
     doc = _require_doc(store, kb_id, doc_id)
     snapshot = store.repo.get_version(doc_id, req.version)
     if snapshot is None:
@@ -583,10 +583,10 @@ async def rollback_document(
 
 
 @router.post("/search")
-async def search_kb(req: SearchRequest, ws: str = Depends(current_workspace)) -> list[dict]:
+async def search_kb(req: SearchRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
     """检索测试台：直接看召回效果，可切换检索模式对比。"""
     store = get_store()
-    kb_ids = store.owned_kb_ids(ws, req.kb_ids)
+    kb_ids = store.owned_kb_ids(ws, req.kb_ids, uid)
     if not kb_ids:
         return []
     try:
@@ -616,10 +616,10 @@ class CompareRequest(BaseModel):
 
 
 @router.post("/search_compare")
-async def search_compare(req: CompareRequest, ws: str = Depends(current_workspace)) -> dict:
+async def search_compare(req: CompareRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     """多策略并排对比：同一查询在各检索模式下的召回 diff（测试台用）。"""
     store = get_store()
-    kb_ids = store.owned_kb_ids(ws, req.kb_ids)
+    kb_ids = store.owned_kb_ids(ws, req.kb_ids, uid)
     if not kb_ids:
         return {"query": req.query, "results": {}}
     results: dict[str, list[dict]] = {}
@@ -648,7 +648,7 @@ async def search_compare(req: CompareRequest, ws: str = Depends(current_workspac
 
 
 @router.get("/citations/{chunk_id}")
-async def citation_locator(chunk_id: str, ws: str = Depends(current_workspace)) -> dict:
+async def citation_locator(chunk_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     """引用定位：切片 → 原文段落（前后各带 200 字上下文，便于前端高亮）。"""
     store = get_store()
     chunk = store.get_chunks([chunk_id])
@@ -657,7 +657,7 @@ async def citation_locator(chunk_id: str, ws: str = Depends(current_workspace)) 
     c = chunk[0]
     doc = store.get_document(c.document_id)
     kb = store.get_kb(c.kb_id)
-    if doc is None or kb is None or kb.workspace_id != ws:
+    if doc is None or kb is None or not store.owns(kb.id, ws, uid):
         raise HTTPException(404, "切片不存在")
     content = doc.content
     before = content[max(0, c.char_start - 200):c.char_start]
@@ -677,10 +677,10 @@ async def citation_locator(chunk_id: str, ws: str = Depends(current_workspace)) 
 
 
 @router.delete("/{kb_id}")
-async def delete_kb(kb_id: str, ws: str = Depends(current_workspace)) -> dict:
+async def delete_kb(kb_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     """删除知识库，连同其文档、切片与向量一并清理。"""
     store = get_store()
-    _require_kb(store, kb_id, ws)
+    _require_kb(store, kb_id, ws, uid)
     doc_ids = [d.id for d in store.documents_of_kb(kb_id)]
     removed = store.delete_kb(kb_id)
     index = get_vector_index()

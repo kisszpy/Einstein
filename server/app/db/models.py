@@ -20,6 +20,8 @@ class KnowledgeBase:
     description: str = ""
     visibility: str = "workspace"   # private | workspace | shared
     updated_at: str = ""
+    # 归属账号：'' = 系统预置/共享（全员可见），其余为创建者 id（只有本人可见）
+    owner_id: str = ""
 
 
 @dataclass
@@ -77,6 +79,8 @@ class Conversation:
     workspace_id: str = DEFAULT_WS
     archived: bool = False   # 归档后不出现在默认列表，搜索仍可命中
     pinned: bool = False     # 置顶：列表排在最前
+    # 归属账号：会话是私有数据，只有创建者本人可见
+    owner_id: str = ""
 
 
 @dataclass
@@ -94,3 +98,5 @@ class AgentRun:
     # 同一任务的后续追问共享 session_id；turn 从 1 开始递增
     session_id: str = ""
     turn: int = 1
+    # 归属账号：运行记录跟会话一样是私有数据
+    owner_id: str = ""

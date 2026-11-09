@@ -68,10 +68,10 @@ def _to_lc(messages: list[OAIMessage], system_text: str) -> list:
 async def _prepare(req: ChatCompletionRequest, key: ApiKey) -> tuple[list, float, list[dict]]:
     """合成系统提示并做一次检索，返回 (lc 消息, 温度, 引用列表)。"""
     store = get_store()
-    kb_ids = store.owned_kb_ids(key.workspace_id, list(req.kb_ids))
+    kb_ids = store.owned_kb_ids(key.workspace_id, list(req.kb_ids), key.owner_id)
     kb_hit = bool(kb_ids)
     system_text, temperature, expert_kb_ids, _tools = _compose_system(
-        req.expert_id, kb_hit=kb_hit, ws=key.workspace_id
+        req.expert_id, kb_hit=kb_hit, ws=key.workspace_id, uid=key.owner_id
     )
     effective = kb_ids or expert_kb_ids
     citations: list[dict] = []
@@ -192,7 +192,7 @@ async def chat_completions(
 async def openapi_search(req: SearchRequest, key: ApiKey = Depends(require_api_key)) -> dict:
     require_scope(key, "search")
     store = get_store()
-    kb_ids = store.owned_kb_ids(key.workspace_id, list(req.kb_ids))
+    kb_ids = store.owned_kb_ids(key.workspace_id, list(req.kb_ids), key.owner_id)
     if not kb_ids:
         return {"hits": [], "note": "没有可检索的知识库（或均不属于该密钥的工作区）"}
     try:
@@ -220,7 +220,7 @@ async def openapi_agent_run(
     req: AgentRunRequest, request: Request, key: ApiKey = Depends(require_api_key)
 ) -> dict:
     require_scope(key, "agent")
-    kb_ids = get_store().owned_kb_ids(key.workspace_id, list(req.kb_ids))
+    kb_ids = get_store().owned_kb_ids(key.workspace_id, list(req.kb_ids), key.owner_id)
     steps: list[dict] = []
     answer = ""
     async for step in run_agent(req.task, req.tool_ids, kb_ids, key.workspace_id):

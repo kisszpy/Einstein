@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app.api.deps import current_workspace
+from app.api.deps import current_uid, current_user, current_workspace
 from app.services import llm, skill_installer, skill_market
 from app.services.skills import Skill, get_skill_store
 
@@ -66,10 +66,20 @@ def _dump(skill: Skill) -> dict:
     }
 
 
-def _require_own(skill: Skill | None, ws: str) -> Skill:
-    """内置技能全员可改；自定义技能只能由所属工作区操作。"""
-    if skill is None or (not skill.builtin and skill.workspace_id != ws):
+def _require_read(skill: Skill | None, ws: str, uid: str) -> Skill:
+    """可读：内置技能、预置安装（'' ）与自己在当前空间装的技能。"""
+    store = get_skill_store()
+    if skill is None or store.visible(skill.id, ws, uid) is None:
         raise HTTPException(404, "技能不存在")
+    return skill
+
+
+def _require_edit(skill: Skill | None, ws: str, uid: str, is_admin: bool) -> Skill:
+    """可改：自己装的技能；预置技能只有管理员能改（别人改会改到所有人）。"""
+    _require_read(skill, ws, uid)
+    assert skill is not None
+    if not get_skill_store().can_edit(skill, uid, is_admin):
+        raise HTTPException(403, "预置技能只有管理员可以修改")
     return skill
 
 
@@ -88,7 +98,7 @@ async def market(
     q: str = "",
     source: str = "github",
     limit: int = Query(default=20, ge=1, le=50),
-    ws: str = Depends(current_workspace),
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
     try:
         result = skill_market.browse(source=source, query=q, limit=limit)
@@ -96,7 +106,7 @@ async def market(
         _raise_install_error(exc)
 
     installed_by_repo: dict[str, int] = {}
-    for skill in get_skill_store().list_skills(ws):
+    for skill in get_skill_store().list_skills(ws, uid):
         if skill.repo:
             installed_by_repo[skill.repo] = installed_by_repo.get(skill.repo, 0) + 1
 
@@ -118,7 +128,7 @@ async def market(
 
 
 @router.post("/install/preview")
-async def preview_install(req: PreviewRequest, ws: str = Depends(current_workspace)) -> dict:
+async def preview_install(req: PreviewRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     try:
         return skill_installer.preview(req.url, req.ref, req.path)
     except skill_installer.SkillInstallError as exc:
@@ -128,10 +138,10 @@ async def preview_install(req: PreviewRequest, ws: str = Depends(current_workspa
 
 
 @router.post("/install")
-async def install_skill(req: InstallRequest, ws: str = Depends(current_workspace)) -> dict:
+async def install_skill(req: InstallRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     store = get_skill_store()
     try:
-        skill, created = skill_installer.install(store, ws, req.url, req.ref, req.path)
+        skill, created = skill_installer.install(store, ws, req.url, req.ref, req.path, uid)
     except skill_installer.SkillInstallError as exc:
         _raise_install_error(exc)
     except Exception as exc:  # noqa: BLE001
@@ -143,26 +153,27 @@ async def install_skill(req: InstallRequest, ws: str = Depends(current_workspace
 
 
 @router.get("")
-async def list_skills(ws: str = Depends(current_workspace)) -> list[dict]:
-    return [_dump(s) for s in get_skill_store().list_skills(ws)]
+async def list_skills(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
+    return [_dump(s) for s in get_skill_store().list_skills(ws, uid)]
 
 
 @router.post("")
-async def create_skill(req: SkillCreate, ws: str = Depends(current_workspace)) -> dict:
+async def create_skill(req: SkillCreate, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     if not req.name.strip():
         raise HTTPException(400, "技能名称不能为空")
     store = get_skill_store()
-    skill = store.add(req.name.strip(), req.description, req.system_prompt, req.tools, workspace_id=ws)
+    skill = store.add(req.name.strip(), req.description, req.system_prompt, req.tools, workspace_id=ws, owner_id=uid)
     store.save()
     return _dump(skill)
 
 
 @router.put("/{skill_id}")
 async def update_skill(
-    skill_id: str, req: SkillUpdate, ws: str = Depends(current_workspace)
+    skill_id: str, req: SkillUpdate, ws: str = Depends(current_workspace),
+    uid: str = Depends(current_uid), user=Depends(current_user),
 ) -> dict:
     store = get_skill_store()
-    _require_own(store.get(skill_id), ws)
+    _require_edit(store.get(skill_id), ws, uid, user.is_admin)
     skill = store.update(
         skill_id,
         name=req.name.strip() if req.name else None,
@@ -184,8 +195,8 @@ async def update_skill(
 
 
 @router.get("/{skill_id}/versions")
-async def list_versions(skill_id: str, ws: str = Depends(current_workspace)) -> dict:
-    skill = _require_own(get_skill_store().get(skill_id), ws)
+async def list_versions(skill_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+    skill = _require_read(get_skill_store().get(skill_id), ws, uid)
     return {"version": skill.version, "versions": skill.versions}
 
 
@@ -195,10 +206,11 @@ class RollbackRequest(BaseModel):
 
 @router.post("/{skill_id}/rollback")
 async def rollback_skill(
-    skill_id: str, req: RollbackRequest, ws: str = Depends(current_workspace)
+    skill_id: str, req: RollbackRequest, ws: str = Depends(current_workspace),
+    uid: str = Depends(current_uid), user=Depends(current_user),
 ) -> dict:
     store = get_skill_store()
-    _require_own(store.get(skill_id), ws)
+    _require_edit(store.get(skill_id), ws, uid, user.is_admin)
     skill = store.rollback(skill_id, req.version)
     if skill is None:
         raise HTTPException(404, f"版本 {req.version} 不存在")
@@ -207,8 +219,8 @@ async def rollback_skill(
 
 
 @router.get("/{skill_id}/export")
-async def export_skill(skill_id: str, ws: str = Depends(current_workspace)) -> Response:
-    skill = _require_own(get_skill_store().get(skill_id), ws)
+async def export_skill(skill_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> Response:
+    skill = _require_read(get_skill_store().get(skill_id), ws, uid)
     data = skill_installer.export_zip(skill)
     # HTTP header 只允许 latin-1：文件名剥离非 ASCII，中文名走 RFC 5987 filename*
     ascii_safe = "".join(
@@ -229,13 +241,13 @@ async def export_skill(skill_id: str, ws: str = Depends(current_workspace)) -> R
 
 @router.post("/import")
 async def import_skill(
-    file: UploadFile = File(...), ws: str = Depends(current_workspace)
+    file: UploadFile = File(...), ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     data = await file.read()
     if len(data) > skill_installer.MAX_IMPORT_BYTES:
         raise HTTPException(400, "zip 文件超过 50MB 上限")
     try:
-        skill = skill_installer.import_zip(data, get_skill_store(), ws)
+        skill = skill_installer.import_zip(data, get_skill_store(), ws, uid)
     except skill_installer.SkillInstallError as exc:
         raise HTTPException(400, str(exc)) from exc
     return _dump(skill)
@@ -247,9 +259,9 @@ class TryRequest(BaseModel):
 
 
 @router.post("/{skill_id}/try")
-async def try_skill(skill_id: str, req: TryRequest, ws: str = Depends(current_workspace)) -> dict:
+async def try_skill(skill_id: str, req: TryRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     """沙箱试运行：用技能的系统提示词回答一条样例消息（限长，不落历史）。"""
-    skill = _require_own(get_skill_store().get(skill_id), ws)
+    skill = _require_read(get_skill_store().get(skill_id), ws, uid)
     message = req.message.strip()
     if not message:
         raise HTTPException(400, "试运行消息不能为空")
@@ -279,15 +291,19 @@ async def try_skill(skill_id: str, req: TryRequest, ws: str = Depends(current_wo
 
 
 @router.post("/{skill_id}/update")
-async def update_from_source(skill_id: str, ws: str = Depends(current_workspace)) -> dict:
+async def update_from_source(
+    skill_id: str, ws: str = Depends(current_workspace),
+    uid: str = Depends(current_uid), user=Depends(current_user),
+) -> dict:
     store = get_skill_store()
-    skill = _require_own(store.get(skill_id), ws)
+    skill = _require_edit(store.get(skill_id), ws, uid, user.is_admin)
     if not skill.repo:
         raise HTTPException(400, "该技能不是从 GitHub 安装的，无法检查更新")
 
     try:
         updated, _ = skill_installer.install(
-            store, ws, f"https://github.com/{skill.repo}", skill.ref, skill.subpath
+            store, ws, f"https://github.com/{skill.repo}", skill.ref, skill.subpath,
+            skill.owner_id,
         )
     except skill_installer.SkillInstallError as exc:
         _raise_install_error(exc)
@@ -299,16 +315,16 @@ async def update_from_source(skill_id: str, ws: str = Depends(current_workspace)
 
 
 @router.get("/{skill_id}/files")
-async def list_files(skill_id: str, ws: str = Depends(current_workspace)) -> dict:
-    skill = _require_own(get_skill_store().get(skill_id), ws)
+async def list_files(skill_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+    skill = _require_read(get_skill_store().get(skill_id), ws, uid)
     return {"files": skill.files, "source_url": skill.source_url}
 
 
 @router.get("/{skill_id}/file")
 async def read_file(
-    skill_id: str, path: str = Query(...), ws: str = Depends(current_workspace)
+    skill_id: str, path: str = Query(...), ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
-    _require_own(get_skill_store().get(skill_id), ws)
+    _require_read(get_skill_store().get(skill_id), ws, uid)
     try:
         content, is_text = skill_installer.read_text_file(skill_id, path)
     except skill_installer.SkillInstallError as exc:
@@ -317,9 +333,12 @@ async def read_file(
 
 
 @router.delete("/{skill_id}")
-async def delete_skill(skill_id: str, ws: str = Depends(current_workspace)) -> dict:
+async def delete_skill(
+    skill_id: str, ws: str = Depends(current_workspace),
+    uid: str = Depends(current_uid), user=Depends(current_user),
+) -> dict:
     store = get_skill_store()
-    _require_own(store.get(skill_id), ws)
+    _require_edit(store.get(skill_id), ws, uid, user.is_admin)
     if not store.delete(skill_id):
         raise HTTPException(400, "技能不存在或为内置技能（不可删除）")
     skill_installer.remove_files(skill_id)

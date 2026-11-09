@@ -44,6 +44,8 @@ class ApiKey:
     last_used_at: str | None = None
     revoked: bool = False
     call_count: int = 0
+    # 签发者：开放 API 按它收敛可见资源（'' = 平台预置密钥，只能碰预置资源）
+    owner_id: str = ""
 
     def to_public(self) -> dict:
         d = asdict(self)
@@ -65,7 +67,7 @@ class ApiKeyStore:
         return self.items.get(key_id)
 
     def issue(self, name: str, workspace_id: str = DEFAULT_ID,
-              scopes: list[str] | None = None) -> tuple[ApiKey, str]:
+              scopes: list[str] | None = None, owner_id: str = "") -> tuple[ApiKey, str]:
         token = KEY_PREFIX + secrets.token_hex(20)
         key = ApiKey(
             id=uuid.uuid4().hex[:12],
@@ -75,6 +77,7 @@ class ApiKeyStore:
             prefix=token[:10] + "…",
             scopes=scopes or ["*"],
             created_at=_now(),
+            owner_id=owner_id,
         )
         self.items[key.id] = key
         return key, token
