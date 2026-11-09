@@ -3,7 +3,7 @@
  * 结构与 WorkBuddy 的任务侧栏一致：顶部主操作，中部可滚动列表，底部工作区。
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Download,
   Eye,
@@ -14,6 +14,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import * as api from "@/features/browser/api";
 import {
   dayBucket,
   fileName,
@@ -67,6 +68,18 @@ export function TaskSidebar({
   onOpenFile,
 }: Props) {
   const [treeOpen, setTreeOpen] = useState(true);
+  // 整包下载走浏览器原生导航，带不了 Authorization 头，和预览一样用短期票据
+  const [archiveTicket, setArchiveTicket] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    void api.getTicket().then((t) => {
+      if (alive) setArchiveTicket(t);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -208,7 +221,7 @@ export function TaskSidebar({
             {browseProject && (
               <>
                 <a
-                  href={`/api/projects/${encodeURIComponent(browseProject)}/archive`}
+                  href={`/api/projects/${encodeURIComponent(browseProject)}/archive${archiveTicket ? `?ticket=${encodeURIComponent(archiveTicket)}` : ""}`}
                   title="下载整个项目（zip）"
                   className="rounded p-1.5 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary"
                 >

@@ -85,8 +85,11 @@ export function previewUrl(project: string, path: string, ticket: string): strin
   )}&ticket=${encodeURIComponent(ticket)}`;
 }
 
-export function downloadUrl(project: string, path: string): string {
-  return `/api/projects/${encodeURIComponent(project)}/download?path=${encodeURIComponent(path)}`;
+export function downloadUrl(project: string, path: string, ticket = ""): string {
+  // `<a href>` 带不了 Authorization 头，下载和预览一样走短期票据鉴权，
+  // 否则浏览器原生导航拿到的就是 401「需要登录」。
+  const ticketQs = ticket ? `&ticket=${encodeURIComponent(ticket)}` : "";
+  return `/api/projects/${encodeURIComponent(project)}/download?path=${encodeURIComponent(path)}${ticketQs}`;
 }
 
 export function proxyUrl(url: string, ticket: string): string {

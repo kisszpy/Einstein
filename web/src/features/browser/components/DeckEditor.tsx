@@ -362,7 +362,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
             </button>
           )}
           <a
-            href={api.downloadUrl(project, path)}
+            href={api.downloadUrl(project, path, ticket)}
             className="rounded-md p-1.5 text-secondary hover:bg-surface-3"
             title="下载 pptx"
           >

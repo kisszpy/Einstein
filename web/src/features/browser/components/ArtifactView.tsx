@@ -166,7 +166,7 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
           <ExternalLink size={13} />
         </a>
         <a
-          href={api.downloadUrl(project, path)}
+          href={api.downloadUrl(project, path, ticket)}
           className="rounded-md p-1.5 text-secondary hover:bg-surface-3"
           title="下载"
         >
@@ -244,7 +244,7 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
                 <Pencil size={13} /> 打开编辑器
               </button>
               <a
-                href={api.downloadUrl(project, path)}
+                href={api.downloadUrl(project, path, ticket)}
                 className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12.5px] text-secondary hover:bg-surface-3"
               >
                 <Download size={13} /> 下载
@@ -258,7 +258,7 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
             <FileWarning size={22} className="text-tertiary" />
             <p className="text-[12.5px] text-secondary">这个类型无法预览</p>
             <a
-              href={api.downloadUrl(project, path)}
+              href={api.downloadUrl(project, path, ticket)}
               className="rounded-md border border-line px-3 py-1.5 text-[12.5px] text-secondary hover:bg-surface-3"
             >
               下载文件
