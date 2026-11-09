@@ -15,10 +15,21 @@ from app.api.deps import (
     allowed_workspaces,
     current_admin,
     current_user,
+    workspace_role,
 )
-from app.services import audit, sessions, users, workspaces
+from app.services import audit, members, sessions, users, workspaces
 
 router = APIRouter(tags=["auth"])
+
+
+def _workspace_roles(user: users.User) -> dict[str, str]:
+    """登录态里带上每个空间的角色，前端据此渲染切换器与按钮可用性。"""
+    roles: dict[str, str] = {}
+    for ws_id in allowed_workspaces(user):
+        role = workspace_role(user, ws_id)
+        if role:
+            roles[ws_id] = role
+    return roles
 
 # 登录失败节流：同一用户名连续 5 次失败锁定 60 秒，挡住脚本撞库
 _MAX_FAILS = 5
@@ -83,6 +94,8 @@ async def login(req: Request, payload: dict) -> dict:
 
     _clear_failures(username)
     store = users.get_user_store()
+    # 登录即保证个人空间存在：老账号平滑升级，新账号一定有隔离的落脚点
+    members.ensure_personal_space(user)
     store.save()
     token, session = sessions.get_session_store().issue(
         user.id, req.headers.get("user-agent", "")
@@ -94,6 +107,7 @@ async def login(req: Request, payload: dict) -> dict:
         "expires_at": session.expires_at,
         "user": user.to_public(),
         "workspaces": allowed_workspaces(user),
+        "workspace_roles": _workspace_roles(user),
     }
 
 
@@ -102,9 +116,11 @@ async def me(request: Request, user: users.User = Depends(current_user)) -> dict
     session = sessions.get_session_store().resolve(
         _extract_bearer(request.headers.get("authorization"))
     )
+    members.ensure_personal_space(user)
     return {
         "user": user.to_public(),
         "workspaces": allowed_workspaces(user),
+        "workspace_roles": _workspace_roles(user),
         "session_expires_at": session.expires_at if session else None,
     }
 
@@ -127,19 +143,24 @@ async def join_by_invite(payload: dict, user: users.User = Depends(current_user)
     if redeemed is None:
         raise HTTPException(400, "邀请码无效或已用尽")
     ws_id, role = redeemed["ws_id"], redeemed["role"]
+    # 个人空间是绝对私有边界：历史邀请码也不能把人拉进别人的私人空间
+    if members.is_personal_workspace(ws_id):
+        raise HTTPException(400, "该邀请码指向个人空间，无效")
     store = users.get_user_store()
-    if ws_id in user.workspaces:
-        return {"ok": True, "workspace_id": ws_id, "role": user.role, "already_member": True}
-    updated = store.update(user, workspaces=[*user.workspaces, ws_id])
-    if user.role == "viewer" and role != "viewer":
-        # viewer 凭码加入时若码上角色更高，顺带提升（邀请码即授权）
-        updated = store.update(updated, role=role)
+    existing = members.get_member_store().role_of(user.id, ws_id)
+    if ws_id in user.workspaces or existing:
+        return {"ok": True, "workspace_id": ws_id, "role": existing or role, "already_member": True}
+    # 双写：membership 是权限事实来源，user.workspaces 保留兼容旧逻辑与旧界面
+    members.get_member_store().ensure(user.id, ws_id, role=role)
+    members.get_member_store().save()
+    store.update(user, workspaces=[*user.workspaces, ws_id])
+    store.save()
     audit.record(
         workspace_id=ws_id, key_id=None, key_name=user.username,
         method="JOIN", path="/api/auth/join", status=200,
         duration_ms=0, detail=f"role={role}",
     )
-    return {"ok": True, "workspace_id": ws_id, "role": updated.role}
+    return {"ok": True, "workspace_id": ws_id, "role": role}
 
 
 # ---------- 成员管理（管理员） ----------
@@ -154,20 +175,38 @@ async def list_users(admin: users.User = Depends(current_admin)) -> list[dict]:
 async def create_user(
     payload: dict, admin: users.User = Depends(current_admin)
 ) -> dict:
+    """新建账号：自动获得个人空间；只有显式指定「加入共享空间」才进团队。
+
+    每个目标空间可以单独定角色（`workspace_roles: {ws: role}`），缺省用
+    payload.role 映射；不再默认并进 default，否则新账号一登录就看到别人的数据。
+    """
     registry = workspaces.get_workspace_store()
     targets = [w for w in payload.get("workspaces") or [] if registry.get(w)]
+    role_hint = str(payload.get("role", "member"))
+    per_ws = payload.get("workspace_roles") or {}
     try:
         user = users.get_user_store().create(
             username=str(payload.get("username", "")),
             password=str(payload.get("password", "")),
             display_name=str(payload.get("display_name", "")),
-            role=str(payload.get("role", "member")),
-            workspaces=targets or None,
+            role=role_hint,
+            workspaces=targets,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     users.get_user_store().save()
-    return user.to_public()
+
+    members.ensure_personal_space(user)
+    ws_role = {"owner": "admin", "admin": "admin", "member": "member", "viewer": "viewer"}.get(
+        role_hint, "member"
+    )
+    for ws_id in targets:
+        requested = str(per_ws.get(ws_id) or ws_role)
+        if requested not in members.MEMBER_ROLES:
+            requested = ws_role
+        members.get_member_store().ensure(user.id, ws_id, role=requested)
+    members.get_member_store().save()
+    return {**user.to_public(), "workspace_roles": _workspace_roles(user)}
 
 
 @router.patch("/users/{user_id}")
@@ -195,6 +234,13 @@ async def update_user(
         sessions.get_session_store().revoke_user(target.id)
         sessions.get_session_store().save()
     users.get_user_store().save()
+    # workspaces 列表有变更时同步成员关系：移除的空间要真的失去访问权
+    if payload.get("workspaces") is not None:
+        keep = set(target.workspaces)
+        for item in list(members.get_member_store().memberships_of(target.id)):
+            if item.workspace_id not in keep and not item.is_personal:
+                members.get_member_store().remove(target.id, item.workspace_id)
+        members.get_member_store().save()
     return target.to_public()
 
 
@@ -228,6 +274,10 @@ async def delete_user(user_id: str, admin: users.User = Depends(current_admin)) 
         raise HTTPException(400, "至少保留一个所有者账号")
     sessions.get_session_store().revoke_user(target.id)
     sessions.get_session_store().save()
+    # 成员关系随账号一并清理（个人空间保留为孤立空间，不删数据）
+    for item in list(members.get_member_store().memberships_of(target.id)):
+        members.get_member_store().remove(target.id, item.workspace_id)
+    members.get_member_store().save()
     store.delete(user_id)
     store.save()
     return {"ok": True}

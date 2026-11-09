@@ -59,6 +59,20 @@ class WorkspaceStore:
         self.items[ws.id] = ws
         return ws
 
+    def add_with_id(self, ws_id: str, name: str, description: str = "") -> Workspace:
+        """指定 id 建空间：个人空间用 `p-<user_id>` 这类稳定 id，重启/改名都不变。"""
+        existing = self.items.get(ws_id)
+        if existing is not None:
+            return existing
+        ws = Workspace(
+            id=ws_id,
+            name=name,
+            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            description=description,
+        )
+        self.items[ws.id] = ws
+        return ws
+
     def rename(self, ws_id: str, name: str, description: str | None = None) -> Workspace | None:
         ws = self.items.get(ws_id)
         if ws is None:

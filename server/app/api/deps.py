@@ -2,7 +2,7 @@
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
-from app.services import apikeys, sessions, users, workspaces
+from app.services import apikeys, members, sessions, users, workspaces
 
 
 def _extract_bearer(authorization: str | None) -> str:
@@ -48,12 +48,22 @@ def current_admin(user: users.User = Depends(current_user)) -> users.User:
 
 
 def allowed_workspaces(user: users.User) -> list[str]:
-    """该用户可见的工作区；管理员返回全部已注册工作区。"""
-    registry = workspaces.get_workspace_store()
-    existing = [w.id for w in registry.list()]
-    if user.is_admin:
-        return existing
-    return [w for w in existing if w in user.workspaces]
+    """该用户可见的工作区：管理员返回全部，其余按成员关系（含个人空间）。"""
+    return members.workspace_ids_of(user)
+
+
+def workspace_role(user: users.User, ws_id: str) -> str | None:
+    """账号在某个空间里的角色。
+
+    先看成员关系；平台管理员对「团队空间」兜底为 admin（但**不**兜底别人的
+    个人空间——个人空间是私有边界，管理员也进不去）。
+    """
+    role = members.get_member_store().role_of(user.id, ws_id)
+    if role:
+        return role
+    if user.is_admin and not members.holds_personal_space(ws_id, user.id):
+        return "admin"
+    return None
 
 
 def current_workspace(
@@ -62,8 +72,8 @@ def current_workspace(
 ) -> str:
     """控制台侧的工作区上下文。
 
-    管理员可切任意已知工作区；普通成员只能落在自己归属的工作区内，
-    请求了不属于自己的工作区时回落到其第一个可用工作区，不跨租户读取。
+    管理员可切任意已知工作区；普通成员只能落在自己加入的空间内（含个人
+    空间），请求了不属于自己的空间时回落到第一个可见空间，不跨租户读取。
     """
     requested = workspaces.resolve(x_workspace)
     user = getattr(request.state, "user", None)
@@ -74,10 +84,35 @@ def current_workspace(
         return ticket.get("workspace") or requested
     if user is None:
         return requested
-    if user.can_access(requested):
+    if workspace_role(user, requested):
         return requested
     visible = allowed_workspaces(user)
     return visible[0] if visible else workspaces.DEFAULT_ID
+
+
+def require_ws_role(minimum: str):
+    """工作区级角色校验依赖：`Depends(require_ws_role("admin"))`。
+
+    判定基于目标空间的成员角色，而不是账号的全局角色——团队空间的 admin
+    只能管理自己这个空间。viewer 的只读由中间件统一拦截，这里管的是
+    「管理类动作」（成员、邀请、空间设置、API Key）。
+    """
+
+    def _dep(
+        request: Request,
+        ws: str = Depends(current_workspace),
+        user: users.User = Depends(current_user),
+    ) -> str:
+        role = workspace_role(user, ws)
+        if not members.at_least(role, minimum):
+            raise HTTPException(
+                status_code=403,
+                detail=f"该操作需要 {minimum} 及以上角色（当前空间：{role or '非成员'}）",
+            )
+        request.state.ws_role = role
+        return ws
+
+    return _dep
 
 
 def require_api_key(

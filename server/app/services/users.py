@@ -65,7 +65,7 @@ class User:
     role: str = "member"
     password_hash: str = ""
     salt: str = ""
-    workspaces: list[str] = field(default_factory=lambda: [DEFAULT_ID])
+    workspaces: list[str] = field(default_factory=list)
     created_at: str = ""
     last_login_at: str | None = None
     disabled: bool = False
@@ -151,7 +151,9 @@ class UserStore:
             role=role,
             password_hash=pw_hash,
             salt=salt,
-            workspaces=[w for w in (workspaces or [DEFAULT_ID]) if w] or [DEFAULT_ID],
+            # 新账号不再默认并入共享工作区：个人空间由路由层建（members.ensure_personal_space），
+            # 共享空间只能靠邀请或管理员显式指定加入——否则所有新用户都看见同一批数据。
+            workspaces=[w for w in (workspaces or []) if w],
             created_at=_now(),
         )
         self.items[user.id] = user

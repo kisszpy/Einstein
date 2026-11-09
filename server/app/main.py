@@ -74,13 +74,22 @@ def create_app() -> FastAPI:
                     headers={"WWW-Authenticate": "Bearer"},
                 )
             request.state.user = user
-            # 工作区上下文供 llm 层记 Token 配额（ContextVar 随请求传播）
-            ratelimit.current_ws.set(deps.workspaces.resolve(
-                request.headers.get("x-workspace")))
-            # viewer 只读：拦截资源写操作（对话类接口在白名单里放行，阅读不受影响）
+            # 工作区上下文供 llm 层记 Token 配额（ContextVar 随请求传播）。
+            # 必须走「用户实际有权」的判定，不能直接用请求头——否则改个头就能
+            # 消耗别的空间的配额，或在别人的空间里刷额度。
+            requested_ws = deps.workspaces.resolve(request.headers.get("x-workspace"))
+            effective_ws = (
+                requested_ws
+                if deps.workspace_role(user, requested_ws)
+                else (deps.allowed_workspaces(user) or [requested_ws])[0]
+            )
+            ratelimit.current_ws.set(effective_ws)
+            # 只读拦截按「当前空间的角色」判定，不是账号的全局角色：
+            # 同一个人在自己的空间可写、在被邀请的空间只读，两种状态并存
+            ws_role = deps.workspace_role(user, effective_ws)
             if (
                 request.method not in ("GET", "HEAD", "OPTIONS")
-                and not user.can_write
+                and not deps.members.at_least(ws_role, "member")
                 and not path.startswith(VIEWER_ALLOWED_PREFIXES)
             ):
                 return JSONResponse(
@@ -89,8 +98,7 @@ def create_app() -> FastAPI:
                 )
             # 工作区级每日配额（0 = 不限；chat/agent 在路由内还会记 Token 用量）
             if path.startswith(("/api/chat", "/api/agent")):
-                allowed, _used = ratelimit.quota_check(deps.workspaces.resolve(
-                    request.headers.get("x-workspace")), "requests")
+                allowed, _used = ratelimit.quota_check(effective_ws, "requests")
                 if not allowed:
                     return JSONResponse(
                         status_code=429,
@@ -211,6 +219,19 @@ def create_app() -> FastAPI:
             print(f"[startup] 清理过期批次暂存目录 {removed} 个", flush=True)
     except Exception as exc:  # noqa: BLE001 — 清理失败不能挡住启动
         print(f"[startup] 清理批次暂存目录失败：{exc}", flush=True)
+
+    # RBAC 成员关系自愈：存量 user.workspaces 迁成成员表，并给每个账号补个人空间。
+    # 幂等且开销极小（几毫秒），放在每次启动跑，升级后不需要手工执行迁移。
+    try:
+        from app.services import members
+
+        stats = members.migrate()
+        print(
+            f"[startup] RBAC 成员关系就绪：{stats['memberships']} 条（本次补 {stats['created']}）",
+            flush=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — 迁移失败不阻塞启动，但要把原因打出来
+        print(f"[startup] RBAC 迁移失败：{exc}", flush=True)
     return app
 
 

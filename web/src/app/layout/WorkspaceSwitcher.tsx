@@ -8,8 +8,18 @@ interface Workspace {
   id: string;
   name: string;
   description: string;
+  role: string;
+  is_personal: boolean;
+  member_count: number;
   usage: Record<string, number>;
 }
+
+const ROLE_LABEL: Record<string, string> = {
+  owner: "所有者",
+  admin: "管理员",
+  member: "成员",
+  viewer: "只读",
+};
 
 async function fetchWorkspaces(): Promise<Workspace[]> {
   const res = await fetch("/api/workspaces");
@@ -34,6 +44,21 @@ export function WorkspaceSwitcher() {
   });
 
   useEffect(() => subscribeWorkspace(setActive), []);
+
+  // 本地记住的空间可能已不可见（被移出 / 新账号只有个人空间）：
+  // 后端会静默回落到自己的空间，界面却还显示旧名字——这里主动对齐并刷新一次，
+  // 用 sessionStorage 记一手，避免"对齐→列表仍不含→继续对齐"的死循环。
+  useEffect(() => {
+    if (!workspaces.length) return;
+    if (workspaces.some((w) => w.id === active)) return;
+    const fallback = workspaces.find((w) => w.is_personal) ?? workspaces[0];
+    if (!fallback) return;
+    const key = "ai-platform:ws-aligned";
+    if (sessionStorage.getItem(key) === fallback.id) return;
+    sessionStorage.setItem(key, fallback.id);
+    setWorkspace(fallback.id);
+    window.location.reload();
+  }, [workspaces, active]);
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -91,13 +116,19 @@ export function WorkspaceSwitcher() {
                 key={w.id}
                 onClick={() => switchTo(w.id)}
                 className={cn(
-                  "flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
+                  "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
                   w.id === active ? "bg-brand-soft text-brand" : "text-secondary hover:bg-surface-3",
                 )}
               >
-                <span className="truncate">{w.name}</span>
-                <span className="ml-2 shrink-0 text-[11px] text-tertiary">
-                  {w.usage.kb} 库 · {w.usage.expert} 专家
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {w.is_personal && <span className="shrink-0 text-[11px]">🏠</span>}
+                  <span className="truncate">{w.name}</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-tertiary">
+                  <span className="rounded bg-surface-3 px-1 py-0.5">
+                    {ROLE_LABEL[w.role] ?? w.role}
+                  </span>
+                  {!w.is_personal && <span>{w.member_count} 人</span>}
                 </span>
               </button>
             ))}

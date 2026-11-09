@@ -7,8 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app.api.deps import allowed_workspaces, current_admin, current_user, current_workspace
-from app.services import apikeys, audit, users, workspaces
+from app.api.deps import (
+    allowed_workspaces,
+    current_admin,
+    current_user,
+    current_workspace,
+    require_ws_role,
+    workspace_role,
+)
+from app.services import apikeys, audit, members, users, workspaces
 from app.services.eval import list_sets
 from app.services.experts import get_expert_store
 from app.services.mcp import list_servers
@@ -48,14 +55,19 @@ def _usage_of(ws_id: str) -> dict:
 
 @router.get("/workspaces")
 async def list_workspaces(user: users.User = Depends(current_user)) -> list[dict]:
-    """工作区列表按账号可见范围过滤：管理员看全部，成员只看归属。"""
+    """工作区列表按成员关系过滤，并带上「我在这个空间的角色」与个人空间标记。"""
     visible = set(allowed_workspaces(user))
+    personal = members.get_member_store().personal_of(user.id)
+    personal_id = personal.workspace_id if personal else ""
     return [
         {
             "id": w.id,
             "name": w.name,
             "description": w.description,
             "created_at": w.created_at,
+            "role": workspace_role(user, w.id) or "",
+            "is_personal": w.id == personal_id,
+            "member_count": len(members.get_member_store().members_of(w.id)),
             "usage": _usage_of(w.id),
         }
         for w in workspaces.get_workspace_store().list()
@@ -65,15 +77,21 @@ async def list_workspaces(user: users.User = Depends(current_user)) -> list[dict
 
 @router.post("/workspaces")
 async def create_workspace(
-    req: WorkspaceCreate, admin: users.User = Depends(current_admin)
+    req: WorkspaceCreate,
+    admin: users.User = Depends(current_admin),
+    ws_ctx: str = Depends(current_workspace),
 ) -> dict:
     if not req.name.strip():
         raise HTTPException(400, "工作区名称不能为空")
     store = workspaces.get_workspace_store()
     ws = store.add(req.name.strip(), req.description)
     store.save()
+    # 创建者即该空间 owner：空间内的成员/邀请/设置由他自己管，不必每次找平台管理员
+    members.get_member_store().ensure(admin.id, ws.id, role="owner")
+    members.get_member_store().save()
     return {"id": ws.id, "name": ws.name, "description": ws.description,
-            "created_at": ws.created_at, "usage": _usage_of(ws.id)}
+            "created_at": ws.created_at, "role": "owner", "is_personal": False,
+            "member_count": 1, "usage": _usage_of(ws.id)}
 
 
 class InviteCreate(BaseModel):
@@ -81,13 +99,26 @@ class InviteCreate(BaseModel):
     max_uses: int = 10
 
 
-@router.post("/workspaces/{ws_id}/invites")
-async def create_invite(
-    ws_id: str, req: InviteCreate, admin: users.User = Depends(current_admin)
-) -> dict:
-    """生成邀请码：新用户或存量用户凭码加入工作区（角色即码上的角色）。"""
+def _guard_ws(ws_id: str, user: users.User, minimum: str = "admin") -> str:
+    """路径里的空间 + 成员角色校验：团队空间的 admin 只能管自己这个空间。"""
     if workspaces.get_workspace_store().get(ws_id) is None:
         raise HTTPException(404, "工作区不存在")
+    role = workspace_role(user, ws_id)
+    if not members.at_least(role, minimum):
+        raise HTTPException(
+            403, f"该操作需要空间 {minimum} 及以上角色（当前：{role or '非成员'}）"
+        )
+    return role
+
+
+@router.post("/workspaces/{ws_id}/invites")
+async def create_invite(
+    ws_id: str, req: InviteCreate, user: users.User = Depends(current_user)
+) -> dict:
+    """生成邀请码：新用户或存量用户凭码加入工作区（角色即码上的角色）。"""
+    _guard_ws(ws_id, user, "admin")
+    if members.is_personal_workspace(ws_id):
+        raise HTTPException(400, "个人空间是私有边界，不能生成邀请码")
     try:
         return workspaces.create_invite(ws_id, req.role, max(1, req.max_uses))
     except ValueError as exc:
@@ -96,15 +127,107 @@ async def create_invite(
 
 @router.get("/workspaces/{ws_id}/invites")
 async def list_invites(
-    ws_id: str, admin: users.User = Depends(current_admin)
+    ws_id: str, user: users.User = Depends(current_user)
 ) -> list[dict]:
+    _guard_ws(ws_id, user, "admin")
     return workspaces.list_invites(ws_id)
+
+
+class MemberPatch(BaseModel):
+    role: str
+
+
+@router.get("/workspaces/{ws_id}/members")
+async def list_ws_members(
+    ws_id: str, user: users.User = Depends(current_user)
+) -> list[dict]:
+    """空间成员清单（成员即可见，便于知道同事是谁）；角色变更需 admin。"""
+    _guard_ws(ws_id, user, "member")
+    store = users.get_user_store()
+    out: list[dict] = []
+    for item in members.get_member_store().members_of(ws_id):
+        account = store.get(item.user_id)
+        if account is None:
+            continue
+        out.append(
+            {
+                "user_id": item.user_id,
+                "username": account.username,
+                "display_name": account.display_name,
+                "role": item.role,
+                "is_personal": item.is_personal,
+                "joined_at": item.joined_at,
+                "disabled": account.disabled,
+            }
+        )
+    out.sort(key=lambda m: (-members.rank(m["role"]), m["username"].lower()))
+    return out
+
+
+@router.patch("/workspaces/{ws_id}/members/{user_id}")
+async def set_ws_member_role(
+    ws_id: str, user_id: str, req: MemberPatch, user: users.User = Depends(current_user)
+) -> dict:
+    actor = _guard_ws(ws_id, user, "admin")
+    if req.role not in (*members.MEMBER_ROLES, "owner"):
+        raise HTTPException(400, f"角色只能是 {(*members.MEMBER_ROLES, 'owner')}")
+    target = members.get_member_store()
+    current = target.role_of(user_id, ws_id)
+    if current is None:
+        raise HTTPException(404, "该账号不是此空间成员")
+    if current == "owner" and req.role != "owner" and actor != "owner":
+        raise HTTPException(403, "只有空间所有者可以转移或降级所有者")
+    if user_id == user.id and req.role != current:
+        raise HTTPException(400, "不能修改自己在该空间内的角色")
+    if req.role == "owner" and current != "owner":
+        # 转让所有权：原 owner 降为 admin，保证同一空间只有一个 owner
+        for item in target.members_of(ws_id):
+            if item.role == "owner" and item.user_id != user_id:
+                target.set_role(item.user_id, ws_id, "admin")
+    target.set_role(user_id, ws_id, req.role)
+    target.save()
+    audit.record(
+        workspace_id=ws_id, key_id=None, key_name=user.username,
+        method="PATCH", path=f"/api/workspaces/{ws_id}/members/{user_id}", status=200,
+        duration_ms=0, detail=f"{current} -> {req.role}",
+    )
+    return {"ok": True, "user_id": user_id, "role": req.role}
+
+
+@router.delete("/workspaces/{ws_id}/members/{user_id}")
+async def remove_ws_member(
+    ws_id: str, user_id: str, user: users.User = Depends(current_user)
+) -> dict:
+    actor = _guard_ws(ws_id, user, "admin")
+    target = members.get_member_store()
+    current = target.role_of(user_id, ws_id)
+    if current is None:
+        raise HTTPException(404, "该账号不是此空间成员")
+    if current == "owner":
+        raise HTTPException(400, "空间所有者不可被移除，请先转让所有权")
+    if user_id == user.id and actor != "owner":
+        raise HTTPException(400, "不能移除自己，请使用「退出空间」")
+    target.remove(user_id, ws_id)
+    target.save()
+    account = users.get_user_store().get(user_id)
+    if account is not None and ws_id in account.workspaces:
+        users.get_user_store().update(
+            account, workspaces=[w for w in account.workspaces if w != ws_id]
+        )
+        users.get_user_store().save()
+    audit.record(
+        workspace_id=ws_id, key_id=None, key_name=user.username,
+        method="DELETE", path=f"/api/workspaces/{ws_id}/members/{user_id}", status=200,
+        duration_ms=0, detail=f"remove {current}",
+    )
+    return {"ok": True}
 
 
 @router.patch("/workspaces/{ws_id}")
 async def patch_workspace(
-    ws_id: str, req: WorkspacePatch, admin: users.User = Depends(current_admin)
+    ws_id: str, req: WorkspacePatch, user: users.User = Depends(current_user)
 ) -> dict:
+    _guard_ws(ws_id, user, "admin")
     store = workspaces.get_workspace_store()
     ws = store.rename(ws_id, req.name.strip(), req.description)
     if ws is None:
@@ -115,9 +238,12 @@ async def patch_workspace(
 
 @router.delete("/workspaces/{ws_id}")
 async def delete_workspace(
-    ws_id: str, admin: users.User = Depends(current_admin)
+    ws_id: str, user: users.User = Depends(current_user)
 ) -> dict:
-    """只允许删除空工作区，避免误删带走数据。"""
+    """只允许删除空工作区；个人空间不可删，避免把账号的落脚点删掉。"""
+    _guard_ws(ws_id, user, "owner")
+    if members.is_personal_workspace(ws_id):
+        raise HTTPException(400, "个人空间不可删除")
     usage = _usage_of(ws_id)
     if sum(usage.values()) > 0:
         raise HTTPException(400, f"工作区非空，请先清理资源：{usage}")
@@ -125,6 +251,8 @@ async def delete_workspace(
     if not store.delete(ws_id):
         raise HTTPException(400, "工作区不存在或为默认工作区（不可删除）")
     store.save()
+    members.get_member_store().drop_workspace(ws_id)
+    members.get_member_store().save()
     return {"ok": True}
 
 
@@ -145,8 +273,8 @@ async def issue_api_key(
     target = req.workspace_id or ws
     if workspaces.get_workspace_store().get(target) is None:
         raise HTTPException(404, "工作区不存在")
-    if not user.can_access(target):
-        raise HTTPException(403, "无权为该工作区签发密钥")
+    if not members.at_least(workspace_role(user, target), "admin"):
+        raise HTTPException(403, "无权为该工作区签发密钥（需要该空间 admin）")
     store = apikeys.get_api_key_store()
     key, token = store.issue(req.name.strip() or "未命名密钥", target, req.scopes)
     store.save()
