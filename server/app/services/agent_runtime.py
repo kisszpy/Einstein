@@ -115,6 +115,12 @@ class LlmTimer:
             completion_tokens=self.completion_tokens,
             status=self.status,
         )
+        # 同一份用量也要进运行轨迹：成本看板按 run 聚合，metrics 只有计数没有
+        # 维度（谁、哪个模型、哪个空间），拼不出账。
+        from app.services import traces
+
+        if self.prompt_tokens or self.completion_tokens:
+            traces.note_tokens(self.prompt_tokens or 0, self.completion_tokens or 0, calls=1)
 
 
 def recall_memory(ctx: Any, task: str, top_k: int = 3) -> list[str]:

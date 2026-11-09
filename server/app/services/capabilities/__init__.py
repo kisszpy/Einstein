@@ -75,6 +75,10 @@ class AgentContext:
     # 本轮召回到的长期记忆（人设之外的工作区事实）。由引擎在装配前填好，
     # 提示词构建器负责拼进系统提示——智能体因此也带背景，而不是每次从零开始。
     memory: list[str] = field(default_factory=list)
+    # 本轮使用的模型（models 表 id）。空 = 平台默认 → .env。
+    # 放这里而不是逐个函数加参数：装配点在 _build_agent/_get_model 深处，
+    # 一路透传要改四层签名，而"这轮用什么模型"本来就是上下文的一部分。
+    model_id: str = ""
 
     def note_artifact(self, rel_path: str, kind: str) -> None:
         entry = {"path": rel_path, "kind": kind}

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from app.api.deps import current_uid, current_user, current_workspace, workspace_role
 from app.core.config import get_settings
 from app.services import batch as batch_io, members
+from app.services import kb_access, sources
 from app.services.parsers import MAX_BYTES, ParseError, fetch_url, parse_document
 from app.services.queue import get_queue
 from app.services.rag import ingest_document, reembed_chunk, reindex_document, search
@@ -86,10 +87,17 @@ class SearchRequest(BaseModel):
     parent_expand: bool = False  # 父子切片命中后回填父片上下文
 
 
-def _require_kb(store: KBStore, kb_id: str, ws: str, uid: str) -> None:
-    """跨工作区、跨用户的访问一律按"不存在"处理，不泄露他人资源的存在性。"""
-    if not store.owns(kb_id, ws, uid):
+def _require_kb(store: KBStore, kb_id: str, ws: str, uid: str, *, write: bool = False) -> None:
+    """跨工作区、跨用户的访问一律按"不存在"处理，不泄露他人资源的存在性。
+
+    `write=True` 用于所有会改内容的入口：能读不等于能写——共享给全空间看的
+    制度库，不该让每个同事都能往里传文件、删切片。
+    """
+    level = kb_access.access(store, kb_id, ws, uid)
+    if level is None:
         raise HTTPException(404, "知识库不存在")
+    if write and level != "write":
+        raise HTTPException(403, "你对该知识库只有只读权限")
 
 
 def _require_doc(store: KBStore, kb_id: str, doc_id: str):
@@ -180,6 +188,15 @@ def _cleanup_dir(path: Path) -> None:
 @router.get("")
 async def list_knowledge_bases(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
     store = get_store()
+    listed = {kb.id for kb in store.list_kbs(ws, uid)}
+    rows = list(store.list_kbs(ws, uid))
+    # 显式授权给我的库：可见性可能是 private，列表查询自然拿不到，这里补上
+    for kb_id in kb_access.granted_kb_ids(uid):
+        if kb_id in listed:
+            continue
+        kb = store.get_kb(kb_id)
+        if kb is not None and kb.workspace_id == ws:
+            rows.append(kb)
     return [
         {
             "id": kb.id,
@@ -187,10 +204,11 @@ async def list_knowledge_bases(ws: str = Depends(current_workspace), uid: str = 
             "description": kb.description,
             "visibility": kb.visibility,
             "owner_id": kb.owner_id,
-            "mine": kb.owner_id in ("", uid),
+            "mine": kb.owner_id == uid,
+            "my_role": kb_access.access(store, kb.id, ws, uid) or "read",
             "document_count": len(store.documents_of_kb(kb.id)),
         }
-        for kb in store.list_kbs(ws, uid)
+        for kb in rows
     ]
 
 
@@ -217,7 +235,7 @@ async def update_kb(
 ) -> dict:
     """改名称/描述/可见性。只有创建者或工作区管理员能改。"""
     store = get_store()
-    _require_kb(store, kb_id, ws, uid)
+    _require_kb(store, kb_id, ws, uid, write=True)
     kb = store.get_kb(kb_id)
     if kb is None:
         raise HTTPException(404, "知识库不存在")
@@ -240,6 +258,51 @@ async def update_kb(
     }
 
 
+class GrantRequest(BaseModel):
+    user_id: str
+    role: str = "read"  # read | write
+
+
+@router.get("/{kb_id}/grants")
+async def list_grants(
+    kb_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
+) -> list[dict]:
+    """该库的授权名单。只有能写的人（创建者/管理员）才看得到。"""
+    store = get_store()
+    _require_kb(store, kb_id, ws, uid, write=True)
+    return [kb_access.grant_payload(r) for r in kb_access.list_grants(kb_id)]
+
+
+@router.post("/{kb_id}/grants")
+async def add_grant(
+    kb_id: str, req: GrantRequest,
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> dict:
+    """把库开给某个人。授权是叠加层，不改变 visible 三档的语义。"""
+    store = get_store()
+    _require_kb(store, kb_id, ws, uid, write=True)
+    if req.user_id == uid:
+        raise HTTPException(400, "不能给自己授权（你已经是创建者）")
+    try:
+        row = kb_access.grant(
+            kb_id=kb_id, workspace_id=ws, user_id=req.user_id,
+            role=req.role, granted_by=uid,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return kb_access.grant_payload(row)
+
+
+@router.delete("/{kb_id}/grants/{user_id}")
+async def remove_grant(
+    kb_id: str, user_id: str,
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> dict:
+    store = get_store()
+    _require_kb(store, kb_id, ws, uid, write=True)
+    return {"ok": kb_access.revoke(kb_id, user_id)}
+
+
 @router.get("/{kb_id}/documents")
 async def list_documents(kb_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
     store = get_store()
@@ -254,6 +317,8 @@ async def list_documents(kb_id: str, ws: str = Depends(current_workspace), uid: 
             "status": d.status,
             "content_hash": d.content_hash[:12],
             "updated_at": d.updated_at,
+            # 来源与新鲜度：过期标记只在"有抓取地址"的文档上出现
+            **sources.describe(d),
         }
         for d in store.documents_of_kb(kb_id)
     ]
@@ -265,7 +330,7 @@ async def add_document(
 ) -> dict:
     """粘贴文本入库（同步）。"""
     store = get_store()
-    _require_kb(store, kb_id, ws, uid)
+    _require_kb(store, kb_id, ws, uid, write=True)
     try:
         result = await ingest_document(
             store, kb_id, req.name, req.content,
@@ -284,7 +349,7 @@ async def upload_document(
 ) -> dict:
     """上传并同步解析入库（小文件用；大文件走 /documents/async）。"""
     store = get_store()
-    _require_kb(store, kb_id, ws, uid)
+    _require_kb(store, kb_id, ws, uid, write=True)
     raw = await file.read()
     name = file.filename or "未命名"
     try:
@@ -310,7 +375,7 @@ async def upload_document_async(
     50MB 的 PDF 也不会占住 HTTP worker；前端拿 job_id 轮询进度。
     """
     store = get_store()
-    _require_kb(store, kb_id, ws, uid)
+    _require_kb(store, kb_id, ws, uid, write=True)
 
     settings = get_settings()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -364,7 +429,7 @@ async def upload_documents_batch(
     进度用 GET /jobs/{id} 看 done/total 与失败清单。
     """
     store = get_store()
-    _require_kb(store, kb_id, ws, uid)
+    _require_kb(store, kb_id, ws, uid, write=True)
 
     settings = get_settings()
     max_files = settings.import_batch_max_files      # 0 = 不限制
@@ -459,7 +524,7 @@ async def import_directory(
     未配置时返回 403 并说明怎么开。符号链接与依赖目录（node_modules/.git 等）会跳过。
     """
     store = get_store()
-    _require_kb(store, kb_id, ws, uid)
+    _require_kb(store, kb_id, ws, uid, write=True)
     settings = get_settings()
     try:
         root = batch_io.resolve_allowed_root(req.path, settings.import_roots)
@@ -506,18 +571,84 @@ async def import_url(
 ) -> dict:
     """抓网页入库（同步，限制 8MB）。"""
     store = get_store()
-    _require_kb(store, kb_id, ws, uid)
+    _require_kb(store, kb_id, ws, uid, write=True)
     try:
         title, content = fetch_url(req.url)
     except ParseError as exc:
         raise HTTPException(400, str(exc)) from exc
     try:
         result = await ingest_document(
-            store, kb_id, req.name or title or req.url, content, source="url"
+            store, kb_id, req.name or title or req.url, content, source="url",
+            # 记下抓取坐标：没有它，这篇文档既不能重抓也不能判过期
+            meta={"url": req.url, "fetched_at": sources.now()},
         )
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
     return {**_ingest_payload(result), "url": req.url}
+
+
+class RefreshRequest(BaseModel):
+    """批量重抓：给 doc_ids 就抓这些，stale_only 就抓所有过期的，都不给等于全抓。"""
+
+    doc_ids: list[str] = []
+    stale_only: bool = False
+
+
+@router.post("/{kb_id}/documents/{doc_id}/refresh")
+async def refresh_document(
+    kb_id: str, doc_id: str,
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> dict:
+    """重新抓一次源网页。内容没变只更新时间戳，变了生成一个新版本。"""
+    store = get_store()
+    _require_kb(store, kb_id, ws, uid, write=True)
+    doc = _require_doc(store, kb_id, doc_id)
+    result = await sources.refresh(store, kb_id, doc)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return {"id": doc_id, "name": doc.name, **result}
+
+
+@router.post("/{kb_id}/documents/refresh")
+async def refresh_documents(
+    kb_id: str, req: RefreshRequest,
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> dict:
+    """批量重抓。单篇失败不中断整批——制度库一次几十篇，不能因为一个 404 全废。"""
+    store = get_store()
+    _require_kb(store, kb_id, ws, uid, write=True)
+    docs = store.documents_of_kb(kb_id)
+    if req.doc_ids:
+        wanted = set(req.doc_ids)
+        docs = [d for d in docs if d.id in wanted]
+    elif req.stale_only:
+        docs = [d for d in docs if sources.is_stale(d)]
+    else:
+        docs = [d for d in docs if sources.source_url(d)]
+    if not docs:
+        return {"total": 0, "changed": 0, "failed": 0, "items": []}
+    return await sources.refresh_many(store, kb_id, docs)
+
+
+@router.get("/{kb_id}/documents/stale")
+async def stale_documents(
+    kb_id: str, days: int | None = None,
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> dict:
+    """可能过期的文档清单（只含网页入库的）。"""
+    store = get_store()
+    _require_kb(store, kb_id, ws, uid)
+    limit = days if days is not None else sources.stale_days()
+    rows = [d for d in store.documents_of_kb(kb_id) if sources.is_stale(d, days=limit)]
+    return {
+        "threshold_days": limit,
+        "count": len(rows),
+        "items": [
+            {"id": d.id, "name": d.name, "version": d.version,
+             "source_url": sources.source_url(d), "fetched_at": sources.fetched_at(d)}
+            for d in rows
+        ],
+    }
 
 
 @router.get("/{kb_id}/documents/{doc_id}/chunks")
@@ -550,7 +681,7 @@ async def update_chunk(
 ) -> dict:
     """改切片文本并重算向量，改完立刻可被检索命中。"""
     store = get_store()
-    _require_kb(store, kb_id, ws, uid)
+    _require_kb(store, kb_id, ws, uid, write=True)
     text = req.text.strip()
     if not text:
         raise HTTPException(400, "切片文本不能为空")
@@ -569,7 +700,7 @@ async def delete_document(
 ) -> dict:
     """删文档并级联清理切片与向量。"""
     store = get_store()
-    _require_kb(store, kb_id, ws, uid)
+    _require_kb(store, kb_id, ws, uid, write=True)
     _require_doc(store, kb_id, doc_id)
     removed = store.delete_document(doc_id)
     try:
@@ -585,7 +716,7 @@ async def reindex_one(
 ) -> dict:
     """按当前切片策略重建这一篇（版本号不变）。"""
     store = get_store()
-    _require_kb(store, kb_id, ws, uid)
+    _require_kb(store, kb_id, ws, uid, write=True)
     _require_doc(store, kb_id, doc_id)
     try:
         count = await reindex_document(store, doc_id)
@@ -620,7 +751,7 @@ async def rollback_document(
 ) -> dict:
     """回滚到指定版本：把那份内容作为新版本重新入库（历史不丢）。"""
     store = get_store()
-    _require_kb(store, kb_id, ws, uid)
+    _require_kb(store, kb_id, ws, uid, write=True)
     doc = _require_doc(store, kb_id, doc_id)
     snapshot = store.repo.get_version(doc_id, req.version)
     if snapshot is None:
@@ -734,7 +865,7 @@ async def citation_locator(chunk_id: str, ws: str = Depends(current_workspace), 
 async def delete_kb(kb_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     """删除知识库，连同其文档、切片与向量一并清理。"""
     store = get_store()
-    _require_kb(store, kb_id, ws, uid)
+    _require_kb(store, kb_id, ws, uid, write=True)
     doc_ids = [d.id for d in store.documents_of_kb(kb_id)]
     removed = store.delete_kb(kb_id)
     index = get_vector_index()

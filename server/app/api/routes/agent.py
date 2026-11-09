@@ -9,7 +9,14 @@ from pydantic import BaseModel
 
 from app.api.deps import current_uid, current_workspace
 from app.core.config import get_settings
-from app.services import approvals, projects, ratelimit, run_registry, traces
+from app.services import (
+    approvals,
+    models,
+    projects,
+    ratelimit,
+    run_registry,
+    traces,
+)
 from app.services.agent import chunk_text, run_agent
 from app.services.capabilities import AgentContext, sandbox
 from app.services.history import get_history_store
@@ -30,6 +37,8 @@ class AgentRunRequest(BaseModel):
     skill_ids: list[str] = []
     # 专家人设（可选）：只取 persona + temperature，不携带任何挂载
     expert_id: str = ""
+    # 本轮指定模型（注册表 id）；空 = 专家偏好 → 平台默认 → .env
+    model_id: str = ""
     # 续跑：批准/拒绝之后接着跑，而不是把整个任务重发一遍
     resume: bool = False
     # 拒绝时给模型的指示（"先跑测试再执行"之类），模型据此换路线
@@ -138,12 +147,14 @@ def _resolve_mounts(
     temperature: float | None = None
     default_skill_ids: list[str] = []
     expert_kb_ids: list[str] = []
+    model_id = ""
     if req.expert_id:
         expert = get_expert_store().visible(req.expert_id, ws, uid)
         if expert and expert.enabled:
             if expert.persona.strip():
                 persona = f"【人设】{expert.persona.strip()}"
             temperature = expert.temperature
+            model_id = getattr(expert, "model_id", "") or ""
             default_skill_ids = list(expert.skill_ids)
             expert_kb_ids = list(expert.kb_ids)
 
@@ -168,7 +179,7 @@ def _resolve_mounts(
                 break
 
     pinned = skill_publisher.pinned_slugs(ws, skill_ids)
-    return persona, pinned, temperature, expert_kb_ids
+    return persona, pinned, temperature, expert_kb_ids, model_id
 
 
 async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterator[str]:
@@ -185,9 +196,16 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
             lc_history.append({"role": "assistant", "content": r.answer[:1500]})
     try:
         # 只允许检索当前工作区的知识库；项目名给定时必须已存在
-        persona, pinned_skills, temperature, expert_kb_ids = _resolve_mounts(ws, uid, req)
+        (
+            persona, pinned_skills, temperature, expert_kb_ids, expert_model_id,
+        ) = _resolve_mounts(ws, uid, req)
+        # 模型优先级：本轮显式指定 > 专家偏好 > 平台默认 > .env
+        effective_model_id = req.model_id or expert_model_id
         kb_ids = get_store().owned_kb_ids(ws, [*req.kb_ids, *expert_kb_ids], uid)
-        ctx = AgentContext(workspace_id=ws, owner_id=uid, project=req.project)
+        ctx = AgentContext(
+            workspace_id=ws, owner_id=uid, project=req.project,
+            model_id=effective_model_id,
+        )
         # 兜底路径用：检查点丢了（服务重启）时按已批准的工具重跑，不再弹框
         ctx.approved_tools = approvals.granted_tools(ws, uid, session_id)
         if ctx.project:
@@ -259,7 +277,9 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
         _settings = get_settings()
         traces.start(
             kind="agent", workspace_id=ws, owner_id=uid, session_id=session_id,
-            engine=_settings.agent_engine, model=_settings.llm_model,
+            engine=_settings.agent_engine,
+            # 记实际生效的模型，成本看板按它聚合
+            model=models.resolve(effective_model_id).model,
         )
 
         try:

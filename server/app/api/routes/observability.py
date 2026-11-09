@@ -33,6 +33,20 @@ async def get_llm(limit: int = Query(50, le=500)) -> list[dict]:
     return metrics.recent_llm(limit)
 
 
+@router.get("/cost")
+async def get_cost(
+    days: int = Query(7, ge=1, le=90),
+    ws: str = Depends(current_workspace),
+) -> dict:
+    """用量与花费：按天 / 模型 / 成员 / 入口四种分组。
+
+    刻意不拆成四个接口：它们读的是同一批行，拆开就要扫四遍库，而看板上
+    这四个表本来就是一起看的。数据来自 `run_traces`，所以只有走过对话或
+    智能体的调用才计入——评测这类后台任务的 token 在 metrics 里，不进这张账。
+    """
+    return traces.usage_summary(workspace_id=ws, days=days)
+
+
 @router.get("/traces")
 async def list_traces(
     limit: int = Query(50, le=500),

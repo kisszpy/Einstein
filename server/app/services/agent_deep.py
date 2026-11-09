@@ -359,7 +359,7 @@ def _build_agent(
     lc_tools.extend(extra_tools)
     extras = f"\n\n{persona.strip()}" if persona.strip() else ""
     return create_deep_agent(
-        model=_get_model(temperature),
+        model=_get_model(temperature, getattr(ctx, "model_id", "")),
         tools=lc_tools,
         # 挂了知识库就追加"KB 优先"硬规则，否则任务路由会把模型带向 web_search
         system_prompt=(
@@ -384,11 +384,11 @@ def _build_agent(
     )
 
 
-def _get_model(temperature: float | None = None):
+def _get_model(temperature: float | None = None, model_id: str = ""):
     """复用 agent.py 的模型配置，避免两处各写一遍 base_url/timeout。"""
     from app.services.agent import _get_model as build
 
-    return build(temperature)
+    return build(temperature, model_id)
 
 
 def _approval_tools() -> set[str]:

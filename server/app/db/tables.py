@@ -215,6 +215,12 @@ EXPERTS = Table(
         _c("status", default="'draft'"),
         _c("published_at", default="''"),
         _c("temperature", "real", default="0.7"),
+        # 该专家专用的模型（models 表 id）。空 = 跟随平台默认模型。
+        # 为什么放在专家上而不是全局：写作类专家要长上下文、代码类专家要强推理，
+        # 一个全局模型只能折中，而"每个专家一次选择"是用户能理解的粒度。
+        _c("model_id", default="''"),
+        # 可见范围：private 仅创建者 / workspace 同空间可读 / shared 跨空间可读
+        _c("visibility", default="'private'"),
         _c("enabled", "bool", default="1"),
         _c("skill_ids", "json", default="'[]'"),
         _c("kb_ids", "json", default="'[]'"),
@@ -231,6 +237,7 @@ SKILLS = Table(
         _c("workspace_id", default="'default'"),
         # '' = 预置技能（内置/GitHub 预装，全员可见）；其余为安装者 user_id
         _c("owner_id", default="''"),
+        _c("visibility", default="'private'"),
         _c("name"),
         _c("description", default="''"),
         _c("system_prompt", default="''"),
@@ -292,6 +299,123 @@ API_KEYS = Table(
         _c("last_used_at", nullable=True),
         _c("revoked", "bool", default="0"),
         _c("call_count", "int", default="0"),
+    ),
+    order="created_at",
+)
+
+# ---------------------------------------------------------------- 知识库授权
+#
+# 三档可见性（private / workspace / shared）解决的是"大体给谁看"，解决不了
+# "这个库只给财务组"。授权表是它的补充：一条 = 某个库额外开给某个人。
+#
+# 为什么不复用 workspace_members：那是"空间里的角色"，与具体某个库无关；
+# 而这里要的是"跨组的例外"——把财务制度库开给行政的某个人，不该让他变成
+# 整个空间的 admin。
+KB_GRANTS = Table(
+    name="kb_grants",
+    columns=(
+        _c("id"),
+        _c("kb_id"),
+        _c("user_id"),
+        _c("workspace_id", default="'default'"),
+        # read 只读（能检索、能看切片）/ write 可写（能传文档、能删切片）
+        _c("role", default="'read'"),
+        _c("granted_by", default="''"),
+        _c("created_at", default="''"),
+    ),
+    key=("kb_id", "user_id"),
+    key_sep=":",
+    order="created_at",
+)
+
+# ---------------------------------------------------------------- 告警
+#
+# 告警规则与告警事件分开存：规则是"什么情况该叫我"（少量、常改），
+# 事件是"什么时候叫过"（只追加、要看历史）。混在一张表里，改阈值就等于
+# 改写历史记录，事后追责时说不清当时到底按什么标准报的。
+ALERT_RULES = Table(
+    name="alert_rules",
+    columns=(
+        _c("id"),
+        _c("workspace_id", default="'default'"),
+        _c("owner_id", default="''"),
+        _c("name"),
+        # error_rate 错误率 | miss_rate 未命中率 | cost_daily 每日花费 | model_down 模型不可用
+        _c("kind", default="'error_rate'"),
+        _c("threshold", "real", default="0"),
+        _c("window_hours", "int", default="24"),
+        # 通知渠道：[{"type":"webhook","url":"https://..."}]
+        _c("channels", "json", default="'[]'"),
+        # 冷却：同一条规则在这个时间内不重复报，否则一个持续故障会刷爆群
+        _c("cooldown_minutes", "int", default="60"),
+        _c("enabled", "bool", default="1"),
+        _c("last_fired_at", default="''"),
+        _c("created_at", default="''"),
+        _c("updated_at", default="''"),
+    ),
+    order="created_at",
+)
+
+ALERT_EVENTS = Table(
+    name="alert_events",
+    columns=(
+        _c("id"),
+        _c("workspace_id", default="'default'"),
+        _c("rule_id", default="''"),
+        _c("rule_name", default="''"),
+        _c("kind", default="''"),
+        _c("value", "real", default="0"),
+        _c("threshold", "real", default="0"),
+        _c("message", default="''"),
+        _c("fired_at", default="''"),
+        _c("delivered", "bool", default="0"),
+        _c("delivery_error", default="''"),
+    ),
+    order="fired_at DESC",
+)
+
+# ---------------------------------------------------------------- 模型注册表
+#
+# 为什么要有这张表：模型信息原先只活在 `.env`（LLM_BASE_URL / LLM_MODEL /
+# LLM_API_KEY）里。用户换了模型只能改配置文件再重启，页面上看不到"现在用的是
+# 哪个模型"，也没法让不同专家跑不同模型。这里把模型变成可管理的资源：
+#
+# - 一行 = 一个可调用的端点（base_url + model + key），名字是人起的；
+# - 密钥与 MCP 凭证同一套加密（enc:v2 + HMAC），不进日志、不回显；
+# - `is_default` 至多一行生效（服务层保证），全站默认走它；没有默认行时
+#   回落到 `.env`，所以老部署升级后行为不变；
+# - `last_*` 是连通性检测的缓存结果，未检测过时为空/unknown。
+MODELS = Table(
+    name="models",
+    columns=(
+        _c("id"),
+        _c("workspace_id", default="'default'"),
+        # '' = 平台预置模型（全员可见，只有管理员能改）；其余为创建者 user_id
+        _c("owner_id", default="''"),
+        _c("name"),
+        _c("base_url", default="''"),
+        _c("model", default="''"),
+        # 加密后的密钥（enc:v2:…）；空 = 用 .env 的 LLM_API_KEY
+        _c("api_key", default="''"),
+        _c("context_window", "int", default="0"),
+        _c("max_output", "int", default="0"),
+        _c("temperature", "real", default="0.7"),
+        # 单价（元 / 百万 token）。0 = 未填，成本看板按 token 计而不按钱计。
+        # 为什么不写死在代码里：模型价格随时变，而且本地模型的"价格"是电费，
+        # 每个部署的账不一样，只有使用者自己填才有意义。
+        _c("price_in", "real", default="0"),
+        _c("price_out", "real", default="0"),
+        # chat | embed；embed 目前仅供检索侧展示，不参与对话路由
+        _c("kind", default="'chat'"),
+        _c("is_default", "bool", default="0"),
+        _c("enabled", "bool", default="1"),
+        _c("tags", "json", default="'[]'"),
+        _c("note", default="''"),
+        _c("last_status", default="'unknown'"),   # unknown | ok | error
+        _c("last_error", default="''"),
+        _c("last_checked_at", default="''"),
+        _c("created_at", default="''"),
+        _c("updated_at", default="''"),
     ),
     order="created_at",
 )
@@ -414,6 +538,7 @@ RUN_TRACES = Table(
         _c("id", field="run_id"),
         _c("workspace_id", default="'default'"),
         _c("owner_id", default="''"),
+        _c("owner_name", default="''"),    # 用量报表直读，避免每次 join 用户表
         _c("kind", default="'chat'"),      # chat | agent | agent_pro | v1_chat | v1_agent
         _c("session_id", default="''"),
         _c("engine", default="''"),
@@ -426,6 +551,9 @@ RUN_TRACES = Table(
         _c("tokens_in", "int", default="0"),
         _c("tokens_out", "int", default="0"),
         _c("llm_calls", "int", default="0"),
+        # 本次花费（元）。按当时的单价快照下来，而不是查询时再算——
+        # 模型价格会变、模型行会被删，历史账不能被后来改价格改写。
+        _c("cost", "real", default="0"),
         _c("retrieval", "json", default="'{}'"),
         _c("tool_calls", "json", default="'[]'"),
         _c("interrupt", default="''"),
@@ -445,6 +573,10 @@ TABLES: dict[str, Table] = {
         EXPERTS,
         SKILLS,
         MCP_SERVERS,
+        MODELS,
+        KB_GRANTS,
+        ALERT_RULES,
+        ALERT_EVENTS,
         API_KEYS,
         EVAL_SETS,
         EVAL_RUNS,
@@ -468,6 +600,10 @@ DOMAIN_TABLES: dict[str, str] = {
     "mcp": "mcp_servers",
     "memory": "workspace_memory",
     "run_traces": "run_traces",
+    "models": "models",
+    "kb_grants": "kb_grants",
+    "alert_rules": "alert_rules",
+    "alert_events": "alert_events",
     "sessions": "user_sessions",
     "skills": "skills",
     "users": "users",
@@ -491,6 +627,7 @@ def ddl_all() -> list[str]:
         "CREATE INDEX IF NOT EXISTS idx_skills_ws ON skills(workspace_id)",
         "CREATE INDEX IF NOT EXISTS idx_apikeys_ws ON api_keys(workspace_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_mcp_ws ON mcp_servers(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS idx_models_ws ON models(workspace_id, owner_id)",
         "CREATE INDEX IF NOT EXISTS idx_members_ws ON workspace_members(workspace_id)",
         "CREATE INDEX IF NOT EXISTS idx_invites_ws ON workspace_invites(workspace_id)",
         "CREATE INDEX IF NOT EXISTS idx_audit_ws ON audit_logs(workspace_id, ts)",

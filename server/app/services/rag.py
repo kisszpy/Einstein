@@ -243,11 +243,15 @@ async def ingest_document(
     *, source: str = "text", content_hash: str = "", dedupe: bool = True,
     note: str = "", strategy: str = DEFAULT_STRATEGY,
     chunk_size: int = DEFAULT_CHUNK_SIZE, chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+    meta: dict | None = None,
 ) -> IngestResult:
     """切片 → 嵌入 → 入库，带内容去重与同名版本管理。
 
     - 内容完全相同（sha256 一致）→ 直接返回已有文档，不重复嵌入
     - 同一知识库内同名文档内容不同 → 生成新版本，旧内容快照进 document_versions
+
+    `meta` 是「这篇文档从哪来」的坐标（url / fetched_at / 原始文件名），
+    更新版本时与旧 meta 合并而不是覆盖——不然源同步一刷新就把抓取地址丢了。
     """
     digest = content_hash or content_digest(content)
 
@@ -271,6 +275,7 @@ async def ingest_document(
         doc = store.update_document(
             previous.id, content=content, content_hash=digest,
             version=previous.version + 1, chunk_count=len(texts), source=source,
+            meta={**(previous.meta or {}), **(meta or {})} if meta else None,
         )
         assert doc is not None
         count = await _embed_and_store(store, doc, kb_id, content, texts, strategy=strategy)
@@ -285,7 +290,7 @@ async def ingest_document(
 
     texts = _split(content, strategy=strategy, size=chunk_size, overlap=chunk_overlap)
     doc = store.add_document(kb_id, name, content, chunk_count=len(texts),
-                             source=source, content_hash=digest)
+                             source=source, content_hash=digest, meta=meta)
     store.repo.add_version(
         document_id=doc.id, kb_id=kb_id, version=doc.version, content=content,
         content_hash=digest, chunk_count=len(texts), source=source, note="首次入库",

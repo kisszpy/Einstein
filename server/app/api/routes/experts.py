@@ -20,6 +20,7 @@ class ExpertCreate(BaseModel):
     kb_ids: list[str] = []
     tool_ids: list[str] = []
     temperature: float = 0.7
+    model_id: str = ""
     greeting: str = ""
     suggestions: list[str] = []
     visibility: str = "private"
@@ -34,6 +35,7 @@ class ExpertUpdate(BaseModel):
     kb_ids: list[str] | None = None
     tool_ids: list[str] | None = None
     temperature: float | None = None
+    model_id: str | None = None
     enabled: bool | None = None
     greeting: str | None = None
     suggestions: list[str] | None = None
@@ -58,6 +60,7 @@ def _dump(expert) -> dict:  # noqa: ANN001 — dataclass，内部使用
         "kb_ids": expert.kb_ids,
         "tool_ids": expert.tool_ids,
         "temperature": expert.temperature,
+        "model_id": getattr(expert, "model_id", ""),
         "enabled": expert.enabled,
         "workspace_id": expert.workspace_id,
         "greeting": expert.greeting,
@@ -138,6 +141,7 @@ async def create_expert(
         kb_ids=kb_ids,
         tool_ids=req.tool_ids,
         temperature=req.temperature,
+        model_id=req.model_id,
         workspace_id=ws,
         greeting=req.greeting,
         suggestions=req.suggestions,
@@ -168,6 +172,7 @@ async def update_expert(
         kb_ids=kb_ids if req.kb_ids is not None else None,
         tool_ids=req.tool_ids,
         temperature=req.temperature,
+        model_id=req.model_id,
         enabled=req.enabled,
         greeting=req.greeting,
         suggestions=req.suggestions,

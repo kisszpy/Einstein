@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     # 重排序：auto（自动：配了端点走 http、配了目录走 onnx、都没有则关）
     # | none | http（OpenAI 兼容 /rerank）| onnx（本机 bge-reranker）
     rerank_provider: str = "auto"
+    # 网页入库的文档超过这么多天没重抓就算"可能过期"，列表里给提示。
+    # 制度/价格/流程类资料三个月就旧了；30 天是提醒频率与噪音的折中。
+    kb_stale_days: int = 30
+    # 告警评估间隔（分钟）。0 = 关闭定时评估，只留手动触发；
+    # 默认 10 分钟：够快发现"模型挂了"，又不会让日志被无意义的轮询刷满。
+    alert_interval_minutes: int = 10
     rerank_endpoint: str = ""       # 如 http://127.0.0.1:8080/v1/rerank
     rerank_model: str = "reranker"
     rerank_api_key: str = ""

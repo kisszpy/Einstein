@@ -37,6 +37,8 @@ class Expert:
     kb_ids: list[str] = field(default_factory=list)
     tool_ids: list[str] = field(default_factory=list)
     temperature: float = 0.7
+    # 专属模型（models 表 id）；空 = 跟随平台默认模型
+    model_id: str = ""
     enabled: bool = True
     workspace_id: str = "default"
     # ---- 结构化人设与发布流 ----
@@ -101,6 +103,7 @@ class ExpertStore:
             kb_ids=kwargs.get("kb_ids", []),  # type: ignore[arg-type]
             tool_ids=kwargs.get("tool_ids", []),  # type: ignore[arg-type]
             temperature=kwargs.get("temperature", 0.7),  # type: ignore[arg-type]
+            model_id=kwargs.get("model_id", ""),  # type: ignore[arg-type]
             workspace_id=kwargs.get("workspace_id", "default"),  # type: ignore[arg-type]
             greeting=kwargs.get("greeting", ""),  # type: ignore[arg-type]
             suggestions=kwargs.get("suggestions", []),  # type: ignore[arg-type]

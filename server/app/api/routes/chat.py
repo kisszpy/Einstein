@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from app.api.deps import current_uid, current_workspace
 from app.core.config import get_settings
+from app.services import models as model_registry
 from app.services import ratelimit, traces, web_augment
 from app.services.experts import get_expert_store
 from app.services.history import get_history_store
@@ -49,6 +50,8 @@ class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     expert_id: str | None = None
     kb_ids: list[str] = []
+    # 本轮指定模型（注册表 id）。空 = 专家偏好 → 平台默认 → .env
+    model_id: str | None = None
     # 联网：auto 按需判断（默认）/ on 本轮必查 / off 本轮不查
     web_mode: str = web_augment.MODE_AUTO
     # 重新生成：保留旧答案（作为另一个版本），只补一条新的助手消息，
@@ -73,15 +76,17 @@ def _to_lc_messages(messages: list[ChatMessage], system_text: str) -> list:
 
 def _compose_system(
     expert_id: str | None, kb_hit: bool, ws: str, uid: str
-) -> tuple[str, float, list[str], list[str]]:
-    """合成系统提示，返回 (system, temperature, kb_ids, tool_ids)。
+) -> tuple[str, float, list[str], list[str], str]:
+    """合成系统提示，返回 (system, temperature, kb_ids, tool_ids, model_id)。
 
     专家 = 人设 + 挂载技能的提示词叠加；未指定专家用默认提示。
     跨工作区的专家与知识库一律忽略，不做任何提示（避免越权探测）。
+    `model_id` 是专家自己的模型偏好，空表示跟平台默认走。
     """
     temperature = 0.7
     kb_ids: list[str] = []
     tool_ids: list[str] = []
+    model_id = ""
     parts: list[str] = []
     store = get_store()
 
@@ -89,6 +94,7 @@ def _compose_system(
         expert = get_expert_store().visible(expert_id, ws, uid)
         if expert and expert.enabled:
             temperature = expert.temperature
+            model_id = getattr(expert, "model_id", "") or ""
             kb_ids = store.owned_kb_ids(ws, list(expert.kb_ids), uid)
             tool_ids = list(expert.tool_ids)
             if expert.persona:
@@ -113,7 +119,7 @@ def _compose_system(
             "回答时优先依据提供的参考资料，引用到某条资料时在句末标注 [编号]。"
             "若资料不足以回答，请明确说明。"
         )
-    return "\n\n".join(parts), temperature, kb_ids, tool_ids
+    return "\n\n".join(parts), temperature, kb_ids, tool_ids, model_id
 
 
 async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[str]:
@@ -149,9 +155,15 @@ async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[st
             store = get_store()
             user_text = req.messages[-1].content
             req_kb_ids = store.owned_kb_ids(ws, req.kb_ids or [], uid)
-            system_text, temperature, expert_kb_ids, expert_tool_ids = _compose_system(
+            (
+                system_text, temperature, expert_kb_ids, expert_tool_ids, expert_model_id,
+            ) = _compose_system(
                 req.expert_id, kb_hit=bool(req_kb_ids), ws=ws, uid=uid
             )
+            # 模型优先级：本轮显式指定 > 专家偏好 > 平台默认 > .env
+            model_id = req.model_id or expert_model_id
+            # 轨迹里记真值（start() 时只能填 .env 的模型名）
+            traces.note_model(model_registry.resolve(model_id).model)
             # 显式传的 kb_ids 优先于专家挂载
             effective_kb_ids = req_kb_ids or expert_kb_ids
 
@@ -239,7 +251,9 @@ async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[st
             # ---- 生成 ----
             buf = ""
             async for kind, text in stream_chat(
-                _to_lc_messages(req.messages, system_text), temperature=temperature
+                _to_lc_messages(req.messages, system_text),
+                temperature=temperature,
+                model_id=model_id,
             ):
                 if kind == "usage":
                     continue  # token 用量已在 llm 层落指标，不进对话流

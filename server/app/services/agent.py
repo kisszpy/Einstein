@@ -19,6 +19,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
 
 from app.core.config import get_settings
+from app.services import models
 from app.services.agent_runtime import (
     LlmTimer,
     build_messages,
@@ -33,20 +34,27 @@ from app.services.tools import build_lc_tools, kb_directive
 RECURSION_LIMIT = 48  # 工作型任务的步数预算（一轮工具调用 ≈ 2 步）
 
 
-def _get_model(temperature: float | None = None) -> ChatOpenAI:
+def _get_model(temperature: float | None = None, model_id: str = "") -> ChatOpenAI:
+    """装配 LangChain 模型。
+
+    端点来自模型注册表（`models.resolve`）：`model_id` 指定 > 平台默认 > `.env`。
+    与对话侧共用同一份解析，避免"对话换了模型、智能体还在用旧的"。
+    """
     settings = get_settings()
+    target = models.resolve(model_id)
     kwargs: dict = dict(
-        base_url=settings.llm_base_url,
-        api_key=settings.llm_api_key,
-        model=settings.llm_model,
+        base_url=target.base_url,
+        api_key=target.api_key,
+        model=target.model,
         # 真流式的开关：astream(messages) 靠模型的 SSE 增量，streaming=False
         # 时它只在最后吐一个完整 chunk，前端就得等全文生成完（旧行为）。
         streaming=bool(getattr(settings, "agent_stream", True)),
         timeout=300,  # 长上下文下本地 27B 生成慢，180s 会误杀
         max_retries=2,
     )
-    if temperature is not None:
-        kwargs["temperature"] = temperature
+    resolved_temp = temperature if temperature is not None else target.temperature
+    if resolved_temp is not None:
+        kwargs["temperature"] = resolved_temp
     return ChatOpenAI(**kwargs)
 
 
@@ -146,7 +154,7 @@ async def _run_react_agent(
     # 长期记忆与 deep 引擎同一套：回滚开关只换执行引擎，不该换掉模型的背景知识
     memories = recall_memory(ctx, task) if ctx is not None else []
     agent = create_agent(
-        _get_model(),
+        _get_model(model_id=getattr(ctx, "model_id", "") if ctx else ""),
         lc_tools,
         # 挂了知识库就追加"KB 优先"硬规则，与 deepagents 引擎保持一致
         system_prompt=(
@@ -161,7 +169,7 @@ async def _run_react_agent(
     seen: set[str] = set()                # 节点可能回放历史消息，按 id 去重
     messages = await build_messages(task, history, kb_ids)
 
-    with LlmTimer("agent", get_settings().llm_model) as timer:
+    with LlmTimer("agent", models.resolve(getattr(ctx, "model_id", "") if ctx else "").model) as timer:
         def _acc_usage(msg: Any) -> None:
             token_usage = (getattr(msg, "response_metadata", None) or {}).get("token_usage")
             if token_usage:

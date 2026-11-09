@@ -16,6 +16,8 @@ from app.api import deps
 from app.api.routes import agent, auth, browse, chat, conversations, experts, health, kb, mcp, skills
 from app.api.routes import eval as eval_routes
 from app.api.routes import memory as memory_routes
+from app.api.routes import alerts as alert_routes
+from app.api.routes import models as model_routes
 from app.api.routes import observability, openapi, platform, projects
 from app.api.routes import jobs
 from app.core.config import get_settings
@@ -69,15 +71,43 @@ async def lifespan(app: FastAPI):
             except Exception as exc:  # noqa: BLE001 — 单次失败不影响下一轮
                 print(f"[checkpoint] 定期清理失败：{type(exc).__name__}: {exc}", flush=True)
 
+    async def alert_loop(minutes: int) -> None:
+        """定期评估告警规则。
+
+        与"手动立即检查"共用 `alerts.evaluate_all()`，两条路径一套逻辑——
+        否则页面上说没事、定时器却判定触发，谁也不知道该信哪个。
+        """
+        from app.services import alerts as alert_service
+
+        while True:
+            await asyncio.sleep(minutes * 60)
+            try:
+                result = await alert_service.evaluate_all()
+                if result.get("fired"):
+                    print(f"[alert] 触发 {len(result['fired'])} 条告警", flush=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — 单轮失败不影响下一轮
+                print(f"[alert] 评估失败：{type(exc).__name__}: {exc}", flush=True)
+
     task = asyncio.create_task(sweeper())
+    interval = int(getattr(get_settings(), "alert_interval_minutes", 0) or 0)
+    alert_task = asyncio.create_task(alert_loop(interval)) if interval > 0 else None
     try:
         yield
     finally:
         task.cancel()
+        if alert_task is not None:
+            alert_task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
+        if alert_task is not None:
+            try:
+                await alert_task
+            except asyncio.CancelledError:
+                pass
         await checkpoints.close()
 
 
@@ -291,6 +321,8 @@ def create_app() -> FastAPI:
     app.include_router(eval_routes.router, prefix="/api")
     app.include_router(platform.router, prefix="/api")
     app.include_router(memory_routes.router, prefix="/api")
+    app.include_router(model_routes.router, prefix="/api")
+    app.include_router(alert_routes.router, prefix="/api")
     # 对外开放 API：/v1/...（Bearer 鉴权，与 /api 控制台面分开）
     app.include_router(openapi.router)
 

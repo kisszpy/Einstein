@@ -331,6 +331,86 @@ def _migration_014(db: Database) -> list[str]:
     ]
 
 
+# 015：模型注册表 + 专家可指定模型。
+#
+# 模型信息原先只活在 `.env`（一个 base_url + 一个 model + 一个 key），换模型
+# 只能改配置文件重启，页面上也看不到当前用的是哪个模型。这张表把模型变成
+# 可管理资源，并给 experts 加 model_id —— 写作类专家要长上下文、代码类专家
+# 要强推理，一个全局模型只能折中。
+#
+# 不预置任何行：没有 `is_default=1` 的行时全站继续用 `.env`，老部署升级后
+# 行为不变；用户显式建模型并设为默认，才切换到注册表。
+def _migration_015(db: Database) -> list[str]:
+    from app.db.tables import TABLES
+
+    statements = [
+        TABLES["models"].ddl(),
+        "CREATE INDEX IF NOT EXISTS idx_models_ws ON models(workspace_id, owner_id)",
+    ]
+    if not _column_exists(db, "experts", "model_id"):
+        statements.append("ALTER TABLE experts ADD COLUMN model_id TEXT NOT NULL DEFAULT ''")
+    # 013 之后专家/技能的三档可见性只存在于内存对象里——表里没有这列，
+    # 写库时被静默丢弃，重启后全部退回 private。这里把列真正建出来。
+    for table in ("experts", "skills"):
+        if not _column_exists(db, table, "visibility"):
+            statements.append(
+                f"ALTER TABLE {table} ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'"
+            )
+    return statements
+
+
+# 016：成本看板要的几列（015 之后才想清楚）。
+#
+# 为什么要单开一条而不是改 015：015 已经在一些库上应用过了，`migrate` 按
+# 版本号跳过——改动已应用的迁移，老库永远拿不到新列，而且没有任何提示。
+# 迁移只增不改，是这个表的唯一纪律。
+def _migration_016(db: Database) -> list[str]:
+    statements: list[str] = []
+    # 单价：把 token 折算成钱。0 = 未填，报表只显示用量不显示金额。
+    for column in ("price_in", "price_out"):
+        if not _column_exists(db, "models", column):
+            statements.append(f"ALTER TABLE models ADD COLUMN {column} REAL NOT NULL DEFAULT 0")
+    # 花费快照：按当时单价定格，改价不回头改写历史账
+    if not _column_exists(db, "run_traces", "cost"):
+        statements.append("ALTER TABLE run_traces ADD COLUMN cost REAL NOT NULL DEFAULT 0")
+    # 成员用量视图要显示人名。按 id 反查用户表在报表里是 N 次查询；
+    # 用户名改一次的代价远小于每次翻报表都 join。
+    if not _column_exists(db, "run_traces", "owner_name"):
+        statements.append(
+            "ALTER TABLE run_traces ADD COLUMN owner_name TEXT NOT NULL DEFAULT ''"
+        )
+    return statements
+
+
+# 017：告警规则与事件。
+#
+# 没有告警的运维是事后考古：值班的人只能等用户来投诉。规则覆盖最常出事的四类——
+# 错误率、未命中率、每日花费、模型不可用。渠道先做 webhook（企业微信/钉钉/通用
+# JSON 都吃这个口），不引入邮件服务依赖。
+def _migration_017(db: Database) -> list[str]:
+    from app.db.tables import TABLES
+
+    return [
+        TABLES["alert_rules"].ddl(),
+        TABLES["alert_events"].ddl(),
+        "CREATE INDEX IF NOT EXISTS idx_alert_rules_ws ON alert_rules(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS idx_alert_events_ws ON alert_events(workspace_id, fired_at)",
+    ]
+
+
+# 018：知识库级授权（"这个库只给财务组"）。
+#
+# 三档可见性只能表达"给全空间看"或"给所有人看"，表达不了"只开给某几个人"。
+# 授权是叠加层：不改变可见性语义，只在它之上额外放行几个人（read/write 两档）。
+def _migration_018(db: Database) -> list[str]:
+    from app.db.tables import TABLES
+
+    return [
+        TABLES["kb_grants"].ddl(),
+        "CREATE INDEX IF NOT EXISTS idx_kb_grants_user ON kb_grants(user_id)",
+    ]
+
+
 MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (2, _MIGRATION_002),
     (3, _MIGRATION_003),
@@ -345,6 +425,10 @@ MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (12, _migration_012),
     (13, _migration_013),
     (14, _migration_014),
+    (15, _migration_015),
+    (16, _migration_016),
+    (17, _migration_017),
+    (18, _migration_018),
 ]
 
 _TYPE_TOKENS = {
