@@ -71,6 +71,7 @@ python -m venv .venv && .venv/Scripts/activate      # Windows
 pip install -r requirements.txt
 cp .env.example .env                                 # 指向本地模型端点
 uvicorn app.main:app --reload --port 8000
+# Windows 也可以直接双击 server/start.bat（独立窗口常驻，关窗口即停）
 
 # 前端（另一个终端）
 cd web
