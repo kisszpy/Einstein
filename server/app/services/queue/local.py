@@ -105,26 +105,47 @@ class LocalQueue:
         ), 0)
 
     # ------------------------------------------------------------ 结束
-    def complete(self, job_id: str, result: dict | None = None) -> Job | None:
-        self.db.execute(
-            "UPDATE jobs SET status = ?, result = ?, error = '', lease_until = '', updated_at = ?"
-            " WHERE id = ?",
-            (DONE, dumps(result), _now(), job_id),
+    def _owned(self, job_id: str) -> bool:
+        """这条任务现在是不是归我执行。
+
+        租约过期后可能已被别的 worker 重领；旧 worker 再写 complete/fail
+        会把别人的执行结果覆盖掉，表现为"任务还在跑，状态却成 done"。
+        """
+        row = self.db.query_one(
+            "SELECT worker_id, status FROM jobs WHERE id = ?", (job_id,),
         )
+        return bool(row) and row["worker_id"] == self.worker_id and row["status"] == RUNNING
+
+    def complete(self, job_id: str, result: dict | None = None) -> Job | None:
+        if not self._owned(job_id):
+            print(f"[queue] {job_id} 已被其它 worker 接手，忽略本次 complete", flush=True)
+            return None
+        affected = self.db.execute(
+            "UPDATE jobs SET status = ?, result = ?, error = '', lease_until = '', updated_at = ?"
+            " WHERE id = ? AND status = ? AND worker_id = ?",
+            (DONE, dumps(result), _now(), job_id, RUNNING, self.worker_id),
+        )
+        if affected != 1:
+            return None
         return self.get(job_id)
 
     def fail(self, job_id: str, error: str, *, permanent: bool = False) -> Job | None:
         job = self.get(job_id)
         if job is None:
             return None
+        if not self._owned(job_id):
+            print(f"[queue] {job_id} 已被其它 worker 接手，忽略本次 fail", flush=True)
+            return None
         # attempts 在 claim 时已 +1，这里只判断是否还能再来一次
         retryable = not permanent and job.attempts < job.max_attempts
         status = PENDING if retryable else FAILED
-        self.db.execute(
+        affected = self.db.execute(
             "UPDATE jobs SET status = ?, error = ?, worker_id = '', lease_until = '', updated_at = ?"
-            " WHERE id = ?",
-            (status, error[:2000], _now(), job_id),
+            " WHERE id = ? AND status = ? AND worker_id = ?",
+            (status, error[:2000], _now(), job_id, RUNNING, self.worker_id),
         )
+        if affected != 1:
+            return None
         return self.get(job_id)
 
     def set_progress(self, job_id: str, progress: dict) -> bool:

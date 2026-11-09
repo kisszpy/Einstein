@@ -5,8 +5,15 @@
 - processing 用 zset（score = 租约到期时间戳）→ 按时间范围一次捞出所有超时任务
 - 任务体用 hash → 字段级更新，不必整条重写
 
-多 worker 并发领取同一条是安全的：BLPOP 本身是原子弹出，
-弹出后若 hash 已被删除（任务被清）就跳过继续下一条。
+**领取为什么不是"BLPOP 完再改状态"**：BLPOP 一返回，任务就已经从 pending 里
+消失了。如果进程此刻被 kill（部署、OOM、Ctrl+C），这条任务既不在 pending、
+也不在 processing——它凭空消失了，而账面上它还是 pending。所以领取分两步且
+两步都可恢复：先把 id 原子搬到 inflight 列表（BLMOVE / LMOVE），再用一段 Lua
+把它标成 running 并进 zset、从 inflight 摘掉。中间任意时刻崩溃，inflight 里
+都留着这条 id，`_recover_expired` 会把它放回 pending。
+
+多 worker 并发领取同一条是安全的：弹出本身原子，标记阶段用 HGET status 判定，
+只有还是 pending 的那一个能改成 running。
 """
 
 from __future__ import annotations
@@ -80,6 +87,15 @@ class RedisQueue:
     def k_processing(self) -> str:
         return f"{self.prefix}:processing"
 
+    @property
+    def k_inflight(self) -> str:
+        """领取途中（已离开 pending、还没标成 running）的暂存区。
+
+        它存在的唯一理由是"崩溃后还能找回来"。正常情况下一条 id 在这里停留
+        几毫秒。
+        """
+        return f"{self.prefix}:inflight"
+
     def k_job(self, job_id: str) -> str:
         return f"{self.prefix}:job:{job_id}"
 
@@ -109,42 +125,86 @@ class RedisQueue:
         return job
 
     # ------------------------------------------------------------ 领取
+    # 标记阶段整段在 Redis 里执行：检查状态 → attempts+1 → running → 进 zset →
+    # 从 inflight 摘掉，中间不可能被别的命令插队。
+    _MARK_LUA = """
+    local key = KEYS[1]
+    local inflight = KEYS[2]
+    local processing = KEYS[3]
+    local jid = ARGV[1]
+    redis.call('LREM', inflight, 1, jid)
+    if redis.call('EXISTS', key) == 0 then return 0 end
+    if redis.call('HGET', key, 'status') ~= 'pending' then return 0 end
+    redis.call('HINCRBY', key, 'attempts', 1)
+    redis.call('HSET', key, 'status', 'running', 'worker_id', ARGV[2],
+               'lease_until', ARGV[4], 'updated_at', ARGV[4])
+    redis.call('ZADD', processing, tonumber(ARGV[3]), jid)
+    return 1
+    """
+
     def claim(self, block_seconds: float = 0) -> Job | None:
         self._recover_expired()
-        if block_seconds > 0:
-            try:
-                item = self.r.blpop(self.k_pending, timeout=block_seconds)
-            except _BLOCK_TIMEOUT:
-                # redis-py 6+ 在 BLPOP 到期时抛异常而不是返回 None（老版本返回 None），
-                # 语义上就是「这段时间没来任务」，交给调用方继续下一轮。
-                return None
-            job_id = item[1] if item else None
-        else:
-            job_id = self.r.lpop(self.k_pending)
-
-        # 极端情况：弹出来的是已被清掉的任务，继续取，最多试几次避免死循环
+        # 最多试 5 次：弹出的是"已删除/已被别人领走"的残影时继续下一条
         for _ in range(5):
+            job_id = self._take(block_seconds)
+            block_seconds = 0   # 只有第一次值得阻塞，后面再等就是空转
             if not job_id:
                 return None
-            key = self.k_job(job_id)
-            if not self.r.exists(key):
-                job_id = self.r.lpop(self.k_pending)
-                continue
-            states = self.r.hgetall(key)
-            if states.get("status") != PENDING:
-                job_id = self.r.lpop(self.k_pending)
-                continue
-            attempts = int(states.get("attempts") or 0) + 1
-            now = _now()
-            deadline = _deadline_epoch(self.lease_seconds)
-            self.r.hset(key, mapping={
-                "status": RUNNING, "attempts": str(attempts), "worker_id": self.worker_id,
-                "lease_until": datetime.fromtimestamp(deadline, timezone.utc).isoformat(),
-                "updated_at": now,
-            })
-            self.r.zadd(self.k_processing, {job_id: deadline})
-            return self.get(job_id)
+            if self._mark_running(job_id):
+                return self.get(job_id)
         return None
+
+    def _take(self, block_seconds: float) -> str | None:
+        """把一条待执行任务原子地搬到 inflight，返回 id。"""
+        try:
+            if block_seconds > 0:
+                return self.r.blmove(
+                    self.k_pending, self.k_inflight, block_seconds, "LEFT", "RIGHT",
+                )
+            return self.r.lmove(self.k_pending, self.k_inflight, "LEFT", "RIGHT")
+        except _BLOCK_TIMEOUT:
+            # 阻塞到期：这段时间没来任务，交给调用方继续下一轮
+            return None
+        except Exception as exc:  # noqa: BLE001
+            # Redis < 6.2 没有 LMOVE/BLMOVE。退回旧写法，代价是"弹出后、标记前"
+            # 崩溃会丢这一条——比整个队列不可用要好，但要让人看得见。
+            if "unknown command" not in str(exc).lower():
+                raise
+            print(
+                "[queue] Redis 版本过低（无 LMOVE），领取降级为 BLPOP；"
+                "崩溃窗口内可能丢任务，建议升级到 6.2+", flush=True,
+            )
+            if block_seconds > 0:
+                try:
+                    item = self.r.blpop(self.k_pending, timeout=block_seconds)
+                except _BLOCK_TIMEOUT:
+                    return None
+                return item[1] if item else None
+            return self.r.lpop(self.k_pending)
+
+    def _mark_running(self, job_id: str) -> bool:
+        key = self.k_job(job_id)
+        try:
+            result = self.r.eval(
+                self._MARK_LUA, 3, key, self.k_inflight, self.k_processing,
+                job_id, self.worker_id,
+                _deadline_epoch(self.lease_seconds), _now(),
+            )
+            return bool(result)
+        except Exception:  # noqa: BLE001 — 不支持 EVAL 的客户端退化为逐条写
+            self.r.lrem(self.k_inflight, 1, job_id)
+            if not self.r.exists(key):
+                return False
+            if self.r.hget(key, "status") != PENDING:
+                return False
+            self.r.hset(key, mapping={
+                "status": RUNNING,
+                "attempts": str(int(self.r.hget(key, "attempts") or 0) + 1),
+                "worker_id": self.worker_id,
+                "lease_until": _now(), "updated_at": _now(),
+            })
+            self.r.zadd(self.k_processing, {job_id: _deadline_epoch(self.lease_seconds)})
+            return True
 
     def renew(self, job_id: str) -> bool:
         if not self.r.exists(self.k_job(job_id)):
@@ -158,6 +218,18 @@ class RedisQueue:
         return True
 
     def _recover_expired(self) -> int:
+        # 先捞"领取途中崩掉"的残影：它们既不在 pending 也不在 zset 里，
+        # 只能从 inflight 找回来。正常情况这里几乎是空的（停留几毫秒）。
+        rescued = 0
+        for _ in range(100):
+            job_id = self.r.lpop(self.k_inflight)
+            if not job_id:
+                break
+            key = self.k_job(job_id)
+            if self.r.exists(key) and self.r.hget(key, "status") == PENDING:
+                self.r.rpush(self.k_pending, job_id)
+                rescued += 1
+
         expired = self.r.zrangebyscore(self.k_processing, 0, time.time())
         recovered = 0
         for job_id in expired:
@@ -174,12 +246,24 @@ class RedisQueue:
             })
             self.r.rpush(self.k_pending, job_id)
             recovered += 1
-        return recovered
+        return recovered + rescued
 
     # ------------------------------------------------------------ 结束
+    def _owned(self, job_id: str) -> bool:
+        """这条任务现在是不是归我执行。
+
+        租约过期后任务可能已被别的 worker 重领，此时旧 worker 若还去写
+        complete/fail，就会把别人的执行结果覆盖掉——表现是"任务明明还在跑，
+        状态却变成 done/failed"。所以结束类写入必须校验归属。
+        """
+        return (self.r.hget(self.k_job(job_id), "worker_id") or "") == self.worker_id
+
     def complete(self, job_id: str, result: dict | None = None) -> Job | None:
         key = self.k_job(job_id)
         if not self.r.exists(key):
+            return None
+        if not self._owned(job_id):
+            print(f"[queue] {job_id} 已被其它 worker 接手，忽略本次 complete", flush=True)
             return None
         self.r.hset(key, mapping={
             "status": DONE, "result": dumps(result), "error": "",
@@ -191,6 +275,9 @@ class RedisQueue:
     def fail(self, job_id: str, error: str, *, permanent: bool = False) -> Job | None:
         key = self.k_job(job_id)
         if not self.r.exists(key):
+            return None
+        if not self._owned(job_id):
+            print(f"[queue] {job_id} 已被其它 worker 接手，忽略本次 fail", flush=True)
             return None
         states = self.r.hgetall(key)
         attempts = int(states.get("attempts") or 0)
