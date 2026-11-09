@@ -8,7 +8,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.api.deps import current_uid, current_workspace
-from app.services import approvals, projects, ratelimit, run_registry
+from app.core.config import get_settings
+from app.services import approvals, projects, ratelimit, run_registry, traces
 from app.services.agent import chunk_text, run_agent
 from app.services.capabilities import AgentContext, sandbox
 from app.services.history import get_history_store
@@ -252,6 +253,14 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
         answer_started = False
         streamed = ""
         status = "ok"
+        error_kind = ""
+        interrupt_tool = ""
+
+        _settings = get_settings()
+        traces.start(
+            kind="agent", workspace_id=ws, owner_id=uid, session_id=session_id,
+            engine=_settings.agent_engine, model=_settings.llm_model,
+        )
 
         try:
             async for step in run_agent(
@@ -276,6 +285,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
                     answer_started = False
                 elif kind == "approval_required":
                     # 记下「到底在批什么」：/approve 凭这条记录定位并要求归属匹配
+                    interrupt_tool = step.get("tool", "")
                     approvals.request(
                         ws, uid, session_id, step.get("tool", ""),
                         args_hash=step.get("args_hash", ""),
@@ -289,6 +299,13 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
                         run.push("artifact", {"artifact": entry})
                 else:
                     steps.append(step)
+                    if kind in ("tool_result", "tool"):
+                        traces.note_tool(
+                            step.get("tool") or step.get("name") or "tool",
+                            int(step.get("duration_ms") or step.get("ms") or 0),
+                            status="error" if step.get("error") else "ok",
+                            detail=str(step.get("output") or step.get("detail") or "")[:200],
+                        )
                     run.push("step", {"step": step})
 
             if citations:
@@ -348,6 +365,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
             raise
         except Exception as exc:  # noqa: BLE001 — 统一转 SSE error 事件
             status = "failed"
+            error_kind = type(exc).__name__
             print(f"[agent-stream] {run.run_id} run-error: {type(exc).__name__}: {exc}", flush=True)
             # 失败也落一条历史：产物可能已经写到磁盘上，不给记录等于"这次根本没跑过"
             try:
@@ -360,6 +378,14 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
                 print(f"[agent-stream] {run.run_id} 失败记录未能落库：{save_exc}", flush=True)
             run.push("error", {"message": f"{type(exc).__name__}: {exc}"})
         finally:
+            try:
+                traces.finish(
+                    status="ok" if status == "ok" else "error",
+                    error_kind=error_kind,
+                    interrupt=interrupt_tool,
+                )
+            except Exception as exc:  # noqa: BLE001 — 埋点失败不能影响运行结果
+                print(f"[trace] 写入失败：{type(exc).__name__}: {exc}", flush=True)
             run.finish(failed=status != "ok")
 
     task = asyncio.create_task(_execute())
@@ -392,6 +418,28 @@ async def _forward(run: run_registry.RunRecord) -> AsyncIterator[str]:
         except asyncio.TimeoutError:
             # 大模型思考期间流上不能长时间无数据，否则中间层会掐断连接
             yield ": ping\n\n"
+
+
+@router.get("/runs/active")
+async def list_active_runs(
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+) -> list[dict]:
+    """当前空间里还没结束的运行。前端刷新后靠它重新挂上 SSE 订阅。
+
+    只回本进程的登记簿——多副本部署时命中别的副本仍会 404，这一点在
+    运维手册的「副本数=1 或事件外置」里写明。
+    """
+    return [
+        {
+            "run_id": r.run_id,
+            "session_id": r.session_id,
+            "created_at": r.created_at,
+            "done": r.done,
+            "failed": r.failed,
+            "steps": len(r.events),
+        }
+        for r in run_registry.list_for_owner(ws, uid)
+    ]
 
 
 @router.get("/runs/{run_id}/stream")

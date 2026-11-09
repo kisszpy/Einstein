@@ -318,6 +318,19 @@ def _migration_013(db: Database) -> list[str]:
     ]
 
 
+# 014：按 run 的运行轨迹。
+#
+# 以前只有 metrics 的计数（请求耗时、每次 LLM 调用），没有因果链：
+# 一次智能体答错，既不知道检索召回了什么，也不知道哪个工具慢了。
+def _migration_014(db: Database) -> list[str]:
+    from app.db.tables import TABLES
+
+    return [
+        TABLES["run_traces"].ddl(),
+        "CREATE INDEX IF NOT EXISTS idx_run_traces_ws ON run_traces(workspace_id, started_at)",
+    ]
+
+
 MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (2, _MIGRATION_002),
     (3, _MIGRATION_003),
@@ -331,6 +344,7 @@ MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (11, _MIGRATION_011),
     (12, _migration_012),
     (13, _migration_013),
+    (14, _migration_014),
 ]
 
 _TYPE_TOKENS = {

@@ -10,7 +10,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from app.api.deps import current_uid, current_workspace
-from app.services import ratelimit, web_augment
+from app.core.config import get_settings
+from app.services import ratelimit, traces, web_augment
 from app.services.experts import get_expert_store
 from app.services.history import get_history_store
 from app.services import memory as memory_service
@@ -129,6 +130,11 @@ async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[st
     answer_parts: list[str] = []
 
     async def _pump() -> None:
+        traces.start(
+            kind="chat", workspace_id=ws, owner_id=uid, session_id=conversation_id,
+            engine="chat", model=get_settings().llm_model,
+        )
+        error_kind = ""
         try:
             store = get_store()
             user_text = req.messages[-1].content
@@ -256,8 +262,15 @@ async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[st
                     print(f"[chat] save failed: {type(exc).__name__}: {exc}", flush=True)
             await queue.put(("done", {"conversation_id": conversation_id}))
         except Exception as exc:  # noqa: BLE001 — 异常也走队列，保持事件顺序
+            error_kind = type(exc).__name__
             await queue.put(exc)
         finally:
+            try:
+                traces.finish(
+                    status="ok" if not error_kind else "error", error_kind=error_kind,
+                )
+            except Exception:  # noqa: BLE001 — 埋点失败不影响回答
+                pass
             await queue.put(stop)
 
     pump = asyncio.create_task(_pump())

@@ -404,6 +404,35 @@ AGENT_APPROVALS = Table(
     order="created_at DESC",
 )
 
+# ---------------------------------------------------------------- 运行轨迹
+#
+# 一次问答 / 一次智能体任务一行。不追求全链路 tracing（那要 OTel），
+# 只回答一个问题：这次答错，是检索没召回、召回错、工具选错，还是模型跑偏。
+RUN_TRACES = Table(
+    name="run_traces",
+    columns=(
+        _c("id", field="run_id"),
+        _c("workspace_id", default="'default'"),
+        _c("owner_id", default="''"),
+        _c("kind", default="'chat'"),      # chat | agent | agent_pro | v1_chat | v1_agent
+        _c("session_id", default="''"),
+        _c("engine", default="''"),
+        _c("model", default="''"),
+        _c("started_at", default="''"),
+        _c("finished_at", default="''"),
+        _c("duration_ms", "int", default="0"),
+        _c("status", default="'ok'"),      # ok | error | interrupted | approval
+        _c("error_kind", default="''"),
+        _c("tokens_in", "int", default="0"),
+        _c("tokens_out", "int", default="0"),
+        _c("llm_calls", "int", default="0"),
+        _c("retrieval", "json", default="'{}'"),
+        _c("tool_calls", "json", default="'[]'"),
+        _c("interrupt", default="''"),
+    ),
+    order="started_at",
+)
+
 TABLES: dict[str, Table] = {
     t.name: t
     for t in (
@@ -424,6 +453,7 @@ TABLES: dict[str, Table] = {
         WORKSPACE_MEMORY,
         LEGACY_IMPORTS,
         AGENT_APPROVALS,
+        RUN_TRACES,
     )
 }
 
@@ -437,6 +467,7 @@ DOMAIN_TABLES: dict[str, str] = {
     "feedback": "message_feedback",
     "mcp": "mcp_servers",
     "memory": "workspace_memory",
+    "run_traces": "run_traces",
     "sessions": "user_sessions",
     "skills": "skills",
     "users": "users",

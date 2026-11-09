@@ -11,8 +11,11 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
+from app.core.config import get_settings
+from app.services import traces
 from app.services.rag import EmbeddingMismatch, RetrievedChunk, search
 from app.services.store import get_store
 
@@ -77,15 +80,39 @@ async def retrieve(
             print(f"[retrieval] 查询改写失败：{type(exc).__name__}: {exc}", flush=True)
 
     try:
+        t0 = time.perf_counter()
         hits = await search(
             get_store(), kb_ids, search_query,
             top_k=top_k, parent_expand=parent_expand,
         )
+        ms = int((time.perf_counter() - t0) * 1000)
     except EmbeddingMismatch as exc:
         # 不抛给上层：调用方（对话/工具）拿到的是一句可操作的提示，
         # 而不是 500，也不是"知识库里没有相关内容"这种误导性结论。
         print(f"[retrieval] 嵌入指纹不匹配：{exc}", flush=True)
+        traces.note_retrieval(
+            query=query, rewritten=search_query if rewritten else "",
+            mode=get_settings().retrieval_mode, missed=True,
+        )
         return Retrieval(query=search_query, rewritten=rewritten, error=str(exc))
+
+    traces.note_retrieval(
+        query=query,
+        rewritten=search_query if rewritten else "",
+        mode=get_settings().retrieval_mode,
+        candidates=len(hits),
+        hits=[
+            {
+                "chunk_id": h.chunk_id,
+                "doc": h.document_name,
+                "score": round(float(h.rerank_score if h.rerank_score is not None else h.score), 4),
+            }
+            for h in hits[:10]
+        ],
+        ms=ms,
+        missed=not hits,
+        rerank=get_settings().rerank_provider,
+    )
     return Retrieval(
         hits=hits,
         query=search_query,

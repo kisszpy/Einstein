@@ -265,6 +265,76 @@ export function AgentsPage() {
     [caps, toolMeta.capabilities],
   );
 
+  /** 事件归一：首次连接与刷新后重连共用同一套处理，避免两条路径行为漂移 */
+  const applyEvent = useCallback(
+    (event: string, raw: unknown) => {
+      switch (event) {
+        case "meta": {
+          // 服务端分配/回显会话 id，后续追问沿用它
+          const { session_id } = raw as { session_id?: string };
+          if (session_id) setSessionId(session_id);
+          break;
+        }
+        case "step": {
+          const { step } = raw as { step: AgentStep };
+          if (step.kind === "approval_required") {
+            // 敏感工具未批准：图已暂停在检查点，弹出批准条；批准后从断点续跑
+            setApproval({
+              tool: step.tool ?? "",
+              args: step.args ?? "",
+              argsHash: step.args_hash ?? "",
+            });
+            break;
+          }
+          setSteps((prev) => [...prev, step]);
+          break;
+        }
+        case "artifact": {
+          const { artifact } = raw as { artifact: Artifact };
+          setArtifacts((prev) => [...prev, artifact]);
+          setPreviewToken((n) => n + 1);
+          break;
+        }
+        case "citations": {
+          const { citations: list } = raw as { citations: Citation[] };
+          setCitations(list ?? []);
+          break;
+        }
+        case "delta": {
+          const { text: chunk } = raw as { text: string };
+          setAnswer((prev) => prev + chunk);
+          break;
+        }
+        case "answer_reset": {
+          // 真流式：模型开始调工具，之前那段是"过程中的话"，不是最终答案
+          setAnswer("");
+          break;
+        }
+        case "done": {
+          const d = raw as { project?: string; artifacts?: Artifact[] };
+          const pid = d.project || boundProject;
+          if (d.project && d.project !== boundProject) bindProject(d.project);
+          else if (d.project) void loadTree(d.project);
+          setPreviewToken((n) => n + 1);
+          void loadProjects();
+          // 跑完自动把产物摊开——和 WorkBuddy 一样，不用用户再点一次
+          const produced = d.artifacts ?? [];
+          if (produced.length > 0 && pid) {
+            const pick =
+              [...produced].reverse().find((a) => a.path.toLowerCase().endsWith(".pptx")) ??
+              produced[produced.length - 1];
+            if (pick) openFile(pick.path, pid);
+          }
+          break;
+        }
+        case "error":
+          setError((raw as { message: string }).message);
+          break;
+      }
+    },
+    [boundProject, bindProject, loadTree, loadProjects, openFile],
+  );
+
   const run = useCallback(
     async (taskText: string, opts?: { resume?: boolean; message?: string }) => {
       const text = taskText.trim();
@@ -307,71 +377,7 @@ export function AgentsPage() {
         });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
-        await readSseStream(res.body, (event, raw) => {
-          switch (event) {
-            case "meta": {
-              // 服务端分配/回显会话 id，后续追问沿用它
-              const { session_id } = raw as { session_id?: string };
-              if (session_id) setSessionId(session_id);
-              break;
-            }
-            case "step": {
-              const { step } = raw as { step: AgentStep };
-              if (step.kind === "approval_required") {
-                // 敏感工具未批准：图已暂停在检查点，弹出批准条；批准后从断点续跑
-                setApproval({
-                  tool: step.tool ?? "",
-                  args: step.args ?? "",
-                  argsHash: step.args_hash ?? "",
-                });
-                break;
-              }
-              setSteps((prev) => [...prev, step]);
-              break;
-            }
-            case "artifact": {
-              const { artifact } = raw as { artifact: Artifact };
-              setArtifacts((prev) => [...prev, artifact]);
-              setPreviewToken((n) => n + 1);
-              break;
-            }
-            case "citations": {
-              const { citations: list } = raw as { citations: Citation[] };
-              setCitations(list ?? []);
-              break;
-            }
-            case "delta": {
-              const { text: chunk } = raw as { text: string };
-              setAnswer((prev) => prev + chunk);
-              break;
-            }
-            case "answer_reset": {
-              // 真流式：模型开始调工具，之前那段是"过程中的话"，不是最终答案
-              setAnswer("");
-              break;
-            }
-            case "done": {
-              const d = raw as { project?: string; artifacts?: Artifact[] };
-              const pid = d.project || boundProject;
-              if (d.project && d.project !== boundProject) bindProject(d.project);
-              else if (d.project) void loadTree(d.project);
-              setPreviewToken((n) => n + 1);
-              void loadProjects();
-              // 跑完自动把产物摊开——和 WorkBuddy 一样，不用用户再点一次
-              const produced = d.artifacts ?? [];
-              if (produced.length > 0 && pid) {
-                const pick =
-                  [...produced].reverse().find((a) => a.path.toLowerCase().endsWith(".pptx")) ??
-                  produced[produced.length - 1];
-                if (pick) openFile(pick.path, pid);
-              }
-              break;
-            }
-            case "error":
-              setError((raw as { message: string }).message);
-              break;
-          }
-        });
+        await readSseStream(res.body, applyEvent);
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
           setError(`请求失败：${(err as Error).message}`);
@@ -400,8 +406,57 @@ export function AgentsPage() {
       loadTree,
       bindProject,
       openFile,
+      applyEvent,
     ],
   );
+
+  /** 刷新/切回后重新挂上正在跑的那一轮：登记簿只增，从第 0 帧重放不会看到半个答案 */
+  const attach = useCallback(
+    async (runId: string) => {
+      setRunning(true);
+      setError(null);
+      startedAtRef.current = Date.now();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      try {
+        const res = await fetch(`/api/agent/runs/${encodeURIComponent(runId)}/stream`, {
+          signal: controller.signal,
+        });
+        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+        await readSseStream(res.body, applyEvent);
+      } catch (err) {
+        if ((err as Error).name !== "AbortError") {
+          setError(`重新接回失败：${(err as Error).message}`);
+        }
+      } finally {
+        abortRef.current = null;
+        setRunning(false);
+        setElapsed(Date.now() - startedAtRef.current);
+        void loadRuns();
+      }
+    },
+    [applyEvent, loadRuns],
+  );
+
+  // 只在首次挂载时探测一次：页面刷新后任务还在后台跑，这里把读者重新挂上
+  const attachedRef = useRef(false);
+  useEffect(() => {
+    if (attachedRef.current) return;
+    attachedRef.current = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/agent/runs/active");
+        if (!res.ok) return;
+        const rows = (await res.json()) as { run_id: string; session_id: string }[];
+        const first = rows[0];
+        if (!first) return;
+        setSessionId(first.session_id);
+        void attach(first.run_id);
+      } catch {
+        // 探测失败不影响手动发起任务
+      }
+    })();
+  }, [attach]);
 
   const submit = () => {
     const text = task;

@@ -1,8 +1,9 @@
 """可观测性查询端点。"""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.services import checkpoints, metrics
+from app.api.deps import current_workspace
+from app.services import checkpoints, metrics, traces
 
 router = APIRouter(prefix="/obs", tags=["observability"])
 
@@ -30,6 +31,31 @@ async def get_requests(limit: int = Query(50, le=500)) -> list[dict]:
 @router.get("/llm")
 async def get_llm(limit: int = Query(50, le=500)) -> list[dict]:
     return metrics.recent_llm(limit)
+
+
+@router.get("/traces")
+async def list_traces(
+    limit: int = Query(50, le=500),
+    kind: str | None = None,
+    status: str | None = None,
+    ws: str = Depends(current_workspace),
+) -> list[dict]:
+    """按 run 的运行轨迹。一次问答/一次智能体任务一行，含检索命中与工具耗时。"""
+    return traces.list_runs(workspace_id=ws, kind=kind, status=status, limit=limit)
+
+
+@router.get("/traces/summary")
+async def traces_summary(ws: str = Depends(current_workspace)) -> dict:
+    """近 1000 条运行的健康度：错误率、检索未命中率、平均耗时、token 合计。"""
+    return traces.summary(workspace_id=ws)
+
+
+@router.get("/traces/{run_id}")
+async def get_trace(run_id: str, ws: str = Depends(current_workspace)) -> dict:
+    row = traces.get_run(run_id)
+    if row is None or row.get("workspace_id") != ws:
+        raise HTTPException(404, "运行记录不存在")
+    return row
 
 
 @router.delete("/")

@@ -90,6 +90,19 @@ def latest_for_session(session_id: str, *, workspace_id: str, owner_id: str) -> 
     return None
 
 
+def list_for_owner(
+    workspace_id: str, owner_id: str, *, include_done: bool = False,
+) -> list[RunRecord]:
+    """某人当前空间里的运行。前端刷新后用它找回「还没看完的那一轮」。"""
+    rows = [
+        r for r in _RUNS.values()
+        if r.workspace_id == workspace_id and r.owner_id == owner_id
+    ]
+    if not include_done:
+        rows = [r for r in rows if not r.done]
+    return sorted(rows, key=lambda r: r.created_at, reverse=True)
+
+
 def attach_task(run_id: str, task: asyncio.Task) -> None:
     """持有后台任务的强引用：事件循环只持弱引用，否则任务可能被 GC 掉。"""
     _TASKS[run_id] = task
