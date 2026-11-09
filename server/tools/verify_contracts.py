@@ -32,7 +32,7 @@ from app.services.repositories.kb import (  # noqa: E402
     KbRepository,
     SqlKbRepository,
 )
-from app.services.state import JsonState, SqlState, StateBackend  # noqa: E402
+from app.services.state import JsonState, StateBackend, TableState  # noqa: E402
 from app.services.vector.base import VectorIndex  # noqa: E402
 from app.services.vector.memory import MemoryIndex  # noqa: E402
 from app.services.vector.milvus import MilvusIndex  # noqa: E402
@@ -43,7 +43,8 @@ CONTRACTS: list[tuple[type, list[type]]] = [
     (HistoryRepository, [JsonHistoryRepository, SqlHistoryRepository]),
     (JobQueue, [LocalQueue, RedisQueue]),
     (VectorIndex, [MemoryIndex, MilvusIndex]),
-    (StateBackend, [JsonState, SqlState]),
+    # 两种后端：JSON 文件（降级路径）与按域拆表的 TableState（sqlite/postgres）
+    (StateBackend, [JsonState, TableState]),
     (OcrProvider, []),  # 由外部注册，不强制实现
 ]
 

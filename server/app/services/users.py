@@ -1,15 +1,16 @@
-"""控制台账号：用户、密码摘要、角色与工作区归属。
+"""控制台账号：用户、密码摘要、角色。
 
 密码用 PBKDF2-HMAC-SHA256（12 万轮 + 每用户随机盐）存摘要，不落明文；
 比对走 `hmac.compare_digest`，避免时序侧信道。首次启动若库为空，种一个
 `admin / admin123` 的所有者账号，登录后应立刻改密码。
 
-生产替换点：PostgreSQL `users` 表，密码迁移到 Argon2id，角色接入 RBAC 策略。
+职责边界：这张表只存「账号本身」——身份、凭据、平台级角色。
+「谁在哪个空间、是什么角色」属于 workspace_members（见 members.py），
+`User.workspaces` 只是成员表的投影，不再落库，避免两处各写一份而对不上。
 """
 
 import hashlib
 import hmac
-import json
 import secrets
 import threading
 import uuid
@@ -39,6 +40,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _memberships(user_id: str, workspace_id: str | None = None) -> list:
+    """账号的成员关系（延迟导入：members 依赖本模块，模块级导入会成环）。"""
+    from app.services import members
+
+    rows = members.get_member_store().memberships_of(user_id)
+    if workspace_id is None:
+        return rows
+    return [m for m in rows if m.workspace_id == workspace_id]
+
+
 def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
     salt = salt or secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac(
@@ -65,20 +76,21 @@ class User:
     role: str = "member"
     password_hash: str = ""
     salt: str = ""
+    # 成员表的投影：读时按成员关系回填，写时不落库（权限事实来源只有 workspace_members）
     workspaces: list[str] = field(default_factory=list)
     created_at: str = ""
     last_login_at: str | None = None
     disabled: bool = False
 
     def to_public(self) -> dict:
-        """对外视图：绝不带密码摘要与盐。"""
+        """对外视图：绝不带密码摘要与盐；归属取成员关系实时值。"""
         return {
             "id": self.id,
             "username": self.username,
             "display_name": self.display_name,
             "role": self.role,
             "role_label": ROLE_LABEL.get(self.role, self.role),
-            "workspaces": self.workspaces,
+            "workspaces": [m.workspace_id for m in _memberships(self.id)],
             "created_at": self.created_at,
             "last_login_at": self.last_login_at,
             "disabled": self.disabled,
@@ -94,8 +106,8 @@ class User:
         return self.role != "viewer"
 
     def can_access(self, workspace_id: str) -> bool:
-        """管理员跨工作区；成员只看归属列表。"""
-        return self.is_admin or workspace_id in self.workspaces
+        """权限判定走成员关系：平台管理员跨空间，其余看自己在目标空间是否有角色。"""
+        return self.is_admin or bool(_memberships(self.id, workspace_id))
 
 
 class UserStore:
@@ -201,14 +213,21 @@ class UserStore:
         except Exception:  # noqa: BLE001 — 损坏则重建
             store.items = {}
         if not store.items:
-            store.create(
+            admin = store.create(
                 SEED_USERNAME,
                 SEED_PASSWORD,
                 display_name="平台管理员",
                 role="owner",
-                workspaces=[DEFAULT_ID],
             )
             store.save()
+            # 归属不落 users 表：种子账号的默认空间成员关系直接写进成员表
+            from app.services import members
+
+            member_store = members.get_member_store()
+            member_store.ensure(admin.id, DEFAULT_ID, role="owner")
+            member_store.save()
+        for user in store.items.values():
+            user.workspaces = [m.workspace_id for m in _memberships(user.id)]
         return store
 
 

@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -179,14 +178,19 @@ def ensure_personal_space(user) -> Membership:
         registry.save()
     membership = store.ensure(user.id, ws_id, role="owner", personal=True)
     store.save()
-    # 双写：旧逻辑/旧界面按 user.workspaces 渲染时也要能看到个人空间
-    if ws_id not in (user.workspaces or []):
-        from app.services import users as users_mod
-
-        account_store = users_mod.get_user_store()
-        account_store.update(user, workspaces=[*(user.workspaces or []), ws_id])
-        account_store.save()
+    sync_user(user)
     return membership
+
+
+def sync_user(user) -> None:
+    """把成员关系的实时结果刷到 `user.workspaces`（内存投影，不落库）。
+
+    归属的唯一事实来源是 workspace_members；`user.workspaces` 只是给旧逻辑
+    与旧界面用的投影，改完成员关系后调一下这里，避免两边说的不一样。
+    """
+    if user is None:
+        return
+    user.workspaces = [m.workspace_id for m in get_member_store().memberships_of(user.id)]
 
 
 def migrate(users_store=None, registry=None) -> dict:
@@ -218,6 +222,7 @@ def migrate(users_store=None, registry=None) -> dict:
         if store.personal_of(user.id) is None:
             ensure_personal_space(user)
             created += 1
+        sync_user(user)
     store.save()
     return {"memberships": len(store.items), "created": created}
 

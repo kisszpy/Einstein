@@ -6,10 +6,12 @@
 
 跑一次评测 = 逐条检索（记命中排名）→ 组上下文让模型作答 →
 关键词校验，汇总 Recall@k / MRR / 回答通过率。
-开发期 JSON 持久化（data/eval_sets.json），生产换 PostgreSQL，接口不变。
+
+存储：评测集进 `eval_sets` 表（条目是集合内的数组，用 JSON 列），
+每次运行的报告进 `eval_runs` 表（一跑一行，报告整体是一个文档）——
+原来运行历史塞在整域 JSON 里，跑一次要重写全部历史。
 """
 
-import json
 import threading
 import time
 import uuid
@@ -26,11 +28,24 @@ from app.services.llm import complete
 from app.services.rag import build_context_block, search
 from app.services.store import get_store
 
+from app.core.config import get_settings
+from app.db.engine import get_db
+from app.db.rows import TableState
+from app.db.schema import migrate
+from app.db.tables import EVAL_RUNS
+
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 _STORE_PATH = _DATA_DIR / "eval_sets.json"
 _RUNS_PATH = _DATA_DIR / "eval_runs.json"
 _STATE = blob("eval", _STORE_PATH)
 _RUN_STATE = blob("eval_runs", _RUNS_PATH)
+
+
+def _runs_table() -> TableState:
+    db = get_db()
+    migrate(db)
+    return TableState(EVAL_RUNS, db)
+
 
 EVAL_TOP_K = 3
 EVAL_SYSTEM = (
@@ -301,34 +316,63 @@ async def _judge_faithfulness(context: str, answer: str) -> dict | None:
 _RUNS_PER_SET = 20
 
 
-def _runs_registry() -> dict[str, list[dict]]:
-    try:
-        return _RUN_STATE.read() or {}
-    except Exception:  # noqa: BLE001
-        return {}
-
-
 def _save_run(report: dict) -> None:
-    runs = _runs_registry()
-    history = runs.setdefault(report["set_id"], [])
-    history.append(report)
-    runs[report["set_id"]] = history[-_RUNS_PER_SET:]
-    _RUN_STATE.write(runs)
+    """一次运行一行；每个评测集只保留最近 _RUNS_PER_SET 轮。"""
+    run_id = report.get("run_id") or uuid.uuid4().hex[:12]
+    report["run_id"] = run_id
+    if get_settings().store_backend == "json":
+        runs = _RUN_STATE.read() or {}
+        history = runs.setdefault(report["set_id"], [])
+        history.append(report)
+        kept = history[-_RUNS_PER_SET:]
+        runs[report["set_id"]] = kept
+        _RUN_STATE.write(runs)
+        return
+    table = _runs_table()
+    table.upsert(
+        {
+            "id": run_id,
+            "set_id": report["set_id"],
+            "kb_id": report.get("kb_id", ""),
+            "mode": report.get("mode", ""),
+            "report": report,
+            "ran_at": report.get("ran_at") or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+    )
+    total = int(
+        table.db.scalar("SELECT count(*) AS n FROM eval_runs WHERE set_id = ?", (report["set_id"],)) or 0
+    )
+    if total > _RUNS_PER_SET:
+        table.delete_where(
+            "id IN (SELECT id FROM eval_runs WHERE set_id = ? ORDER BY ran_at ASC LIMIT ?)",
+            (report["set_id"], total - _RUNS_PER_SET),
+        )
+
+
+def _history(set_id: str, limit: int) -> list[dict]:
+    """该评测集的历史报告（旧→新）。"""
+    if get_settings().store_backend == "json":
+        return (_RUN_STATE.read() or {}).get(set_id, [])[-limit:]
+    rows = _runs_table().rows("set_id = ?", (set_id,), limit=limit, order="ran_at DESC, id DESC")
+    return [row["report"] for row in reversed(rows)]
 
 
 def list_runs(set_id: str, limit: int = _RUNS_PER_SET) -> list[dict]:
     """该评测集的历史运行（新→旧），不含逐条 items 以省流量。"""
     out = []
-    for r in _runs_registry().get(set_id, [])[-limit:][::-1]:
+    for r in reversed(_history(set_id, limit)):
         out.append({k: v for k, v in r.items() if k != "items"})
     return out
 
 
 def get_run(set_id: str, run_id: str) -> dict | None:
-    for r in _runs_registry().get(set_id, []):
-        if r.get("run_id") == run_id:
-            return r
-    return None
+    if get_settings().store_backend == "json":
+        for r in (_RUN_STATE.read() or {}).get(set_id, []):
+            if r.get("run_id") == run_id:
+                return r
+        return None
+    row = _runs_table().rows("set_id = ? AND id = ?", (set_id, run_id), limit=1)
+    return row[0]["report"] if row else None
 
 
 def set_payload(es: EvalSet) -> dict:

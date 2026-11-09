@@ -146,15 +146,13 @@ async def join_by_invite(payload: dict, user: users.User = Depends(current_user)
     # 个人空间是绝对私有边界：历史邀请码也不能把人拉进别人的私人空间
     if members.is_personal_workspace(ws_id):
         raise HTTPException(400, "该邀请码指向个人空间，无效")
-    store = users.get_user_store()
     existing = members.get_member_store().role_of(user.id, ws_id)
-    if ws_id in user.workspaces or existing:
+    if existing:
         return {"ok": True, "workspace_id": ws_id, "role": existing or role, "already_member": True}
-    # 双写：membership 是权限事实来源，user.workspaces 保留兼容旧逻辑与旧界面
+    # 归属只写成员表（user.workspaces 是它的投影，sync_user 刷新即可）
     members.get_member_store().ensure(user.id, ws_id, role=role)
     members.get_member_store().save()
-    store.update(user, workspaces=[*user.workspaces, ws_id])
-    store.save()
+    members.sync_user(user)
     audit.record(
         workspace_id=ws_id, key_id=None, key_name=user.username,
         method="JOIN", path="/api/auth/join", status=200,
@@ -206,6 +204,7 @@ async def create_user(
             requested = ws_role
         members.get_member_store().ensure(user.id, ws_id, role=requested)
     members.get_member_store().save()
+    members.sync_user(user)
     return {**user.to_public(), "workspace_roles": _workspace_roles(user)}
 
 

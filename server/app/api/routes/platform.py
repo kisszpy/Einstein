@@ -209,12 +209,8 @@ async def remove_ws_member(
         raise HTTPException(400, "不能移除自己，请使用「退出空间」")
     target.remove(user_id, ws_id)
     target.save()
-    account = users.get_user_store().get(user_id)
-    if account is not None and ws_id in account.workspaces:
-        users.get_user_store().update(
-            account, workspaces=[w for w in account.workspaces if w != ws_id]
-        )
-        users.get_user_store().save()
+    # 归属只在成员表：删完关系把内存投影刷新一下即可，users 表没有归属列
+    members.sync_user(users.get_user_store().get(user_id))
     audit.record(
         workspace_id=ws_id, key_id=None, key_name=user.username,
         method="DELETE", path=f"/api/workspaces/{ws_id}/members/{user_id}", status=200,

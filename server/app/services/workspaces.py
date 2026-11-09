@@ -5,7 +5,6 @@
 PostgreSQL `workspaces` 表 + 行级安全策略。
 """
 
-import json
 import threading
 import uuid
 from dataclasses import asdict, dataclass
@@ -125,25 +124,18 @@ def resolve(ws_id: str | None) -> str:
 
 
 # ---------------------------------------------------------------- 邀请码
-# 独立 JSON 文件持久化（与工作区同目录）。码 → {ws, role, uses, max_uses}。
-# 不放 WorkspaceStore 里是因为邀请码生命周期短、数量可能多，别跟工作区列表搅在一起。
+# 独立表 workspace_invites（原来是单独一个 JSON 文件）。码 → {ws, role, uses, max_uses}。
+# 不放进 workspaces 表是因为邀请码生命周期短、数量可能多，别跟空间注册表搅在一起。
 
-_INVITES_PATH = Path(__file__).resolve().parents[2] / "data" / "workspace_invites.json"
+_INVITES = blob("workspace_invites", DATA_DIR / "workspace_invites.json")
 _INVITES_LOCK = threading.Lock()
 
 
 def _load_invites() -> dict:
     try:
-        return json.loads(_INVITES_PATH.read_text(encoding="utf-8"))
+        return _INVITES.read() or {}
     except Exception:  # noqa: BLE001 — 文件不存在或损坏则重建
         return {}
-
-
-def _save_invites(data: dict) -> None:
-    _INVITES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _INVITES_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8"
-    )
 
 
 def create_invite(ws_id: str, role: str = "member", max_uses: int = 10) -> dict:
@@ -154,20 +146,24 @@ def create_invite(ws_id: str, role: str = "member", max_uses: int = 10) -> dict:
         raise ValueError(f"邀请角色只能是 {ASSIGNABLE_ROLES}")
     code = uuid.uuid4().hex[:10]
     invite = {
-        "ws_id": ws_id, "role": role, "max_uses": max_uses, "uses": 0,
+        "workspace_id": ws_id, "role": role, "max_uses": max_uses, "uses": 0,
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     with _INVITES_LOCK:
         data = _load_invites()
         data[code] = invite
-        _save_invites(data)
-    return {"code": code, **invite}
+        _INVITES.write(data)
+    return {"code": code, "ws_id": ws_id, **invite}
 
 
 def list_invites(ws_id: str) -> list[dict]:
     with _INVITES_LOCK:
         data = _load_invites()
-    return [{"code": code, **v} for code, v in data.items() if v.get("ws_id") == ws_id]
+    return [
+        {"code": code, "ws_id": v.get("workspace_id"), **v}
+        for code, v in data.items()
+        if v.get("workspace_id") == ws_id
+    ]
 
 
 def redeem_invite(code: str) -> dict | None:
@@ -178,8 +174,9 @@ def redeem_invite(code: str) -> dict | None:
         if invite is None or invite.get("uses", 0) >= invite.get("max_uses", 0):
             return None
         invite["uses"] = invite.get("uses", 0) + 1
-        _save_invites(data)
-    ws = get_workspace_store().get(invite["ws_id"])
+        data[code] = invite
+        _INVITES.write(data)
+    ws = get_workspace_store().get(invite["workspace_id"])
     if ws is None:
         return None
-    return {"ws_id": invite["ws_id"], "role": invite["role"]}
+    return {"ws_id": invite["workspace_id"], "role": invite["role"]}

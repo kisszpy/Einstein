@@ -4,19 +4,22 @@
 令牌走 `Authorization: Bearer`，与开放 API 的 `sk-` 密钥互不相通
 （前者进控制台，后者只进 /v1）。
 
-生产替换点：PostgreSQL `sessions` 表或 Redis（带 TTL 自动过期）。
+存储：`user_sessions` 表（一令牌一行，按 token_hash 主键、user_id 建索引）。
+原来是整域 JSON 文件，每次签发票据都要重写全部会话。
 """
 
 import hashlib
-import json
 import secrets
 import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from app.services.state import blob
+
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 STORE_PATH = DATA_DIR / "sessions.json"
+_STATE = blob("sessions", STORE_PATH)
 
 TOKEN_PREFIX = "sess-"
 TTL_DAYS = 7
@@ -98,19 +101,16 @@ class SessionStore:
             self.items.pop(s.token_hash, None)
 
     def save(self) -> None:
-        DATA_DIR.mkdir(exist_ok=True)
-        payload = {k: asdict(v) for k, v in self.items.items()}
-        STORE_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _STATE.write({k: asdict(v) for k, v in self.items.items()})
 
     @classmethod
     def load(cls) -> "SessionStore":
         store = cls()
-        if STORE_PATH.exists():
-            try:
-                payload = json.loads(STORE_PATH.read_text(encoding="utf-8"))
-                store.items = {k: Session(**v) for k, v in payload.items()}
-            except Exception:  # noqa: BLE001 — 损坏则视为全部下线
-                store.items = {}
+        try:
+            payload = _STATE.read() or {}
+            store.items = {k: Session(**v) for k, v in payload.items()}
+        except Exception:  # noqa: BLE001 — 损坏则视为全部下线
+            store.items = {}
         store.prune()
         return store
 

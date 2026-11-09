@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from app.db.engine import Database
+from app.db.tables import ddl_all as _domain_tables_ddl
 
 SCHEMA_VERSION_TABLE = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -191,6 +192,15 @@ _MIGRATION_007 = [
     "ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
 ]
 
+# 008：拆掉 domain_state —— 每个配置域一张表、一个字段一列
+#
+# 原先 11 个域（用户/工作区/成员/专家/技能/MCP/API Key/评测/审计/反馈/记忆）
+# 共用 `domain_state(domain, payload)`，一域一行、整域一个 JSON 文本：
+# 数据库看不见字段、无法按行更新、两个实例改不同用户也互相覆盖、审计每记
+# 一条日志要重写整域。这里按 `app/db/tables.py` 的规范建真表；
+# 存量数据由 `app/db/legacy.py` 从 domain_state 拆进新表（幂等）。
+_MIGRATION_008 = _domain_tables_ddl()
+
 MIGRATIONS: list[tuple[int, list[str]]] = [
     (1, _MIGRATION_001),
     (2, _MIGRATION_002),
@@ -199,11 +209,26 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
     (5, _MIGRATION_005),
     (6, _MIGRATION_006),
     (7, _MIGRATION_007),
+    (8, _MIGRATION_008),
 ]
 
 _TYPE_TOKENS = {
-    "sqlite": {"{{BYTES}}": "BLOB"},
-    "postgres": {"{{BYTES}}": "BYTEA"},
+    "sqlite": {
+        "{{BYTES}}": "BLOB",
+        "{{BOOL}}": "INTEGER",
+        "{{REAL}}": "REAL",
+        "{{TRUE}}": "1",
+        "{{FALSE}}": "0",
+    },
+    # 布尔用原生 BOOLEAN（psycopg 直接接受 Python bool）；
+    # 浮点用 DOUBLE PRECISION，避免 REAL(float4) 把 0.7 存成 0.699999988
+    "postgres": {
+        "{{BYTES}}": "BYTEA",
+        "{{BOOL}}": "BOOLEAN",
+        "{{REAL}}": "DOUBLE PRECISION",
+        "{{TRUE}}": "TRUE",
+        "{{FALSE}}": "FALSE",
+    },
 }
 
 

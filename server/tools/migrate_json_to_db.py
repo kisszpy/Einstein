@@ -1,7 +1,7 @@
 """把 data/kb_store.json 与 data/history_store.json 迁移到 SQLite / PostgreSQL。
 
 特性：
-- 幂等：按主键 INSERT ... DO NOTHING，可重复执行
+- 幂等：按主键 upsert，可重复执行
 - 只读源文件：绝不修改源 JSON，迁移后仍可用 json 后端跑
 - --dry-run 先算账再动手
 - 迁移完做数量核对，不一致直接报错退出
@@ -27,16 +27,22 @@ DEFAULT_SOURCE = SERVER_ROOT / "data" / "kb_store.json"
 DEFAULT_HISTORY = SERVER_ROOT / "data" / "history_store.json"
 DEFAULT_DATA = SERVER_ROOT / "data"
 
-# 配置域：整域一份 JSON，迁到 domain_state 表（domain 主键）
+# 配置域：整域一份 JSON，按域拆进各自的表（规范见 app/db/tables.py）
 STATE_DOMAINS = {
     "experts": "experts_store.json",
     "skills": "skills_store.json",
     "users": "users.json",
     "workspaces": "workspaces.json",
+    "workspace_members": "workspace_members.json",
+    "workspace_invites": "workspace_invites.json",
+    "sessions": "sessions.json",
     "apikeys": "api_keys.json",
     "audit": "audit.json",
     "eval": "eval_sets.json",
+    "eval_runs": "eval_runs.json",
     "mcp": "mcp_servers.json",
+    "feedback": "message_feedback.json",
+    "memory": "workspace_memory.json",
 }
 
 
@@ -151,7 +157,17 @@ def main() -> int:
 
 
 def migrate_state(db, now: str, *, force: bool = False) -> int:
-    """把 8 个配置域的 JSON 灌进 domain_state；库内已有不同内容时默认不覆盖。"""
+    """把配置域 JSON 按域拆进各自的表（一字段一列）。
+
+    幂等：按主键 upsert，重复执行不会产生重复行。
+    目标表里已有数据时默认跳过（避免用历史 JSON 覆盖线上改动），
+    `--force` 才覆盖。
+    """
+    from app.db.legacy import import_json_file
+    from app.db.tables import DOMAIN_TABLES
+    from app.db.rows import TableState
+    from app.db.tables import TABLES
+
     moved = 0
     for domain, filename in STATE_DOMAINS.items():
         path = DEFAULT_DATA / filename
@@ -163,23 +179,17 @@ def migrate_state(db, now: str, *, force: bool = False) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"  {domain}: 跳过（解析失败：{exc}）", file=sys.stderr)
             continue
-        text = json.dumps(payload, ensure_ascii=False)
+        table_name = DOMAIN_TABLES.get(domain)
+        if table_name is None:
+            print(f"  {domain}: 跳过（没有对应表，请在 app/db/tables.py 登记）")
+            continue
         count = len(payload) if isinstance(payload, (dict, list)) else 1
-
-        existing = db.query_one("SELECT payload FROM domain_state WHERE domain = ?", (domain,))
-        if existing and existing["payload"] == text:
-            print(f"  {domain}: 已一致（{count} 条），跳过")
-            continue
+        existing = TableState(TABLES[table_name], db).count()
         if existing and not force:
-            print(f"  {domain}: 库内已有不同内容，跳过（--force 可覆盖）")
+            print(f"  {domain}: 表 {table_name} 已有 {existing} 行，跳过（--force 可覆盖）")
             continue
-        db.execute(
-            "INSERT INTO domain_state (domain, payload, version, updated_at) VALUES (?, ?, ?, ?)"
-            " ON CONFLICT (domain) DO UPDATE SET payload = excluded.payload,"
-            " version = domain_state.version + 1, updated_at = excluded.updated_at",
-            (domain, text, 1, now),
-        )
-        print(f"  {domain}: 已写入 {count} 条")
+        written = import_json_file(domain, payload, db)
+        print(f"  {domain} → {table_name}: 写入 {written} 行（源 {count} 条）")
         moved += 1
     return moved
 

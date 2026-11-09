@@ -240,6 +240,31 @@ Expert ─< ExpertSkill >─ Skill ─< SkillTool >─ Tool
 
 Tool 表是关键枢纽：`source` 字段区分 builtin / mcp / custom，技能与智能体只引用 Tool ID。
 
+### 6.1 配置域落到哪张表
+
+每个域一张表、一个字段一列，主键为 TEXT（uuid hex），不共用一个 `payload` 列：
+
+| 域 | 表 | 主键 | 说明 |
+|---|---|---|---|
+| 账号 | `users` | `id` | 只存身份与凭据；**不存归属** |
+| 租户 | `workspaces` | `id` | 空间注册表（`default` / `p-<user_id>` / 团队） |
+| 归属 | `workspace_members` | `(user_id, workspace_id)` | RBAC 的唯一事实来源，角色 per-workspace |
+| 邀请 | `workspace_invites` | `code` | 一次性/限次邀请码 |
+| 会话 | `user_sessions` | `token_hash` | 控制台登录态（7 天，登出即删行） |
+| 专家 | `experts` | `id` | 人设 + 技能/知识库/工具 id 列表（JSON 列） |
+| 技能 | `skills` | `id` | 提示词 + 文件清单 + 版本快照（JSON 列） |
+| MCP | `mcp_servers` | `id` | 传输/命令/凭证（加密）、工具缓存 |
+| 密钥 | `api_keys` | `id` | 只存 SHA-256 摘要，明文仅在签发时返回 |
+| 评测 | `eval_sets` / `eval_runs` | `id` | 评测集与逐轮报告（一跑一行） |
+| 审计 | `audit_logs` | `id` | append-only，一条调用一行，超限按最旧删 |
+| 反馈 | `message_feedback` | `id` | 赞/踩 |
+| 记忆 | `workspace_memory` | `id` | 工作区事实库 |
+
+表规范在代码里声明（`server/app/db/tables.py`），DDL 由它生成、迁移 008 展开——
+避免"代码一套、迁移另一套"漂移。读写走 `TableState`：按主键算增量，改一行只
+UPDATE 一行。历史遗留的 `domain_state(domain, payload)` 只作为迁移源保留，业务
+不再读写；各域的首个启动会自动把存量拆进新表（`app/db/legacy.py`，幂等且有书签）。
+
 ---
 
 ## 7. LangChain 技术选型映射
