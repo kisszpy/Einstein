@@ -18,7 +18,7 @@ class KnowledgeBase:
     created_at: str = ""
     workspace_id: str = DEFAULT_WS
     description: str = ""
-    visibility: str = "workspace"   # private | workspace | shared
+    visibility: str = "private"   # private(默认) | workspace | shared
     updated_at: str = ""
     # 归属账号：'' = 系统预置/共享（全员可见），其余为创建者 id（只有本人可见）
     owner_id: str = ""

@@ -47,8 +47,18 @@ class KBStore:
         return self.repo.list_chunks()
 
     # ---------- 知识库 ----------
-    def add_kb(self, name: str, workspace_id: str = DEFAULT_WS, owner_id: str = "") -> KnowledgeBase:
-        kb = self.repo.create_kb(name, workspace_id, owner_id=owner_id)
+    def add_kb(
+        self, name: str, workspace_id: str = DEFAULT_WS, owner_id: str = "",
+        *, description: str = "", visibility: str = "private",
+    ) -> KnowledgeBase:
+        kb = self.repo.create_kb(
+            name, workspace_id, description=description, owner_id=owner_id, visibility=visibility,
+        )
+        self.repo.save()
+        return kb
+
+    def update_kb(self, kb_id: str, **fields) -> KnowledgeBase | None:
+        kb = self.repo.update_kb(kb_id, **fields)
         self.repo.save()
         return kb
 

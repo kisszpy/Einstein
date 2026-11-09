@@ -15,9 +15,9 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.api.deps import current_uid, current_workspace
+from app.api.deps import current_uid, current_user, current_workspace, workspace_role
 from app.core.config import get_settings
-from app.services import batch as batch_io
+from app.services import batch as batch_io, members
 from app.services.parsers import MAX_BYTES, ParseError, fetch_url, parse_document
 from app.services.queue import get_queue
 from app.services.rag import ingest_document, reembed_chunk, reindex_document, search
@@ -32,6 +32,18 @@ UPLOAD_DIR = DATA_DIR / "uploads"
 
 class KBCreate(BaseModel):
     name: str
+    description: str = ""
+    # private：仅创建者（默认）；workspace：同工作区成员可读；shared：跨工作区可读
+    visibility: str = "private"
+
+
+class KBPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    visibility: str | None = None
+
+
+VISIBILITIES = ("private", "workspace", "shared")
 
 
 class DocCreate(BaseModel):
@@ -172,6 +184,10 @@ async def list_knowledge_bases(ws: str = Depends(current_workspace), uid: str = 
         {
             "id": kb.id,
             "name": kb.name,
+            "description": kb.description,
+            "visibility": kb.visibility,
+            "owner_id": kb.owner_id,
+            "mine": kb.owner_id in ("", uid),
             "document_count": len(store.documents_of_kb(kb.id)),
         }
         for kb in store.list_kbs(ws, uid)
@@ -180,10 +196,48 @@ async def list_knowledge_bases(ws: str = Depends(current_workspace), uid: str = 
 
 @router.post("")
 async def create_kb(req: KBCreate, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+    if req.visibility not in VISIBILITIES:
+        raise HTTPException(400, f"visibility 只能是 {' / '.join(VISIBILITIES)}")
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "知识库名称不能为空")
     store = get_store()
-    kb = store.add_kb(req.name.strip(), workspace_id=ws, owner_id=uid)
-    store.save()
-    return {"id": kb.id, "name": kb.name}
+    kb = store.add_kb(
+        name, workspace_id=ws, owner_id=uid,
+        description=req.description.strip(), visibility=req.visibility,
+    )
+    return {"id": kb.id, "name": kb.name, "visibility": kb.visibility}
+
+
+@router.patch("/{kb_id}")
+async def update_kb(
+    kb_id: str, req: KBPatch,
+    ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
+    user=Depends(current_user),
+) -> dict:
+    """改名称/描述/可见性。只有创建者或工作区管理员能改。"""
+    store = get_store()
+    _require_kb(store, kb_id, ws, uid)
+    kb = store.get_kb(kb_id)
+    if kb is None:
+        raise HTTPException(404, "知识库不存在")
+    is_admin = members.at_least(workspace_role(user, ws) or "", "admin")
+    if kb.owner_id not in ("", uid) and not is_admin:
+        raise HTTPException(403, "只有创建者或管理员可以修改")
+    fields = req.model_dump(exclude_none=True)
+    if "visibility" in fields and fields["visibility"] not in VISIBILITIES:
+        raise HTTPException(400, f"visibility 只能是 {' / '.join(VISIBILITIES)}")
+    if "name" in fields:
+        fields["name"] = str(fields["name"]).strip()
+        if not fields["name"]:
+            raise HTTPException(400, "知识库名称不能为空")
+    updated = store.update_kb(kb_id, **fields)
+    return {
+        "id": kb_id,
+        "name": updated.name if updated else kb.name,
+        "description": updated.description if updated else kb.description,
+        "visibility": updated.visibility if updated else kb.visibility,
+    }
 
 
 @router.get("/{kb_id}/documents")

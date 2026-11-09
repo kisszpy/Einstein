@@ -18,6 +18,7 @@ class SkillCreate(BaseModel):
     description: str = ""
     system_prompt: str = ""
     tools: list[str] = []
+    visibility: str = "private"
 
 
 class SkillUpdate(BaseModel):
@@ -26,6 +27,10 @@ class SkillUpdate(BaseModel):
     system_prompt: str | None = None
     tools: list[str] | None = None
     enabled: bool | None = None
+    visibility: str | None = None
+
+
+VISIBILITIES = ("private", "workspace", "shared")
 
 
 class InstallRequest(BaseModel):
@@ -63,6 +68,8 @@ def _dump(skill: Skill) -> dict:
         "updated_at": skill.updated_at,
         "version": skill.version,
         "versions": skill.versions,
+        "visibility": skill.visibility,
+        "owner_id": skill.owner_id,
     }
 
 
@@ -161,8 +168,13 @@ async def list_skills(ws: str = Depends(current_workspace), uid: str = Depends(c
 async def create_skill(req: SkillCreate, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     if not req.name.strip():
         raise HTTPException(400, "技能名称不能为空")
+    if req.visibility not in VISIBILITIES:
+        raise HTTPException(400, f"visibility 只能是 {' / '.join(VISIBILITIES)}")
     store = get_skill_store()
-    skill = store.add(req.name.strip(), req.description, req.system_prompt, req.tools, workspace_id=ws, owner_id=uid)
+    skill = store.add(
+        req.name.strip(), req.description, req.system_prompt, req.tools,
+        workspace_id=ws, owner_id=uid, visibility=req.visibility,
+    )
     store.save()
     return _dump(skill)
 
@@ -174,6 +186,8 @@ async def update_skill(
 ) -> dict:
     store = get_skill_store()
     _require_edit(store.get(skill_id), ws, uid, user.is_admin)
+    if req.visibility is not None and req.visibility not in VISIBILITIES:
+        raise HTTPException(400, f"visibility 只能是 {' / '.join(VISIBILITIES)}")
     skill = store.update(
         skill_id,
         name=req.name.strip() if req.name else None,
@@ -181,6 +195,7 @@ async def update_skill(
         system_prompt=req.system_prompt,
         tools=req.tools,
         enabled=req.enabled,
+        visibility=req.visibility,
     )
     if skill is None:
         raise HTTPException(404, "技能不存在")

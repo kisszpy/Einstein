@@ -49,7 +49,9 @@ class KbRepository(Protocol):
     def get_kb(self, kb_id: str) -> KnowledgeBase | None: ...
     def create_kb(
         self, name: str, workspace_id: str = DEFAULT_WS, description: str = "", owner_id: str = "",
+        visibility: str = "private",
     ) -> KnowledgeBase: ...
+    def update_kb(self, kb_id: str, **fields) -> KnowledgeBase | None: ...
     def delete_kb(self, kb_id: str) -> bool: ...
     def owns(self, kb_id: str, workspace_id: str, owner_id: str | None = None) -> bool: ...
     def add_document(
@@ -186,10 +188,13 @@ class JsonKbRepository:
     ) -> list[KnowledgeBase]:
         rows = list(self.kbs.values())
         if workspace_id:
-            rows = [k for k in rows if k.workspace_id == workspace_id]
+            rows = [k for k in rows if k.workspace_id == workspace_id or k.visibility == "shared"]
         if owner_id is not None:
-            # '' = 系统预置/共享，其余只有创建者本人可见
-            rows = [k for k in rows if k.owner_id in ("", owner_id)]
+            # '' = 系统预置；自己的；以及本工作区里被设为可共享的
+            rows = [
+                k for k in rows
+                if k.owner_id in ("", owner_id) or k.visibility in ("workspace", "shared")
+            ]
         return sorted(rows, key=lambda k: k.created_at)
 
     def get_kb(self, kb_id: str) -> KnowledgeBase | None:
@@ -197,14 +202,27 @@ class JsonKbRepository:
 
     def create_kb(
         self, name: str, workspace_id: str = DEFAULT_WS, description: str = "", owner_id: str = "",
+        visibility: str = "private",
     ) -> KnowledgeBase:
         with self._lock:
             kb = KnowledgeBase(
                 id=_new_id(), name=name, workspace_id=workspace_id,
                 description=description, created_at=_now(), updated_at=_now(),
-                owner_id=owner_id,
+                owner_id=owner_id, visibility=visibility,
             )
             self.kbs[kb.id] = kb
+            return kb
+
+    def update_kb(self, kb_id: str, **fields) -> KnowledgeBase | None:
+        """改名称/描述/可见性。权限由路由层判定（owner 或管理员）。"""
+        with self._lock:
+            kb = self.kbs.get(kb_id)
+            if kb is None:
+                return None
+            for key, value in fields.items():
+                if hasattr(kb, key) and value is not None:
+                    setattr(kb, key, value)
+            kb.updated_at = _now()
             return kb
 
     def delete_kb(self, kb_id: str) -> bool:
@@ -223,7 +241,11 @@ class JsonKbRepository:
         kb = self.kbs.get(kb_id)
         if kb is None:
             return False
-        if owner_id is not None and kb.owner_id not in ("", owner_id):
+        if (
+            owner_id is not None
+            and kb.owner_id not in ("", owner_id)
+            and kb.visibility not in ("workspace", "shared")
+        ):
             return False
         return kb.workspace_id == workspace_id or kb.visibility == "shared"
 
@@ -414,11 +436,11 @@ class SqlKbRepository:
     ) -> list[KnowledgeBase]:
         where, params = [], []
         if workspace_id:
-            where.append("workspace_id = ?")
+            where.append("(workspace_id = ? OR visibility = 'shared')")
             params.append(workspace_id)
         if owner_id is not None:
-            # '' = 系统预置/共享，其余只有创建者本人可见
-            where.append("(owner_id = ? OR owner_id = '')")
+            # '' = 系统预置；自己的；以及本工作区里被设为可共享的
+            where.append("(owner_id = ? OR owner_id = '' OR visibility IN ('workspace', 'shared'))")
             params.append(owner_id)
         clause = f" WHERE {' AND '.join(where)}" if where else ""
         rows = self.db.query(
@@ -432,18 +454,36 @@ class SqlKbRepository:
 
     def create_kb(
         self, name: str, workspace_id: str = DEFAULT_WS, description: str = "", owner_id: str = "",
+        visibility: str = "private",
     ) -> KnowledgeBase:
         now = _now()
         kb_id = _new_id()
         self.db.execute(
             "INSERT INTO knowledge_bases (id, workspace_id, name, description, visibility,"
             " created_at, updated_at, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (kb_id, workspace_id, name, description, "workspace", now, now, owner_id),
+            (kb_id, workspace_id, name, description, visibility, now, now, owner_id),
         )
         return KnowledgeBase(
             id=kb_id, name=name, created_at=now, workspace_id=workspace_id,
-            description=description, visibility="workspace", updated_at=now, owner_id=owner_id,
+            description=description, visibility=visibility, updated_at=now, owner_id=owner_id,
         )
+
+    def update_kb(self, kb_id: str, **fields) -> KnowledgeBase | None:
+        """改名称/描述/可见性。权限由路由层判定（owner 或管理员）。"""
+        allowed = {"name", "description", "visibility"}
+        sets, params = [], []
+        for key, value in fields.items():
+            if key not in allowed or value is None:
+                continue
+            sets.append(f"{key} = ?")
+            params.append(value)
+        if not sets:
+            return self.get_kb(kb_id)
+        sets.append("updated_at = ?")
+        params.append(_now())
+        params.append(kb_id)
+        self.db.execute(f"UPDATE knowledge_bases SET {', '.join(sets)} WHERE id = ?", params)
+        return self.get_kb(kb_id)
 
     def delete_kb(self, kb_id: str) -> bool:
         with self.db.transaction():
@@ -455,11 +495,16 @@ class SqlKbRepository:
 
     def owns(self, kb_id: str, workspace_id: str, owner_id: str | None = None) -> bool:
         # shared 知识库跨工作区可读（检索/引用）；workspace 仅本工作区。
-        # owner_id 给定时再叠加归属判定：'' 是预置/共享，其余只有创建者可见。
+        # owner_id 给定时再叠加归属判定：'' 是预置，其余只有创建者或
+        # 「显式共享给工作区」的库可读。
         kb = self.get_kb(kb_id)
         if kb is None:
             return False
-        if owner_id is not None and kb.owner_id not in ("", owner_id):
+        if (
+            owner_id is not None
+            and kb.owner_id not in ("", owner_id)
+            and kb.visibility not in ("workspace", "shared")
+        ):
             return False
         return kb.workspace_id == workspace_id or kb.visibility == "shared"
 

@@ -32,7 +32,7 @@ _MIGRATION_001 = [
         workspace_id  TEXT NOT NULL DEFAULT 'default',
         name          TEXT NOT NULL,
         description   TEXT NOT NULL DEFAULT '',
-        visibility    TEXT NOT NULL DEFAULT 'workspace',
+        visibility    TEXT NOT NULL DEFAULT 'private',
         created_at    TEXT NOT NULL,
         updated_at    TEXT NOT NULL
     )
@@ -306,6 +306,18 @@ def _migration_012(db: Database) -> list[str]:
     return statements
 
 
+# 013：可见性语义收紧。
+#
+# v0.7.0 之前 list_kbs 按 owner 过滤，visible='workspace' 只是占位、并不真的
+# 让同事看见。现在放开 list 后，存量里所有 'workspace' 的库会一夜之间对全空间
+# 可见——这等于把"私有"悄悄改成"公开"。所以迁移时把存量统一落成 private，
+# 共享必须由用户显式选择。
+def _migration_013(db: Database) -> list[str]:
+    return [
+        "UPDATE knowledge_bases SET visibility = 'private' WHERE visibility = 'workspace'",
+    ]
+
+
 MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (2, _MIGRATION_002),
     (3, _MIGRATION_003),
@@ -318,6 +330,7 @@ MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (10, _MIGRATION_010),
     (11, _MIGRATION_011),
     (12, _migration_012),
+    (13, _migration_013),
 ]
 
 _TYPE_TOKENS = {

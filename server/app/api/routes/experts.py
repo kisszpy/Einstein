@@ -22,6 +22,7 @@ class ExpertCreate(BaseModel):
     temperature: float = 0.7
     greeting: str = ""
     suggestions: list[str] = []
+    visibility: str = "private"
 
 
 class ExpertUpdate(BaseModel):
@@ -36,6 +37,10 @@ class ExpertUpdate(BaseModel):
     enabled: bool | None = None
     greeting: str | None = None
     suggestions: list[str] | None = None
+    visibility: str | None = None
+
+
+VISIBILITIES = ("private", "workspace", "shared")
 
 
 class PublishRequest(BaseModel):
@@ -59,12 +64,19 @@ def _dump(expert) -> dict:  # noqa: ANN001 — dataclass，内部使用
         "suggestions": expert.suggestions,
         "status": expert.status,
         "published_at": expert.published_at,
+        "visibility": expert.visibility,
+        "owner_id": expert.owner_id,
     }
 
 
 def _require_visible(expert: Expert | None, ws: str, uid: str) -> Expert:
-    """可见：预置专家（'' ）或自己创建的；别人的一律当不存在。"""
-    if expert is None or expert.workspace_id != ws or expert.owner_id not in ("", uid):
+    """可见：预置专家、自己的、以及显式共享到工作区的。"""
+    if expert is None:
+        raise HTTPException(404, "专家不存在")
+    in_ws = expert.workspace_id == ws or expert.visibility == "shared"
+    if not in_ws:
+        raise HTTPException(404, "专家不存在")
+    if expert.owner_id not in ("", uid) and expert.visibility not in ("workspace", "shared"):
         raise HTTPException(404, "专家不存在")
     return expert
 
@@ -113,6 +125,8 @@ async def create_expert(
 ) -> dict:
     if not req.name.strip():
         raise HTTPException(400, "专家名称不能为空")
+    if req.visibility not in VISIBILITIES:
+        raise HTTPException(400, f"visibility 只能是 {' / '.join(VISIBILITIES)}")
     store = get_expert_store()
     skill_ids, kb_ids = _filter_mounts(req.skill_ids, req.kb_ids, ws, uid)
     expert = store.add(
@@ -128,6 +142,7 @@ async def create_expert(
         greeting=req.greeting,
         suggestions=req.suggestions,
         owner_id=uid,
+        visibility=req.visibility,
     )
     store.save()
     return _dump(expert)
@@ -140,6 +155,8 @@ async def update_expert(
 ) -> dict:
     store = get_expert_store()
     _require_editable(store.get(expert_id), ws, uid, user.is_admin)
+    if req.visibility is not None and req.visibility not in VISIBILITIES:
+        raise HTTPException(400, f"visibility 只能是 {' / '.join(VISIBILITIES)}")
     skill_ids, kb_ids = _filter_mounts(req.skill_ids or [], req.kb_ids or [], ws, uid)
     expert = store.update(
         expert_id,
@@ -154,6 +171,7 @@ async def update_expert(
         enabled=req.enabled,
         greeting=req.greeting,
         suggestions=req.suggestions,
+        visibility=req.visibility,
     )
     if expert is None:
         raise HTTPException(404, "专家不存在")
