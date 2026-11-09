@@ -19,6 +19,8 @@ interface Member {
 interface Workspace {
   id: string;
   name: string;
+  role?: string;
+  is_personal?: boolean;
 }
 
 const ROLES = [
@@ -42,7 +44,8 @@ export function MembersCard() {
     display_name: "",
     password: "",
     role: "member",
-    workspaces: ["default"] as string[],
+    // 默认不并入任何共享空间：新账号只拿到自己的个人空间，团队空间靠显式勾选/邀请
+    workspaces: [] as string[],
   });
 
   const isAdmin = user?.role === "owner" || user?.role === "admin";
@@ -74,7 +77,7 @@ export function MembersCard() {
       setError(data.detail ?? "创建失败");
       return;
     }
-    setDraft({ username: "", display_name: "", password: "", role: "member", workspaces: ["default"] });
+    setDraft({ username: "", display_name: "", password: "", role: "member", workspaces: [] });
     setAdding(false);
     await load();
   };
@@ -117,7 +120,7 @@ export function MembersCard() {
         <div>
           <h3 className="text-[13px] font-medium">成员与权限</h3>
           <p className="mt-0.5 text-[12px] text-tertiary">
-            账号用于登录控制台；成员只能访问被分配的工作区，管理员可跨工作区并管理成员。
+            每个账号自动拥有一个私有个人空间（只有自己可见）。勾选下方共享空间才会加入团队；未被加入的空间对该账号完全不可见。
           </p>
         </div>
         <Button variant="outline" onClick={() => setAdding((v) => !v)}>
@@ -160,8 +163,8 @@ export function MembersCard() {
           </div>
 
           <div className="mt-2.5 flex flex-wrap items-center gap-3">
-            <span className="text-[12px] text-tertiary">可访问工作区</span>
-            {spaces.map((w) => (
+            <span className="text-[12px] text-tertiary">加入共享空间（可选）</span>
+            {spaces.filter((w) => !w.is_personal).map((w) => (
               <label key={w.id} className="flex items-center gap-1.5 text-[12.5px] text-secondary">
                 <input
                   type="checkbox"

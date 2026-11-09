@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { SpaceMembersDialog } from "@/features/workspace/SpaceMembersDialog";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { getWorkspace, setWorkspace, subscribeWorkspace } from "@/lib/workspace";
@@ -35,6 +36,7 @@ export function WorkspaceSwitcher() {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
 
   const { data: workspaces = [] } = useQuery({
@@ -100,8 +102,11 @@ export function WorkspaceSwitcher() {
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-2 rounded-lg border border-line bg-surface-1 px-3 py-1.5 text-[13px] text-secondary transition-colors duration-150 hover:border-line-strong hover:text-primary"
       >
-        <span className="h-1.5 w-1.5 rounded-full bg-brand" />
-        <span className="max-w-[9rem] truncate">{current?.name ?? "默认工作区"}</span>
+        <span className={cn("h-1.5 w-1.5 rounded-full", current?.is_personal ? "bg-tertiary" : "bg-brand")} />
+        <span className="max-w-[9rem] truncate">
+          {current?.is_personal ? "🏠 " : ""}
+          {current?.name ?? "默认工作区"}
+        </span>
         <span className="text-tertiary">▾</span>
       </button>
 
@@ -134,6 +139,25 @@ export function WorkspaceSwitcher() {
             ))}
           </div>
 
+          <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
+            {current?.is_personal ? (
+              <p className="px-2 py-1 text-[11.5px] text-tertiary">
+                私有空间，只有你自己可见
+              </p>
+            ) : (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  setManageOpen(true);
+                }}
+                className="rounded-lg px-2 py-1 text-[12px] text-tertiary transition-colors hover:bg-surface-3 hover:text-primary"
+              >
+                成员管理（{current?.member_count ?? 0} 人）·
+                {ROLE_LABEL[current?.role ?? ""] ?? current?.role}
+              </button>
+            )}
+          </div>
+
           <div className="mt-2 flex gap-2 border-t border-line pt-2">
             {canCreate ? (
               <>
@@ -159,6 +183,15 @@ export function WorkspaceSwitcher() {
             )}
           </div>
         </div>
+      )}
+
+      {manageOpen && current && !current.is_personal && (
+        <SpaceMembersDialog
+          workspaceId={current.id}
+          workspaceName={current.name}
+          myRole={current.role}
+          onClose={() => setManageOpen(false)}
+        />
       )}
     </div>
   );
