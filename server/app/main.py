@@ -18,6 +18,7 @@ from app.api.routes import eval as eval_routes
 from app.api.routes import memory as memory_routes
 from app.api.routes import alerts as alert_routes
 from app.api.routes import models as model_routes
+from app.api.routes import templates as template_routes
 from app.api.routes import observability, openapi, platform, projects
 from app.api.routes import jobs
 from app.core.config import get_settings
@@ -323,6 +324,7 @@ def create_app() -> FastAPI:
     app.include_router(memory_routes.router, prefix="/api")
     app.include_router(model_routes.router, prefix="/api")
     app.include_router(alert_routes.router, prefix="/api")
+    app.include_router(template_routes.router, prefix="/api")
     # 对外开放 API：/v1/...（Bearer 鉴权，与 /api 控制台面分开）
     app.include_router(openapi.router)
 

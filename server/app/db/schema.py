@@ -411,6 +411,19 @@ def _migration_018(db: Database) -> list[str]:
     ]
 
 
+# 019：任务模板。
+#
+# "每周竞品简报"这类活每次重述一遍任务，措辞一变模型选的路线也跟着变。
+# 模板只固化起步参数（任务描述、挂载、专家），执行仍由智能体自主规划。
+def _migration_019(db: Database) -> list[str]:
+    from app.db.tables import TABLES
+
+    return [
+        TABLES["task_templates"].ddl(),
+        "CREATE INDEX IF NOT EXISTS idx_templates_ws ON task_templates(workspace_id)",
+    ]
+
+
 MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (2, _MIGRATION_002),
     (3, _MIGRATION_003),
@@ -429,6 +442,7 @@ MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (16, _migration_016),
     (17, _migration_017),
     (18, _migration_018),
+    (19, _migration_019),
 ]
 
 _TYPE_TOKENS = {

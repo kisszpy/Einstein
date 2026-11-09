@@ -273,6 +273,40 @@ async def list_grants(
     return [kb_access.grant_payload(r) for r in kb_access.list_grants(kb_id)]
 
 
+@router.get("/{kb_id}/grants/candidates")
+async def grant_candidates(
+    kb_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
+) -> list[dict]:
+    """可授权的人：本空间的成员（不是全站用户）。
+
+    为什么不复用 `GET /api/users`：那要管理员权限，而"把自己的库开给同事"
+    是普通用户就该能做主的操作。候选范围收在工作区成员内，既够用也不越权。
+    """
+    store = get_store()
+    _require_kb(store, kb_id, ws, uid, write=True)
+    from app.services.members import get_member_store
+    from app.services.users import get_user_store
+
+    granted = {r["user_id"]: r["role"] for r in kb_access.list_grants(kb_id)}
+    users = get_user_store()
+    out: list[dict] = []
+    for membership in get_member_store().members_of(ws):
+        if membership.user_id == uid:
+            continue
+        user = users.get(membership.user_id)
+        if user is None or user.disabled:
+            continue
+        out.append({
+            "user_id": user.id,
+            "name": user.display_name or user.username,
+            "username": user.username,
+            "workspace_role": membership.role,
+            "granted": granted.get(user.id, ""),
+        })
+    out.sort(key=lambda row: row["name"])
+    return out
+
+
 @router.post("/{kb_id}/grants")
 async def add_grant(
     kb_id: str, req: GrantRequest,

@@ -303,6 +303,36 @@ API_KEYS = Table(
     order="created_at",
 )
 
+# ---------------------------------------------------------------- 任务模板
+#
+# "每周竞品简报"这类固定流程，每次重新描述一遍是纯浪费：措辞一变，
+# 智能体选的路线也跟着变，同样的活两次做法不一样。
+#
+# 只存"怎么发起"，不存"怎么执行"——执行仍然是智能体自主规划，模板只是
+# 把任务描述、挂载项、专家这些起步参数存下来。
+TASK_TEMPLATES = Table(
+    name="task_templates",
+    columns=(
+        _c("id"),
+        _c("workspace_id", default="'default'"),
+        # '' = 空间共享模板（全员可见）；其余为创建者 id
+        _c("owner_id", default="''"),
+        _c("name"),
+        _c("description", default="''"),
+        # 任务描述（可以是带占位符的长文）
+        _c("prompt"),
+        _c("expert_id", default="''"),
+        _c("project", default="''"),
+        _c("tool_ids", "json", default="'[]'"),
+        _c("kb_ids", "json", default="'[]'"),
+        _c("visibility", default="'private'"),
+        _c("use_count", "int", default="0"),
+        _c("created_at", default="''"),
+        _c("updated_at", default="''"),
+    ),
+    order="updated_at DESC",
+)
+
 # ---------------------------------------------------------------- 知识库授权
 #
 # 三档可见性（private / workspace / shared）解决的是"大体给谁看"，解决不了
@@ -574,6 +604,7 @@ TABLES: dict[str, Table] = {
         SKILLS,
         MCP_SERVERS,
         MODELS,
+        TASK_TEMPLATES,
         KB_GRANTS,
         ALERT_RULES,
         ALERT_EVENTS,
@@ -601,6 +632,7 @@ DOMAIN_TABLES: dict[str, str] = {
     "memory": "workspace_memory",
     "run_traces": "run_traces",
     "models": "models",
+    "task_templates": "task_templates",
     "kb_grants": "kb_grants",
     "alert_rules": "alert_rules",
     "alert_events": "alert_events",
