@@ -2,6 +2,37 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.4.0] - 2026-11-09
+
+多租户边界从「空间级」下沉到「人」：同一空间内的成员不再互相看见对方的资源，
+工作区也不再漏出平台自身的运行时目录。
+
+### 新增
+
+- **资源级用户隔离**：`owner_id` 贯穿 `conversations` / `agent_runs` / `knowledge_bases` / `experts` / `skills` / `mcp_servers` / `api_keys` 七张表（迁移 009，幂等加列 + 复合索引）。语义为「预置共享 + 用户私有」——`''` 表示系统预置（全员可见、仅管理员可改），非空表示创建者（仅本人可见，管理员亦不越权，与个人空间边界一致）
+  - 双维度收敛 `owned_kb_ids(ws, ids, uid)` / `visible(id, ws, uid)`：workspace 防跨空间、owner 防同空间越权
+  - 可读与可改分离（`can_edit(item, uid, is_admin)`）；越权探测统一 404 不泄露存在性，预置资源改不动返回 403
+  - 技能 id 混入归属（`_skill_id(ws, repo, subpath, owner_id)`），同空间两人装同一 GitHub 技能不再互相覆盖；工作区技能目录只发布「预置 + 本人」
+  - API Key 继承签发者范围，开放 API 按 `key.owner_id` 收敛知识库与专家，不会因管理员签发而获得全库通行
+  - 对话续写收到他人 `conversation_id` 时静默新开会话；MCP 工具按 `visible_server` 收敛
+- **项目先登记再创建**：新增 `projects` 表（迁移 010，`workspace_id + slug` 复合主键，含 `owner_id` / `internal`）。列表只认「已登记 + 属于当前用户」的行，磁盘目录降级为落点；项目没有「预置」档，每个项目都属于某个人，空间管理员也不越权，越权一律 404
+- **运行时目录迁出用户命名空间**：技能同步目录 `skills/` → `.agent/skills/`，临时沙盒 `_scratch` → 按用户隔离的 `_scratch-<uid>`；模型侧根目录 `ls` 只显示活动项目，`/.agent/skills/` 仍可读（渐进披露不变），写 `.agent/**` 一律拒绝。文件树与整包下载统一跳过 `.agent` / `.deck` / `.deckpreview` / `.slidep`
+- **租户数据一键清理**：`tools/reset_tenant_data.py`（`--dry-run` / `--yes`），删前整库 `pg_dump` + 文件层 tar 备份；清 17 张业务表与非 admin 账号/空间，保留预置技能与专家
+- **验收脚本**：`tools/verify_isolation.py`（两账号交叉验证六类资源 28 项）、`tools/verify_projects_scope.py`（项目可见性 22 项）
+
+### 修复
+
+- 系统管理页「新增成员」按钮被说明文字挤到 60px 导致四字折行溢出：文字块 `min-w-0 flex-1`、按钮 `shrink-0 whitespace-nowrap`，成员表改通栏展示
+- 迁移前存量资源 `owner_id` 为空等于全员共享，清理后统一回填为创建者
+- 删除账号时未连带清理其个人空间，留下孤儿空间与成员关系
+- `verify_agent` 在 deep 引擎下的旧工具名断言（`fs_write` 已被 harness 工具取代）
+- `verify_rbac_http` 清理逻辑遗漏探测用户的个人空间，残留测试数据
+
+### 变更
+
+- `skills`、`_` 前缀列为项目保留名，创建直接 400
+- 启动自愈 `projects.adopt_orphans()`：把升级前的存量目录收养登记给空间所有者（宁缺勿泄），跳过运行时目录
+
 ## [0.3.0] - 2026-11-09
 
 对应第二阶段批次 S2.3 / S2.4 / S2.5 / S2.6，RAG 质量平台化体验生态收官。
