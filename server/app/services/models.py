@@ -346,7 +346,9 @@ def resolve(model_id: str = "", *, workspace_id: str = "", owner_id: str = "") -
     也回落，而不是抛错——一次配置被删不该让整个对话接口 500，链路里能看出
     `source="env"` 就够了。
     """
-    key = model_id or ""
+    # 缓存键必须带上空间：同一台部署里不同空间的默认模型可以不同，
+    # 只按 "" 缓存会让 A 空间拿到 B 空间的默认模型。
+    key = model_id or f"default:{workspace_id}"
     now = time.monotonic()
     with _cache_guard:
         hit = _cache.get(key)

@@ -60,7 +60,7 @@ def _client(target: models.Resolved | None = None) -> AsyncOpenAI:
     )
 
 
-def _endpoints(model_id: str = "") -> list[tuple[str, str, str]]:
+def _endpoints(model_id: str = "", workspace_id: str = "") -> list[tuple[str, str, str]]:
     """主端点在前、降级链在后：[(base_url, api_key, model)]。
 
     主端点来自模型注册表（`model_id` 指定，或默认模型，或 `.env`）；
@@ -69,7 +69,7 @@ def _endpoints(model_id: str = "") -> list[tuple[str, str, str]]:
     静态列表更可预期，也不会因为某条模型被停用而整条链消失。
     """
     settings = get_settings()
-    head = models.resolve(model_id)
+    head = models.resolve(model_id, workspace_id=workspace_id)
     out = [(head.base_url, head.api_key, head.model)]
     for raw in (settings.llm_fallbacks or "").split(";"):
         parts = [p.strip() for p in raw.split("::") if p.strip()]
@@ -82,6 +82,7 @@ async def stream_chat(
     messages: list[BaseMessage],
     temperature: float = 0.7,
     model_id: str = "",
+    workspace_id: str = "",
 ) -> AsyncIterator[tuple[str, str]]:
     """流式产出 (kind, text)：kind 为 "reasoning"（思考）、"delta"（正文）
     或 "usage"（JSON 文本，仅在端点返回用量时最后一条）。
@@ -89,14 +90,14 @@ async def stream_chat(
     Qwen3 等思考模型把推理放在 reasoning_content，需要单独下发，
     前端渲染为可折叠的「思考过程」块。调用指标在流结束时落库。
     """
-    target = models.resolve(model_id)
+    target = models.resolve(model_id, workspace_id=workspace_id)
     t0 = time.perf_counter()
     usage: dict | None = None
     try:
         stream = None
         # 降级链：连接阶段失败（端点宕机/超时）依次试下一个；流开始后不再切换
         last_exc: Exception | None = None
-        for base_url, api_key, model in _endpoints(model_id):
+        for base_url, api_key, model in _endpoints(model_id, workspace_id):
             client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=180, max_retries=1)
             try:
                 stream = await client.chat.completions.create(
@@ -159,12 +160,13 @@ async def complete(
     max_tokens: int | None = None,
     kind: str = "eval",
     model_id: str = "",
+    workspace_id: str = "",
 ) -> tuple[str, dict | None]:
     """非流式补全：返回 (正文, usage)。
 
     评测等后台任务默认 kind=eval；轻量判定传更小的 max_tokens 以压低延迟。
     """
-    target = models.resolve(model_id)
+    target = models.resolve(model_id, workspace_id=workspace_id)
     client = _client(target)
     t0 = time.perf_counter()
     kwargs: dict = {}

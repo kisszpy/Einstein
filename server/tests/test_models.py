@@ -130,6 +130,17 @@ def test_delete_returns_true_only_once():
     assert models.resolve("").source == "env"
 
 
+def test_default_is_per_workspace():
+    """同一部署里两个空间可以各有默认模型，缓存不能把它们混成一个。"""
+    a = _create(name="A 空间默认", workspace_id="ws1", owner_id="u1", is_default=True)
+    b = _create(name="B 空间默认", workspace_id="ws2", owner_id="u3", is_default=True)
+
+    assert models.resolve("", workspace_id="ws1").model_id == a["id"]
+    assert models.resolve("", workspace_id="ws2").model_id == b["id"]
+    # 再查一次（走缓存）也不能串
+    assert models.resolve("", workspace_id="ws1").model_id == a["id"]
+
+
 def test_cache_invalidated_on_write():
     """写操作后立刻可见：配置不是秒级强一致场景，但本进程内不该看到旧值。"""
     assert models.resolve("").source == "env"

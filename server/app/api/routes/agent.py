@@ -279,7 +279,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
             kind="agent", workspace_id=ws, owner_id=uid, session_id=session_id,
             engine=_settings.agent_engine,
             # 记实际生效的模型，成本看板按它聚合
-            model=models.resolve(effective_model_id).model,
+            model=models.resolve(effective_model_id, workspace_id=ws).model,
         )
 
         try:

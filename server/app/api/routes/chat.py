@@ -163,7 +163,7 @@ async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[st
             # 模型优先级：本轮显式指定 > 专家偏好 > 平台默认 > .env
             model_id = req.model_id or expert_model_id
             # 轨迹里记真值（start() 时只能填 .env 的模型名）
-            traces.note_model(model_registry.resolve(model_id).model)
+            traces.note_model(model_registry.resolve(model_id, workspace_id=ws).model)
             # 显式传的 kb_ids 优先于专家挂载
             effective_kb_ids = req_kb_ids or expert_kb_ids
 
@@ -254,6 +254,7 @@ async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[st
                 _to_lc_messages(req.messages, system_text),
                 temperature=temperature,
                 model_id=model_id,
+                workspace_id=ws,
             ):
                 if kind == "usage":
                     continue  # token 用量已在 llm 层落指标，不进对话流
