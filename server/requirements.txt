@@ -32,3 +32,8 @@ python-pptx>=1.0            # pptx 摄取与生成
 beautifulsoup4>=4.12        # html 摄取
 mcp>=2.0
 jieba>=0.42
+
+# ---- 可选：Deep Agents Pro 的无头浏览器截图 ----
+# 两种任装其一即可：Python 版（pip install playwright && playwright install chromium）
+# 或直接复用仓库 web/ 的 playwright-core（npm install，后端自动发现）。
+# playwright>=1.40

@@ -20,8 +20,15 @@ class Settings(BaseSettings):
 
     # 智能体能力
     agent_code_exec: bool = True   # 关闭后智能体不可执行代码（code_run 工具不注册）
-    # 引擎：deepagents（计划/子智能体/上下文压缩）| react（旧单循环，回滚用）
+    # 引擎：deepagents（计划/子智能体/上下文压缩）| deepagents-pro（+ 真沙箱/浏览器）| react（旧单循环，回滚用）
     agent_engine: str = "deepagents"
+    # Pro 引擎的 shell 沙箱：auto（有 docker 就容器，否则宿主 shell）| container | local | off
+    agent_pro_sandbox: str = "auto"
+    agent_pro_image: str = "python:3.12-slim"   # 容器镜像（需含 sh / python3）
+    agent_pro_network: str = "bridge"           # 容器网络：bridge 可联网装包；none 完全断网
+    agent_pro_shell_timeout: int = 60           # 单条命令默认超时（秒，上限 300）
+    agent_pro_memory: str = "1g"                # 容器内存上限
+    agent_pro_cpus: str = "2"                   # 容器 CPU 上限
 
     # 检索
     retrieval_mode: str = "hybrid"  # vector | lexical | hybrid

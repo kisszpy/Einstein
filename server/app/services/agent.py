@@ -3,24 +3,25 @@
 两个引擎产出同一套事件（tool_call / tool_result / artifact / plan / final），
 上层路由与前端无需感知差异；`APP_AGENT_ENGINE=react` 是回滚开关。
 
-ReAct 路径（`_run_react_agent`）用 create_react_agent 预置图（agent ↔ tools
-循环），astream updates 模式产出每个节点的状态变化，映射为前端可展示的步骤
-事件；最终回答在同一次运行中捕获，不重跑图。
+ReAct 路径（`_run_react_agent`）用 langchain 的 `create_agent` 预置图
+（model ↔ tools 循环），astream updates 模式产出每个节点的状态变化，映射为
+前端可展示的步骤事件；最终回答在同一次运行中捕获，不重跑图。节点名不参与
+判断（只看消息类型），换 harness 的节点命名不会悄悄丢事件。
 """
 
-import json
 import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from langchain.agents import create_agent
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
-from langgraph.prebuilt import create_react_agent
 
 from app.core.config import get_settings
-from app.services import metrics
+from app.services.agent_runtime import LlmTimer, build_messages, final_frame, short
 from app.services.capabilities import AgentContext
-from app.services.tools import build_lc_tools, kb_directive, preflight_kb
+from app.services.tools import build_lc_tools, kb_directive
 
 RECURSION_LIMIT = 48  # 工作型任务的步数预算（一轮工具调用 ≈ 2 步）
 
@@ -38,11 +39,6 @@ def _get_model(temperature: float | None = None) -> ChatOpenAI:
     if temperature is not None:
         kwargs["temperature"] = temperature
     return ChatOpenAI(**kwargs)
-
-
-def _short(obj: Any, limit: int = 300) -> str:
-    text = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)
-    return text if len(text) <= limit else text[:limit] + "…"
 
 
 AGENT_SYSTEM_PROMPT = """你是 Einstein 的工作型智能体，能调用工具实际完成任务。但**不要什么任务都用工具**——先判断用户要的是「答案」还是「文件」，选最省力的路径：
@@ -95,8 +91,20 @@ async def run_agent(
       {kind: "artifact", path, artifact_kind}
       {kind: "final", text, artifacts, project}
     """
-    if get_settings().agent_engine == "react":
+    engine = (get_settings().agent_engine or "").strip().lower()
+    if engine == "react":
         async for step in _run_react_agent(task, tool_ids, kb_ids, workspace_id, ctx, history):
+            yield step
+        return
+
+    if engine in ("deepagents-pro", "deep-pro", "pro"):
+        # Pro 版：在 deep 之上多给真沙箱（execute）与浏览器，事件协议不变
+        from app.services.agent_deep_pro import run_deep_pro_agent
+
+        async for step in run_deep_pro_agent(
+            task, tool_ids, kb_ids, workspace_id, ctx, history,
+            persona=persona, pinned_skills=pinned_skills, temperature=temperature,
+        ):
             yield step
         return
 
@@ -119,109 +127,91 @@ async def _run_react_agent(
 ) -> AsyncIterator[dict]:
     """ReAct 引擎（回滚用）：单循环、无计划、无子智能体。"""
     lc_tools = build_lc_tools(tool_ids, kb_ids, workspace_id, ctx)
-    agent = create_react_agent(
+    agent = create_agent(
         _get_model(),
         lc_tools,
         # 挂了知识库就追加"KB 优先"硬规则，与 deepagents 引擎保持一致
-        prompt=AGENT_SYSTEM_PROMPT + (kb_directive(kb_ids) if kb_ids else ""),
+        system_prompt=AGENT_SYSTEM_PROMPT + (kb_directive(kb_ids) if kb_ids else ""),
     )
     final_text = ""
     tool_call_count = 0
-    t0 = time.perf_counter()
-    usage_total: dict[str, int] = {}
     pending_calls: dict[str, float] = {}  # tool_call_id -> 开始时刻
+    seen: set[str] = set()                # 节点可能回放历史消息，按 id 去重
+    messages = await build_messages(task, history, kb_ids)
 
-    def _acc_usage(msg: Any) -> None:
-        token_usage = (getattr(msg, "response_metadata", None) or {}).get("token_usage")
-        if token_usage:
-            usage_total["prompt"] = usage_total.get("prompt", 0) + (token_usage.get("prompt_tokens") or 0)
-            usage_total["completion"] = usage_total.get("completion", 0) + (token_usage.get("completion_tokens") or 0)
+    with LlmTimer("agent", get_settings().llm_model) as timer:
+        def _acc_usage(msg: Any) -> None:
+            token_usage = (getattr(msg, "response_metadata", None) or {}).get("token_usage")
+            if token_usage:
+                timer.tokens(token_usage.get("prompt_tokens"), token_usage.get("completion_tokens"))
 
-    status = "ok"
-    messages: list[tuple[str, str]] = [
-        (("assistant" if h.get("role") == "assistant" else "user"), h.get("content", "")) for h in (history or [])
-    ]
-    messages.append(("user", task))
-    # 首轮强制预取检索：与 deepagents 引擎同语义
-    if kb_ids and not history:
-        note = await preflight_kb(kb_ids, task)
-        if note:
-            messages.insert(0, ("user", note))
-    try:
-        async for update in agent.astream(
-            {"messages": messages},
-            stream_mode="updates",
-            config={"recursion_limit": RECURSION_LIMIT},
-        ):
-            for node, state in update.items():
-                messages = (state or {}).get("messages", [])
-                for msg in messages:
-                    tool_calls = getattr(msg, "tool_calls", None)
-                    if node == "agent" and tool_calls:
-                        _acc_usage(msg)
-                        for tc in tool_calls:
-                            tool_call_count += 1
-                            pending_calls[tc["id"]] = time.perf_counter()
+        try:
+            async for update in agent.astream(
+                {"messages": messages},
+                stream_mode="updates",
+                config={"recursion_limit": RECURSION_LIMIT},
+            ):
+                for _node, state in update.items():
+                    messages = (state or {}).get("messages", [])
+                    for msg in messages:
+                        mid = getattr(msg, "id", None) or f"{type(msg).__name__}:{id(msg)}"
+                        if mid in seen:
+                            continue
+                        seen.add(mid)
+                        if isinstance(msg, ToolMessage):
+                            name = getattr(msg, "name", None) or "tool"
+                            started = pending_calls.pop(getattr(msg, "tool_call_id", ""), None)
                             yield {
-                                "kind": "tool_call",
-                                "name": tc["name"],
-                                "args": _short(tc["args"]),
+                                "kind": "tool_result",
+                                "name": name,
+                                "content": short(msg.content),
+                                "duration_ms": round((time.perf_counter() - started) * 1000) if started else None,
                             }
-                    elif node == "tools" and getattr(msg, "content", None):
-                        name = getattr(msg, "name", None) or "tool"
-                        started = pending_calls.pop(getattr(msg, "tool_call_id", ""), None)
-                        yield {
-                            "kind": "tool_result",
-                            "name": name,
-                            "content": _short(msg.content),
-                            "duration_ms": round((time.perf_counter() - started) * 1000) if started else None,
-                        }
-                        # 工具执行后把新增产物推给前端。
-                        # 注意事件类型字段和产物类型字段不能重名：artifact 自带的
-                        # kind（pptx/file/...）会覆盖事件 kind，路由就认不出了。
-                        if ctx is not None:
-                            for artifact in ctx.artifacts:
-                                yield {
-                                    "kind": "artifact",
-                                    "path": artifact.get("path", ""),
-                                    "artifact_kind": artifact.get("kind", "file"),
-                                }
-                    elif node == "agent" and getattr(msg, "content", None):
-                        _acc_usage(msg)
-                        final_text = str(msg.content)
-    except GraphRecursionError:
-        # 达到步数上限：把手头已有的信息作为回答收尾，而不是报错中断
-        final_text = (
-            final_text
-            or f"（已执行 {tool_call_count} 次工具调用后达到步数上限，"
-            "任务未能在预算内完成。建议把任务拆小或减少挂载的知识库后重试。）"
-        )
-    except Exception as exc:
-        status = "error"
-        name = type(exc).__name__
-        if "Timeout" in name or "timed out" in str(exc):
-            raise RuntimeError(
-                "模型响应超时（任务上下文过长）。建议：缩小任务范围，"
-                "或分多次运行——先查资料写文件，再基于文件做产出。"
-            ) from exc
-        raise
-    finally:
-        metrics.record_llm(
-            kind="agent",
-            model=get_settings().llm_model,
-            duration_ms=(time.perf_counter() - t0) * 1000,
-            prompt_tokens=usage_total.get("prompt"),
-            completion_tokens=usage_total.get("completion"),
-            status=status,
-        )
+                            # 工具执行后把新增产物推给前端。
+                            # 注意事件类型字段和产物类型字段不能重名：artifact 自带的
+                            # kind（pptx/file/...）会覆盖事件 kind，路由就认不出了。
+                            if ctx is not None:
+                                for artifact in ctx.artifacts:
+                                    yield {
+                                        "kind": "artifact",
+                                        "path": artifact.get("path", ""),
+                                        "artifact_kind": artifact.get("kind", "file"),
+                                    }
+                            continue
 
-    print(f"[agent] run finished status={status} calls={tool_call_count}", flush=True)
-    yield {
-        "kind": "final",
-        "text": final_text,
-        "artifacts": list(ctx.artifacts) if ctx else [],
-        "project": ctx.project if ctx else "",
-    }
+                        if not isinstance(msg, AIMessage):
+                            continue
+                        _acc_usage(msg)
+                        tool_calls = getattr(msg, "tool_calls", None)
+                        if tool_calls:
+                            for tc in tool_calls:
+                                tool_call_count += 1
+                                pending_calls[tc["id"]] = time.perf_counter()
+                                yield {
+                                    "kind": "tool_call",
+                                    "name": tc["name"],
+                                    "args": short(tc["args"]),
+                                }
+                        elif msg.content:
+                            final_text = str(msg.content)
+        except GraphRecursionError:
+            # 达到步数上限：把手头已有的信息作为回答收尾，而不是报错中断
+            final_text = (
+                final_text
+                or f"（已执行 {tool_call_count} 次工具调用后达到步数上限，"
+                "任务未能在预算内完成。建议把任务拆小或减少挂载的知识库后重试。）"
+            )
+        except Exception as exc:
+            name = type(exc).__name__
+            if "Timeout" in name or "timed out" in str(exc):
+                raise RuntimeError(
+                    "模型响应超时（任务上下文过长）。建议：缩小任务范围，"
+                    "或分多次运行——先查资料写文件，再基于文件做产出。"
+                ) from exc
+            raise
+
+    print(f"[agent] run finished status={timer.status} calls={tool_call_count}", flush=True)
+    yield final_frame(ctx, final_text, with_artifacts=ctx is not None)
 
 
 def chunk_text(text: str, size: int = 24) -> list[str]:

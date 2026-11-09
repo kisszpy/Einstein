@@ -120,7 +120,7 @@ export function AppLayout() {
 
         <div className="flex items-center gap-1.5 border-t border-line px-4 py-3 text-[11.5px] text-tertiary">
           <span className="h-1 w-1 rounded-full bg-tertiary" />
-          v0.1.0 · M14
+          v{__APP_VERSION__} · M14
         </div>
       </aside>
 

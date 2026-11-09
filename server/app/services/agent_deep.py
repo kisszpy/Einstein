@@ -1,27 +1,31 @@
 """智能体服务：Deep Agents harness（deepagents）。
 
-为什么换成它：ReAct 只有"想一步做一步"，长任务没有显式计划、没有上下文
-压缩、没有子智能体，48 步预算一到就只剩一句"任务没做完"。Deep Agents 把
+为什么用它：ReAct 只有"想一步做一步"，长任务没有显式计划、没有上下文
+压缩、没有子智能体，步数预算一到就只剩一句"任务没做完"。Deep Agents 把
 这几件事做成了中间件：write_todos 计划、摘要压缩、task 子智能体、按路径
 授权的文件系统。
 
-和既有系统的接缝只有三处，这个文件就是那三处的实现：
+**这个文件只做框架没有的三件事**，其余全部交给 harness：
 
 1. **文件落在哪**：默认 StateBackend 把文件写进图状态（虚拟盘），前端拿不到
    产物。这里换成 FilesystemBackend，根指向 `data/projects/<ws>`，并用
-   `_WorkspaceBackend` 在写入成功后回调 `ctx.note_artifact`，产物卡片才照旧。
+   `WorkspaceBackend` 在写入成功后回调 `ctx.note_artifact`，产物卡片才照旧。
 2. **事件协议**：外部只认 tool_call / tool_result / artifact / plan / final，
-   由 `_iter_events` 从 LangGraph 的 updates 流里翻译，不向上层泄漏框架细节。
-3. **工具重叠**：我们的 fs_read/fs_write/fs_list 与 harness 的
-   read_file/write_file 功能重复，两套并存会让模型选错，所以引擎为
-   deepagents 时只保留 project_create 与业务工具，文件读写交给 harness。
+   由 `_iter_events` 从 LangGraph 的 updates 流里翻译。
+3. **预算续跑**：产品要求"触顶自动续接而不是把任务推回用户"，harness 只有
+   一个 `recursion_limit`（默认 9999，见 graph.py:1028），没有续跑语义，所以
+   循环写在 `_run_engine` 里；三个 deep 变体共用它。
+
+工具重叠：我们的 fs_read/fs_write/fs_list 与 harness 的 read_file/write_file
+功能重复，两套并存会让模型选错，所以引擎为 deepagents 时只保留
+project_create 与业务工具（SUPERSEDED_TOOLS），文件读写交给 harness。
 """
 
 from __future__ import annotations
 
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any
 
 from deepagents import create_deep_agent
@@ -40,10 +44,11 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
 
 from app.core.config import get_settings
-from app.services import metrics, skill_publisher
-from app.services.capabilities import ApprovalRequired, AgentContext, _artifact_kind, sandbox
+from app.services import skill_publisher
+from app.services.agent_runtime import LlmTimer, build_messages, final_frame, short
+from app.services.capabilities import ApprovalRequired, AgentContext, _artifact_kind
 from app.services.capabilities.sandbox import slugify, workspace_root
-from app.services.tools import build_lc_tools, kb_directive, preflight_kb
+from app.services.tools import build_lc_tools, kb_directive
 
 RECURSION_LIMIT = 64   # 单份预算：有了计划工具后每步更"值钱"，比 ReAct 略宽
 MAX_BUDGETS = 3        # 触顶自动续跑：把已有进展带回引擎继续执行，最多续 2 次
@@ -52,7 +57,7 @@ MAX_BUDGETS = 3        # 触顶自动续跑：把已有进展带回引擎继续�
 SUPERSEDED_TOOLS = {"fs_read", "fs_write", "fs_list"}
 
 
-class _WorkspaceBackend(FilesystemBackend):
+class WorkspaceBackend(FilesystemBackend):
     """工作区磁盘后端：虚拟根 = 一个工作区，写成功即记产物。
 
     virtual_mode=True 时 `/a/b` 映射到 `<workspace>/a/b`，`..` 与符号链接
@@ -63,6 +68,14 @@ class _WorkspaceBackend(FilesystemBackend):
        （只读，供技能渐进披露）。工作区其他项目读/写/搜索/删除全部拒绝。
     2. **产物登记**：落盘成功的文件告诉 AgentContext，前端产物区、预览、
        下载才照旧可用。
+
+    **为什么不用声明式 `FilesystemPermission`**：它是构建期快照（中间件在
+    `create_deep_agent` 时拿一份 list 拷贝，见 middleware/filesystem.py:2087），
+    而这里的"允许范围"是运行期变量——project_create 会中途改写 ctx.project；
+    另外 execute-capable 后端与权限列表互斥（同文件 2089 行直接抛
+    NotImplementedError）。语义上只有后端能看到每一次调用，所以边界只能落
+    在这一层；静态部分（技能目录只读、运行时目录禁止写入）也一并放这里，
+    避免两套规则互相打架。
     """
 
     def __init__(self, root: str, ctx: AgentContext) -> None:
@@ -285,11 +298,6 @@ DEEP_SYSTEM_PROMPT = """你是 Einstein 的工作型智能体。你能调用工�
 - 第 2/3 类任务：一句话做了什么 + 关键结论 + 产物文件清单（相对路径）。"""
 
 
-def _short(obj: Any, limit: int = 300) -> str:
-    text = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)
-    return text if len(text) <= limit else text[:limit] + "…"
-
-
 def _build_agent(
     ctx: AgentContext,
     tool_ids: list[str],
@@ -297,26 +305,37 @@ def _build_agent(
     workspace_id: str,
     persona: str = "",
     temperature: float | None = None,
+    *,
+    backend: Any = None,
+    prompt_extra: str = "",
+    extra_tools: Sequence[Any] = (),
 ):
-    root = workspace_root(workspace_id)
-    backend = _WorkspaceBackend(str(root), ctx)
+    """装配一个 deep agent。后端与额外工具可注入（Pro 版用带 execute 的后端）。
+
+    技能：引擎原生 SkillsMiddleware。发布器已在任务开始时把 DB 技能同步到
+    <workspace>/.agent/skills/（热加载），这里只挂目录；模型按 description
+    自主选取，被点名的技能由 pinned_skills 状态强制装载。
+    """
+    if backend is None:
+        backend = WorkspaceBackend(str(workspace_root(workspace_id)), ctx)
+
     lc_tools = [t for t in build_lc_tools(tool_ids, kb_ids, workspace_id, ctx)
                 if t.name not in SUPERSEDED_TOOLS]
-    # 技能：引擎原生 SkillsMiddleware。发布器已在任务开始时把 DB 技能同步到
-    # <workspace>/.agent/skills/（热加载），这里只挂目录；模型按 description 自主
-    # 选取，被点名的技能由 pinned_skills 状态强制装载。
+    lc_tools.extend(extra_tools)
     extras = f"\n\n{persona.strip()}" if persona.strip() else ""
-    agent = create_deep_agent(
+    return create_deep_agent(
         model=_get_model(temperature),
         tools=lc_tools,
         # 挂了知识库就追加"KB 优先"硬规则，否则任务路由会把模型带向 web_search
-        system_prompt=DEEP_SYSTEM_PROMPT + extras + (kb_directive(kb_ids) if kb_ids else ""),
+        system_prompt=(
+            DEEP_SYSTEM_PROMPT + prompt_extra + extras
+            + (kb_directive(kb_ids) if kb_ids else "")
+        ),
         backend=backend,
         # 计划工具是这轮换引擎的主要动机，显式挂上（0.7 起默认不装）
         middleware=[TodoListMiddleware()],
         skills=[f"/{skill_publisher.SKILLS_SUBDIR}/"],
     )
-    return agent
 
 
 def _get_model(temperature: float | None = None):
@@ -421,7 +440,7 @@ async def _iter_events(
                     yield {
                         "kind": "tool_result",
                         "name": getattr(msg, "name", None) or "tool",
-                        "content": _short(msg.content),
+                        "content": short(msg.content),
                         "duration_ms": round((time.perf_counter() - t0) * 1000) if t0 else None,
                     }
                     while emitted_artifacts < len(ctx.artifacts):
@@ -441,7 +460,7 @@ async def _iter_events(
                         yield {
                             "kind": "tool_call",
                             "name": tc.get("name", "tool"),
-                            "args": _short(tc.get("args")),
+                            "args": short(tc.get("args")),
                         }
                         if tc.get("name") == "write_todos":
                             plan = _plan_of((tc.get("args") or {}).get("todos"))
@@ -453,6 +472,123 @@ async def _iter_events(
                     final_text = str(msg.content)
 
     yield {"kind": "__final_text__", "text": final_text}
+
+
+async def _run_engine(
+    agent: Any,
+    ctx: AgentContext,
+    messages: list[tuple[str, str]],
+    *,
+    pinned: list[str],
+    metric_kind: str,
+    with_artifacts: bool,
+) -> AsyncIterator[dict]:
+    """deep 系引擎共用的执行循环：预算续跑、审批暂停、指标、收尾帧。
+
+    所有 deepagents 变体（默认 / Pro）事件协议一致，差异只在「怎么装配
+    agent」；执行语义必须完全一致，所以收敛到这一个函数，避免两份实现
+    各自漂移。
+    """
+    final_text = ""
+    carry: dict[str, Any] = {"messages": [], "todos": None}
+    base_messages = list(messages)  # 原始输入：续跑时用它 + carry 重建，不重复拼接
+    budgets_used = 0
+
+    with LlmTimer(metric_kind, get_settings().llm_model) as timer:
+        try:
+            while True:
+                try:
+                    async for event in _iter_events(agent, messages, ctx, pinned_skills=pinned, carry=carry):
+                        if event["kind"] == "__final_text__":
+                            final_text = event["text"]
+                            continue
+                        yield event
+                    break  # 正常完成
+                except GraphRecursionError:
+                    budgets_used += 1
+                    if budgets_used >= MAX_BUDGETS:
+                        # 预算全部耗尽：按产品语义收尾交付，不把任务推回给用户
+                        final_text = (
+                            final_text
+                            or f"（任务规模较大，已自动续跑 {MAX_BUDGETS} 轮仍未完成全部计划。"
+                            "已完成的成果与产物见上方，本轮先交付到这里。）"
+                        )
+                        break
+                    # 自动续跑：原始输入 + 全部已发生消息 + 计划状态重新入图
+                    messages = [
+                        *base_messages,
+                        *carry["messages"],
+                        ("user", _continuation_note(last=budgets_used == MAX_BUDGETS - 1)),
+                    ]
+                    yield {
+                        "kind": "note",
+                        "content": f"步数预算已用完，自动续接第 {budgets_used + 1}/{MAX_BUDGETS} 轮，从中断处继续…",
+                    }
+        except ApprovalRequired as approval:
+            # 敏感工具未批准：暂停任务，前端弹批准框；批准后前端自动重发任务
+            yield {
+                "kind": "approval_required",
+                "tool": approval.tool,
+                "args": short(approval.args),
+            }
+            final_text = (
+                f"任务已暂停：工具 `{approval.tool}` 需要你批准后才能执行。"
+                "批准后我会自动继续。"
+            )
+            timer.status = "paused"
+        except Exception as exc:
+            name = type(exc).__name__
+            if "Timeout" in name or "timed out" in str(exc):
+                raise RuntimeError(
+                    "模型响应超时（任务上下文过长）。建议缩小任务范围，或分多次运行。"
+                ) from exc
+            raise
+
+    yield final_frame(ctx, final_text, with_artifacts=with_artifacts)
+
+
+# 装配回调：给 ctx 与 workspace_id，返回 (agent, 开场事件)。
+# 开场事件用于"沙箱模式"这类运行前自述，没有就返回空序列。
+AgentBuilder = Callable[[AgentContext, str], "tuple[Any, Sequence[dict]]"]
+
+
+async def _run_deep(
+    task: str,
+    tool_ids: list[str],
+    kb_ids: list[str],
+    workspace_id: str | None,
+    ctx: AgentContext | None,
+    history: list[dict] | None,
+    *,
+    build: AgentBuilder,
+    metric_kind: str,
+    pinned_skills: list[str] | None = None,
+) -> AsyncIterator[dict]:
+    """deep 系入口的唯一实现：同步技能 → 装配 → 拼消息 → 执行。
+
+    引擎之间只有 build 不同（后端、额外工具、提示词、开场自述），流程一致，
+    所以两份入口共用它——否则"技能同步漏了""开场帧顺序变了"这类漂移迟早出现。
+    """
+    ws = workspace_id or "default"
+    with_artifacts = ctx is not None
+    ctx = ctx or AgentContext(workspace_id=ws)
+
+    # 热加载：每个任务开始时把 DB 技能同步到工作区 .agent/skills/ 目录，
+    # 增删改回滚即时生效；被点名的技能由 pinned_skills 强制装载。
+    skill_publisher.sync_skills(ws, owner_id=ctx.owner_id or None)
+    pinned = [n for n in (pinned_skills or []) if n]
+
+    agent, prelude = build(ctx, ws)
+    messages = await build_messages(task, history, kb_ids)
+
+    for event in prelude:
+        yield event
+
+    async for event in _run_engine(
+        agent, ctx, messages,
+        pinned=pinned, metric_kind=metric_kind, with_artifacts=with_artifacts,
+    ):
+        yield event
 
 
 async def run_deep_agent(
@@ -471,99 +607,21 @@ async def run_deep_agent(
     persona：专家人设（附加系统提示段）；pinned_skills：被点名要强制装载
     的技能 name 清单（对应 SkillsMiddleware 的 pinned_skills 状态键）。
     """
-    settings = get_settings()
-    ws = workspace_id or "default"
-    own_ctx = ctx is None
-    ctx = ctx or AgentContext(workspace_id=ws)
+    def build(c: AgentContext, ws: str) -> tuple[Any, Sequence[dict]]:
+        agent = _build_agent(c, tool_ids, kb_ids, ws, persona=persona, temperature=temperature)
+        return agent, ()
 
-    # 热加载：每个任务开始时把 DB 技能同步到工作区 skills/ 目录，
-    # 增删改回滚即时生效；同时把点名的技能翻译成引擎可用的 name。
-    skill_publisher.sync_skills(ws, owner_id=ctx.owner_id or None)
-    pinned = [n for n in (pinned_skills or []) if n]
+    async for event in _run_deep(
+        task, tool_ids, kb_ids, workspace_id, ctx, history,
+        build=build, metric_kind="agent", pinned_skills=pinned_skills,
+    ):
+        yield event
 
-    agent = _build_agent(ctx, tool_ids, kb_ids, ws, persona=persona, temperature=temperature)
-    messages: list[tuple[str, str]] = [
-        (("assistant" if h.get("role") == "assistant" else "user"), h.get("content", ""))
-        for h in (history or [])
-    ]
-    messages.append(("user", task))
-    # 首轮强制预取检索：结果直接进上下文，不依赖模型是否记得调 kb_search
-    if kb_ids and not history:
-        note = await preflight_kb(kb_ids, task)
-        if note:
-            messages.insert(0, ("user", note))
 
-    t0 = time.perf_counter()
-    status = "ok"
-    final_text = ""
-    tool_calls = 0
-    carry: dict[str, Any] = {"messages": [], "todos": None}
-    base_messages = list(messages)  # 原始输入：续跑时用它 + carry 重建，不重复拼接
-    budgets_used = 0
-    try:
-        while True:
-            try:
-                async for event in _iter_events(agent, messages, ctx, pinned_skills=pinned, carry=carry):
-                    if event["kind"] == "__final_text__":
-                        final_text = event["text"]
-                        continue
-                    if event["kind"] == "tool_call":
-                        tool_calls += 1
-                    yield event
-                break  # 正常完成
-            except GraphRecursionError:
-                budgets_used += 1
-                if budgets_used >= MAX_BUDGETS:
-                    # 预算全部耗尽：按产品语义收尾交付，不把任务推回给用户
-                    final_text = (
-                        final_text
-                        or f"（任务规模较大，已自动续跑 {MAX_BUDGETS} 轮仍未完成全部计划。"
-                        "已完成的成果与产物见上方，本轮先交付到这里。）"
-                    )
-                    break
-                # 自动续跑：原始输入 + 全部已发生消息 + 计划状态重新入图
-                messages = [
-                    *base_messages,
-                    *carry["messages"],
-                    ("user", _continuation_note(last=budgets_used == MAX_BUDGETS - 1)),
-                ]
-                yield {
-                    "kind": "note",
-                    "content": f"步数预算已用完，自动续接第 {budgets_used + 1}/{MAX_BUDGETS} 轮，从中断处继续…",
-                }
-    except ApprovalRequired as approval:
-        # 敏感工具未批准：暂停任务，前端弹批准框；批准后前端自动重发任务
-        yield {
-            "kind": "approval_required",
-            "tool": approval.tool,
-            "args": _short(approval.args),
-        }
-        final_text = (
-            f"任务已暂停：工具 `{approval.tool}` 需要你批准后才能执行。"
-            "批准后我会自动继续。"
-        )
-        status = "paused"
-    except Exception as exc:
-        status = "error"
-        name = type(exc).__name__
-        if "Timeout" in name or "timed out" in str(exc):
-            raise RuntimeError(
-                "模型响应超时（任务上下文过长）。建议缩小任务范围，或分多次运行。"
-            ) from exc
-        raise
-    finally:
-        metrics.record_llm(
-            kind="agent",
-            model=settings.llm_model,
-            duration_ms=(time.perf_counter() - t0) * 1000,
-            prompt_tokens=None,
-            completion_tokens=None,
-            status=status,
-        )
-
-    yield {
-        "kind": "final",
-        "text": final_text,
-        "artifacts": list(ctx.artifacts) if not own_ctx else [],
-        "project": ctx.project,
-    }
+__all__ = [
+    "DEEP_SYSTEM_PROMPT",
+    "MAX_BUDGETS",
+    "RECURSION_LIMIT",
+    "WorkspaceBackend",
+    "run_deep_agent",
+]

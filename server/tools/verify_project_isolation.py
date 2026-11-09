@@ -1,6 +1,6 @@
 """验证项目边界：智能体不得穿到未挂载的项目。
 
-直接驱动 _WorkspaceBackend（不跑 LLM）：
+直接驱动 WorkspaceBackend（不跑 LLM）：
 1. 未挂载项目时：ls 根目录看不到其他项目；读其他项目被拒；写被拒；
    /.agent/skills/ 可读；glob/grep 根级搜索被引导。
 2. 挂载项目 A 后：A 内读写正常、产物登记；B 读写搜索删除全部被拒。
@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.services.agent_deep import _WorkspaceBackend
+from app.services.agent_deep import WorkspaceBackend
 from app.services.capabilities import AgentContext
 
 
@@ -32,7 +32,7 @@ def main() -> int:
         (skills / "SKILL.md").write_text("---\nname: demo\n---\nhello", encoding="utf-8")
 
         ctx = AgentContext(workspace_id="t", project=None)
-        be = _WorkspaceBackend(str(root), ctx)
+        be = WorkspaceBackend(str(root), ctx)
 
         # 1. 未挂载：根目录 ls 不出现任何项目
         ls = be.ls("/")

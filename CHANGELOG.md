@@ -2,6 +2,33 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.5.0] - 2026-11-09
+
+在 deepagents 之上加一个带真沙箱的 Pro 引擎，并把三个引擎里"自己实现"的部分
+收敛回框架能力（本次以整理为主，对外事件协议不变）。
+
+### 新增
+
+- **Pro 引擎（`APP_AGENT_ENGINE=deepagents-pro`）**：`app/services/agent_deep_pro.py`
+  - `ProBackend` 多继承 `SandboxBackendProtocol`，harness 检测到后端支持 execute 就多给模型一个 `execute` 工具；文件边界仍复用 `WorkspaceBackend`
+  - 容器模式 `docker run --rm`：项目目录挂 `/work`，`--cap-drop ALL` / `no-new-privileges` / 内存 CPU PID 全限，超时补刀 `docker rm -f`；命令用 `sh -s` 从 stdin 读脚本，绕开 `sh -lc "..."` 的双层引号解析
+  - 宿主降级走框架 `LocalShellBackend`（无隔离，结果里带提示）；`APP_AGENT_PRO_SANDBOX=container|local|off` 可控
+  - 浏览器工具 `browser_open` / `browser_links` / `browser_shot`，schema 由 `@tool` 从签名生成；截图双后端（Python playwright → 仓库内 playwright-core）
+- **公共运行时 `app/services/agent_runtime.py`**：`short` / `build_messages` / `LlmTimer` / `final_frame`，三个引擎共用同一套消息拼装、指标埋点与收尾帧
+- **验收**：`tools/verify_deep_pro.py` 27 项（沙箱模式、项目边界、产物登记、浏览器、假模型端到端确认真实执行 execute）
+
+### 变更
+
+- deep 系两个引擎收敛到唯一入口 `_run_deep`：技能同步、装配、消息拼装、执行循环只有一份实现，Pro 只提供"装配回调 + 开场自述"
+- ReAct 回滚路径迁到 `langchain.agents.create_agent`（`langgraph.prebuilt.create_react_agent` 已废弃），事件映射不再依赖节点名，只按消息类型判断，并按 id 去重
+- 容器执行输出只回原始 stdout/stderr 与退出码，`[Command succeeded/failed with exit code N]` 与截断提示交给 harness，避免两条状态行
+- 危险命令正则黑名单只在宿主 shell 模式生效：容器有真隔离，黑名单只会误杀；`APP_AGENT_PRO_NETWORK` 默认仍为 `bridge`（改 `none` 待定）
+- 侧栏与登录页的版本号改由 `package.json` 经 Vite `define` 注入（`__APP_VERSION__`），界面不再手写版本串
+
+### 修复
+
+- deep 引擎改名为公开的 `WorkspaceBackend`（Pro 需要继承），`tools/verify_project_isolation.py` 同步
+
 ## [0.4.0] - 2026-11-09
 
 多租户边界从「空间级」下沉到「人」：同一空间内的成员不再互相看见对方的资源，

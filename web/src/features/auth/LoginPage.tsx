@@ -186,7 +186,7 @@ export function LoginPage() {
             </span>
             {online === null ? "正在检测服务状态" : online ? "服务运行中" : "服务未连接"}
             <span className="mx-0.5 h-3 w-px bg-line-strong" />
-            <span className="tabular-nums">v0.1.0</span>
+            <span className="tabular-nums">v{__APP_VERSION__}</span>
           </div>
         </aside>
 
