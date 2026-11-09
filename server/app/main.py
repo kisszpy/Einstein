@@ -1,6 +1,8 @@
+import asyncio
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 
 # 沙箱/系统代理会让 OpenAI SDK 以绝对路径请求（path 变成 URL 编码的完整地址），
 # 被 uvicorn 当作普通 path 解析导致 404。本服务只访问 localhost 资源，直接禁用代理。
@@ -25,12 +27,51 @@ PUBLIC_API_PATHS = {"/api/auth/login", "/api/health"}
 # viewer（只读角色）放行的写路径：对话消费类——看得了就要问得了
 VIEWER_ALLOWED_PREFIXES = ("/api/chat", "/api/agent", "/api/conversations", "/api/auth/")
 
+# 检查点清理周期。TTL 是小时级，每小时扫一遍足够，代价是每条会话一次读。
+CHECKPOINT_SWEEP_SECONDS = 3600
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """检查点的生命周期：启动清一次、运行时定期清、退出时关连接。
+
+    不清的话检查点只增不减（每个会话留一条完整消息链），长期运行的库会慢慢
+    变大；不关连接的话 sqlite 的 WAL 文件和 pg 的连接会挂在进程退出后。
+    """
+    from app.services import checkpoints
+
+    try:
+        await checkpoints.purge_expired()
+    except Exception as exc:  # noqa: BLE001 — 清理失败不能挡住启动
+        print(f"[checkpoint] 启动清理失败：{type(exc).__name__}: {exc}", flush=True)
+
+    async def sweeper() -> None:
+        while True:
+            await asyncio.sleep(CHECKPOINT_SWEEP_SECONDS)
+            try:
+                await checkpoints.purge_expired()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — 单次失败不影响下一轮
+                print(f"[checkpoint] 定期清理失败：{type(exc).__name__}: {exc}", flush=True)
+
+    task = asyncio.create_task(sweeper())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await checkpoints.close()
+
 
 def create_app() -> FastAPI:
     settings = get_settings()
     # debug 固定为 False：Starlette 在 debug=True 时会把完整堆栈直接写进响应体，
     # 泄漏绝对路径与依赖版本。服务端仍会由 uvicorn 打印完整 traceback。
-    app = FastAPI(title=settings.app_name, debug=False)
+    app = FastAPI(title=settings.app_name, debug=False, lifespan=lifespan)
 
     @app.exception_handler(Exception)
     async def _unhandled_error(request: Request, exc: Exception) -> JSONResponse:

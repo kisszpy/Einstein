@@ -464,6 +464,8 @@ def _build_pro_agent(
     workspace_id: str,
     persona: str = "",
     temperature: float | None = None,
+    *,
+    checkpointer: Any = None,
 ):
     settings = get_settings()
     backend = ProBackend(
@@ -487,6 +489,7 @@ def _build_pro_agent(
         extra_tools=_browser_tools(ctx, workspace_id),
         # 人工确认走框架 interrupt（与默认引擎同一套语义）
         interrupt_on=_approval_plan(ctx),
+        checkpointer=checkpointer,
     )
     return agent, backend
 
@@ -515,9 +518,10 @@ async def run_deep_pro_agent(
     resume: dict | None = None,
 ) -> AsyncIterator[dict]:
     """Pro 引擎入口：与 deep 版共用执行循环，多的是 execute / 浏览器。"""
-    def build(c: AgentContext, ws: str) -> tuple[Any, list[dict]]:
+    def build(c: AgentContext, ws: str, saver: Any = None) -> tuple[Any, list[dict]]:
         agent, backend = _build_pro_agent(
-            c, tool_ids, kb_ids, ws, persona=persona, temperature=temperature
+            c, tool_ids, kb_ids, ws,
+            persona=persona, temperature=temperature, checkpointer=saver,
         )
         return agent, [_mode_note(backend)]
 

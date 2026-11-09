@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Query
 
-from app.services import metrics
+from app.services import checkpoints, metrics
 
 router = APIRouter(prefix="/obs", tags=["observability"])
 
@@ -10,6 +10,16 @@ router = APIRouter(prefix="/obs", tags=["observability"])
 @router.get("/summary")
 async def get_summary() -> dict:
     return metrics.summary()
+
+
+@router.get("/checkpoints")
+async def get_checkpoints() -> dict:
+    """短期记忆的落点：档位、目标、TTL、是否已连上。
+
+    排查「批准后没有续跑而是重跑了」时先看这里——`connected=false` 说明
+    检查点没落盘（配置成了 memory 或连不上，日志里有降级原因）。
+    """
+    return checkpoints.describe()
 
 
 @router.get("/requests")

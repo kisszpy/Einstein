@@ -46,7 +46,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.types import Command
 
 from app.core.config import get_settings
-from app.services import skill_publisher
+from app.services import checkpoints, skill_publisher
 from app.services.agent_runtime import (
     LlmTimer,
     build_messages,
@@ -340,6 +340,7 @@ def _build_agent(
     prompt_extra: str = "",
     extra_tools: Sequence[Any] = (),
     interrupt_on: dict[str, Any] | None = None,
+    checkpointer: Any = None,
 ):
     """装配一个 deep agent。后端与额外工具可注入（Pro 版用带 execute 的后端）。
 
@@ -377,7 +378,9 @@ def _build_agent(
         ],
         skills=[f"/{skill_publisher.SKILLS_SUBDIR}/"],
         interrupt_on=interrupt_on,
-        checkpointer=get_checkpointer() if interrupt_on else None,
+        # 中断必须有检查点才能续跑。调用方（_run_deep）会先把持久化 saver 传进来；
+        # 没传时退回内存版——测试和脚本直接调这个函数，不该被异步初始化拖住。
+        checkpointer=(checkpointer or get_checkpointer()) if interrupt_on else None,
     )
 
 
@@ -388,13 +391,19 @@ def _get_model(temperature: float | None = None):
     return build(temperature)
 
 
+def _approval_tools() -> set[str]:
+    """需要人工确认的工具名（配置里逗号分隔）。空集 = 关闭审批。"""
+    raw = get_settings().agent_approval_tools or ""
+    return {t.strip() for t in raw.split(",") if t.strip()}
+
+
 def _approval_plan(ctx: AgentContext) -> dict[str, Any] | None:
     """需要人工确认的工具 → `interrupt_on` 配置；空表示不启用。
 
     同时把 `ctx.hitl` 置真：工具层因此不再自己抛 ApprovalRequired——拦截发生
     在工具执行之前，工具代码保持"被调用就是已批准"的干净语义。
     """
-    tools = {t.strip() for t in (get_settings().agent_approval_tools or "").split(",") if t.strip()}
+    tools = _approval_tools()
     if not tools:
         return None
     ctx.hitl = True
@@ -747,9 +756,9 @@ async def _run_engine(
     yield final_frame(ctx, final_text, with_artifacts=with_artifacts, streamed=streamed_buf)
 
 
-# 装配回调：给 ctx 与 workspace_id，返回 (agent, 开场事件)。
+# 装配回调：给 ctx、workspace_id、checkpointer，返回 (agent, 开场事件)。
 # 开场事件用于"沙箱模式"这类运行前自述，没有就返回空序列。
-AgentBuilder = Callable[[AgentContext, str], "tuple[Any, Sequence[dict]]"]
+AgentBuilder = Callable[[AgentContext, str, Any], "tuple[Any, Sequence[dict]]"]
 
 
 async def _pending_interrupt_count(agent: Any, thread_id: str) -> int:
@@ -817,7 +826,11 @@ async def _run_deep(
     if not resume:
         recall_memory(ctx, task)
 
-    agent, prelude = build(ctx, ws)
+    # 检查点：有中断才需要，但取用本身很便宜（单例）。放在装配前取，装配
+    # 时一并交给 `create_deep_agent`——否则暂停在工具执行前，恢复时找不到图状态。
+    saver = await checkpoints.acquire() if _approval_tools() else None
+
+    agent, prelude = build(ctx, ws, saver)
     for event in prelude:
         yield event
 
@@ -863,11 +876,12 @@ async def run_deep_agent(
     persona：专家人设（附加系统提示段）；pinned_skills：被点名要强制装载
     的技能 name 清单（对应 SkillsMiddleware 的 pinned_skills 状态键）。
     """
-    def build(c: AgentContext, ws: str) -> tuple[Any, Sequence[dict]]:
+    def build(c: AgentContext, ws: str, saver: Any = None) -> tuple[Any, Sequence[dict]]:
         agent = _build_agent(
             c, tool_ids, kb_ids, ws,
             persona=persona, temperature=temperature,
             interrupt_on=_approval_plan(c),
+            checkpointer=saver,
         )
         return agent, ()
 

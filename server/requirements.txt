@@ -10,6 +10,12 @@ langchain-openai>=0.3
 langchain-text-splitters>=0.3
 langgraph>=0.2
 langgraph-checkpoint>=2.0   # 中断恢复（S2.5）
+# 短期记忆（线程状态）落盘。原先只有内存版，服务重启后"批准→续跑"会退化成
+# "按批准重跑"。sqlite 档给单机/开发，postgres 档给多副本（同主库）。
+langgraph-checkpoint-sqlite>=3.0
+langgraph-checkpoint-postgres>=3.0
+aiosqlite>=0.20             # sqlite 检查点的异步驱动
+psycopg-pool>=3.2           # postgres 检查点的连接池
 # 智能体 harness：计划工具、子智能体、上下文压缩、虚拟文件系统
 deepagents>=0.7,<0.8
 

@@ -18,31 +18,23 @@ from app.services.tools import preflight_kb
 
 TOOL_PREVIEW = 300   # 步骤条里工具参数/结果的显示上限
 
-_CHECKPOINTER: Any = None
-
-
 def get_checkpointer() -> Any:
-    """进程内 checkpointer（langgraph `InMemorySaver`），全局单例。
+    """同步拿**内存版** checkpointer，全局单例。
 
-    **为什么必须有它**：人工确认在框架里的语义是 LangGraph `interrupt`——图在
-    两次 invoke 之间暂停，恢复靠 `Command(resume=...)` 读取同一 `thread_id` 的
-    检查点。没有 checkpointer，暂停只能靠抛异常，批准后就只能把整个任务重跑。
+    只给两个场景用：装配阶段拿不到异步 saver 时的兜底（`_build_agent` 是同步
+    函数），以及脚本化测试。真正的运行路径走 `checkpoints.acquire()`——那里
+    会按 `APP_AGENT_CHECKPOINT` 决定是否落盘（sqlite / postgres）。
 
-    为什么先用内存版：`langgraph.checkpoint.postgres` 需要额外安装
-    `langgraph-checkpoint-postgres`，当前环境没有；sqlite 变体需要 `aiosqlite`，
-    也没有。内存版足够撑起"暂停 → 批准 → 续跑"，代价是进程重启后检查点丢失
-    （此时 `_run_deep` 会明确降级为按批准重跑，并告知用户）。
-
-    `APP_AGENT_CHECKPOINT=off` 时返回 None（关掉中断/续跑，回到旧行为）。
+    **为什么需要检查点**：人工确认在框架里的语义是 LangGraph `interrupt`——
+    图在两次 invoke 之间暂停，恢复靠 `Command(resume=...)` 读取同一
+    `thread_id` 的检查点。没有 checkpointer，暂停只能靠抛异常，批准后就只能
+    把整个任务重跑。
     """
-    global _CHECKPOINTER
     if get_settings().agent_checkpoint.lower() == "off":
         return None
-    if _CHECKPOINTER is None:
-        from langgraph.checkpoint.memory import InMemorySaver
+    from app.services import checkpoints
 
-        _CHECKPOINTER = InMemorySaver()
-    return _CHECKPOINTER
+    return checkpoints.memory_saver()
 
 
 def thread_config(thread_id: str, recursion_limit: int) -> dict:

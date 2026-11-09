@@ -2,6 +2,47 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.6.1] - 2026-11-09
+
+短期记忆落盘。0.5.1 把审批迁到了框架的 `interrupt` + `checkpointer`，但检查点
+只活在进程内存里——服务一重启，"批准后从断点续跑"就退化成"按批准重跑"，
+已写出的文件和已花的 token 全部重做一遍。这次把检查点真正写到磁盘上。
+
+### 新增
+
+- **检查点落盘** `app/services/checkpoints.py`，四档由 `APP_AGENT_CHECKPOINT` 控制：
+  `auto`（默认，跟主存储走）/ `sqlite` / `postgres` / `memory` / `off`。
+  sqlite 落到 `data/checkpoints.db`（WAL 模式），postgres 落到 `APP_POSTGRES_DSN`
+  指向的库（`checkpoint*` 四张表，由框架 `setup()` 建，与业务表不冲突）
+- **跨重启续跑**：强杀进程后重启，同一 `thread_id` 的图状态还在，批准后
+  从断点继续而不是重跑。验收 `tools/verify_checkpoint_restart.py` 分两段跑，
+  中间真的杀进程（10 项断言，含"没有退化成按批准重跑"）
+- **检查点 TTL 清理**：`APP_AGENT_CHECKPOINT_TTL_HOURS`（默认 72）过期线程自动
+  删除，启动时扫一次 + 每小时一次，退出时关连接（`main.py` 的 lifespan）。
+  判据用 checkpoint 自带的 `ts`——看文件时间等于永远删不掉东西
+- **可观测性** `GET /api/obs/checkpoints`：返回档位、落点、TTL、是否已连上。
+  排查"批准后为什么重跑了"先看这里，`connected=false` 说明没落盘
+- **测试** `tests/test_checkpoints.py`（13 项）：档位解析、跨连接读回、线程隔离、
+  降级链、TTL 清理。全套 pytest 从 38 项增至 51 项
+
+### 变更
+
+- `APP_AGENT_CHECKPOINT` 默认值从 `memory` 改为 `auto`。本地开发（`store_backend`
+  是 json/sqlite）自动用 sqlite，生产 postgres 主库在 Linux 上用 postgres——
+  不用记两处配置。**行为变化**：本地重启后不再丢检查点，续跑能接上
+- 降级链改为 `postgres → sqlite → memory`（原来是直接掉到 memory）。内存档等于
+  "什么都没落"，用户看不到任何异常，直到某天发现任务被重跑了
+
+### 修复
+
+- **Windows 上 postgres 档静默降级**：psycopg 的异步连接要求 selector 事件循环，
+  而 uvicorn 在 Windows 上建的是 Proactor（`app.main` 在 loop 内导入，模块级改
+  policy 已经来不及）。此前配了 `postgres` 会白等 15 秒连接池超时再掉到内存，
+  日志刷一堆 `cannot use the ProactorEventLoop`。现在 `auto` 按平台直接选
+  sqlite，显式配 `postgres` 立即失败并说明原因（Linux 不受影响，实测容器内正常）
+- **`verify_isolation` 空环境误报**：原来断言"库里必须存在预置专家"，空环境下
+  直接 FAIL。改为用"A 也看不到"来区分环境缺数据（SKIP）与隔离真的坏了（FAIL）
+
 ## [0.6.0] - 2026-11-09
 
 批次 B/C 的剩余项：让"看"和"跑"脱钩（流式 + 后台执行），把智能体接上长期

@@ -62,9 +62,15 @@ class Settings(BaseSettings):
     agent_approval_tools: str = ""
     # 批准的时效（分钟）：过期视为未批准。审批是安全边界，不做永久放行。
     agent_approval_ttl_minutes: int = 30
-    # 运行状态持久化：memory（进程内 checkpointer，支持批准后续跑）| off（不保存）
-    # 换成 postgres 需要 langgraph-checkpoint-postgres（当前环境未安装）。
-    agent_checkpoint: str = "memory"
+    # 短期记忆（LangGraph 线程状态）存哪：auto（跟主存储走）| sqlite | postgres
+    # | memory（进程内，重启即丢，测试用）| off（不保存，等于关掉中断续跑）。
+    # auto 在 store_backend=postgres 时用 postgres，其余用 sqlite。
+    agent_checkpoint: str = "auto"
+    # 检查点落盘位置（sqlite 档）；空 = data/checkpoints.db
+    agent_checkpoint_sqlite_path: str = ""
+    # 检查点保留时长：超过这个时间没更新的线程会被清理（0 = 不清理）。
+    # 审批 TTL 是 30 分钟，这里留 72 小时——差两个数量级，不会误删待确认的线程。
+    agent_checkpoint_ttl_hours: int = 72
     # 智能体真流式：模型边生成边把 token 转发给前端，首字延迟从「全文生成完」
     # 降到「第一个 token」。模型端点不支持 SSE 时设为 off 回到「生成完再切片」。
     agent_stream: bool = True

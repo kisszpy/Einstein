@@ -111,9 +111,16 @@ def main() -> int:
         check("B 改 A 的专家 → 404", status == 404, str(status))
         status, _ = call("DELETE", f"/api/experts/{made['expert']}", tok_b)
         check("B 删 A 的专家 → 404", status == 404, str(status))
-        # 预置专家（owner=''）对 B 可见但改不动
+        # 预置专家（owner=''）对 B 可见但改不动。
+        # 判据要看 A 的列表：A 也看不到，说明是空环境没有预置数据（跳过）；
+        # A 能看到而 B 看不到，才是隔离真的坏了。
+        _, experts_a = call("GET", "/api/experts", tok_a)
+        presets_a = [e for e in experts_a if e.get("status") == "live"]
         preset = next((e for e in experts_b if e.get("status") == "live"), None)
-        check("B 能看到预置专家", preset is not None)
+        if not presets_a:
+            print("SKIP  B 能看到预置专家 — 库里没有预置专家（空环境，非隔离缺陷）")
+        else:
+            check("B 能看到预置专家", preset is not None)
         if preset:
             status, _ = call("PUT", f"/api/experts/{preset['id']}", tok_b, {"name": "hack"})
             check("B 改预置专家 → 403", status == 403, str(status))
