@@ -2,6 +2,74 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.5.1] - 2026-11-09
+
+按《评估报告-产品缺陷与改进》修掉批次 A 的 P0：**人工确认从"抛异常当暂停"
+换成框架的 interrupt + checkpointer**，检索从"永远命中的 0.01 阈值"换成绝对
+相关性门限。行为上最直观的差别是——批准之后从断点继续，而不是把任务从头再
+跑一遍。
+
+### 新增
+
+- **人工确认落库** `app/services/approvals.py` + 迁移 011（`agent_approvals` 表）：
+  键为 `(workspace, owner, session, tool, args_hash)`，`decision` 记
+  approve/reject，`consumed` 保证一次确认只用一次，`expires_at` 默认 30 分钟。
+  归属按 `(workspace, owner)` 过滤，别人的 session 查不到任何记录（统一 404，
+  不区分"不存在"与"不是你的"）
+- **参数指纹** `args_fingerprint(args)`：批准只对**这一组参数**有效。同一工具
+  换参数要重新确认，避免"批了一次就等于永久放行这个工具"
+- **检索门面** `app/services/retrieval.py`：`retrieve()` 一处收口改写、父片展开、
+  门限、文档配额与引用；`/chat` 与 `/agent/run` 共用，两条入口的检索行为不再
+  各写一套
+- **引用透传**：智能体收尾帧带 `citations`，SSE 新增 `citations` 事件，前端
+  在答案下方渲染「参考资料」（编号 / 文档名 / 相关度）
+- **验收**：`tools/verify_p0_fixes.py`（34 项，脚本化模型驱动图，验证框架语义）、
+  `tools/verify_hitl_e2e.py`（15 项，真实 HTTP + 真实模型验证"暂停→批准→续跑"
+  与"拒绝后工具不执行"）
+
+### 变更
+
+- **审批改走 LangGraph interrupt**：`create_deep_agent(interrupt_on=..., checkpointer=...)`，
+  中断在 `updates` 流里以 `__interrupt__` 键出现（不是异常）；批准后发
+  `Command(resume={"decisions": [...]})` 到同一 `thread_id`（`{ws}:{session}`）。
+  批量中断时 `decisions` 个数按 `aget_state().tasks[].interrupts` 对齐，模型一轮
+  调两次敏感工具也能正确续跑
+- **新增运行状态持久化** `agent_runtime.get_checkpointer()`：`memory`（进程内
+  `InMemorySaver`，支持中断续跑，重启后失效）/ `off`（旧行为）。检查点丢失时
+  引擎明确告知并退回「按批准重跑」，不假装续跑
+- **相关性门限语义修正**：删掉 `MIN_SIMILARITY = 0.01`（任何文本都有 0.2 以上
+  相似度，等于没设），改按**绝对分**判定（重排分优先，余弦其次，纯词法命中按
+  jieba 词覆盖率 ≥0.5 放行）。候选池先用 `floor * 0.6` 粗剪，排序后用
+  `apply_score_gate` 精判；全部被砍时打印最高分，便于按实际嵌入模型标定
+- **同文档配额** `cap_per_document(hits, max_per_doc=2)`：一篇结构重复的文档
+  不再能占满全部名额，四片全来自同一文件时"命中"其实是假象
+- **`execute` 装配期裁剪**：`FilesystemMiddleware(backend=..., tools=[...])`
+  按 `supports_execution(backend)` 决定挂不挂 `execute`，做到「工具集 ⊆ 后端
+  能力集」。默认引擎不再给模型一个调用即报错的工具；Pro 引擎后端支持执行，
+  照常挂上
+- **嵌入分批**：`_split_batches(texts, max_items, max_chars)` 双阈值切分，
+  `APP_EMBEDDING_BATCH_SIZE=32` / `APP_EMBEDDING_BATCH_CHARS=40000`，整篇长
+  文档不再塞进一个请求等超时
+- **容器网络默认 `none`**：`APP_AGENT_PRO_NETWORK` 由 `bridge` 改 `none`，需要
+  装包时临时改回 bridge
+- **项目 slug 空值拒绝**：拆出 `slug_from_name()`（可能为空）与 `slugify()`
+  （回落 `untitled`，仅内部路径用）。全中文标点或纯符号的项目名不再静默撞进
+  `untitled` 目录
+
+### 修复
+
+- **批准后重跑整个任务**：旧实现用抛异常中断，批准后前端只能把原任务重发一遍，
+  已写的文件被再写一遍、已完成的步骤全部重做
+- **审批状态存进程内存**：重启即丢、无归属校验（拿到 session_id 就能预批准）、
+  永不过期、批一次永久放行
+- **"知识库未命中"分支不可达**：阈值形同虚设，不相关片段被当成证据喂给模型
+- **Token 日配额只记不拦**：`/chat` 与 `/agent/run` 入口补 `quota_check(ws, "tokens")`
+  → 429，`APP_QUOTA_DAILY_TOKENS` 才真正生效
+- **向量维度不符静默丢弃**：内存后端遇到维度不匹配时整批过滤且不报错，表现为
+  "知识库有内容但检索永远为空"；改为打印丢弃条数与重建索引的命令
+- **失败运行不留记录**：`/agent/run` 异常分支补 `status="failed"` 落库，产物已
+  写盘却查不到运行记录的情况不再出现
+
 ## [0.5.0] - 2026-11-09
 
 在 deepagents 之上加一个带真沙箱的 Pro 引擎，并把三个引擎里"自己实现"的部分

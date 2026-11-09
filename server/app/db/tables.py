@@ -383,6 +383,27 @@ LEGACY_IMPORTS = Table(
     order="domain",
 )
 
+AGENT_APPROVALS = Table(
+    name="agent_approvals",
+    # 人工确认不是「进程里一个 set」：那样撑不过重启、没有归属校验，还能
+    # 用别人的 session_id 预批准。这里按 (会话, 工具, 参数指纹) 落一条记录，
+    # 带 TTL 与归属，批准只对这一次确认有效。
+    columns=(
+        _c("id"),
+        _c("workspace_id", default="'default'"),
+        _c("owner_id", default="''"),
+        _c("session_id"),
+        _c("tool"),
+        # 参数指纹：工具相同但参数变了（比如 code 换了一段）要重新确认
+        _c("args_hash", default="''"),
+        _c("decision", default="'approve'"),
+        _c("consumed", "bool", default="0"),
+        _c("created_at", default="''"),
+        _c("expires_at", default="''"),
+    ),
+    order="created_at DESC",
+)
+
 TABLES: dict[str, Table] = {
     t.name: t
     for t in (
@@ -402,6 +423,7 @@ TABLES: dict[str, Table] = {
         MESSAGE_FEEDBACK,
         WORKSPACE_MEMORY,
         LEGACY_IMPORTS,
+        AGENT_APPROVALS,
     )
 }
 

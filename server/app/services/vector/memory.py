@@ -39,6 +39,14 @@ class MemoryIndex:
     def score(rows: list[Chunk], vector: list[float], top_k: int) -> list[tuple[str, float]]:
         dim = len(vector)
         usable = [c for c in rows if len(c.vector) == dim]
+        if len(usable) != len(rows):
+            # 早先这里是静默过滤：换过嵌入模型（4096 → 2560 维）后整库"消失"，
+            # hybrid 只剩 BM25，而没人会发现。宁可吵，也要把根因说出来。
+            print(
+                f"[vector] 维度不匹配丢弃 {len(rows) - len(usable)} 条切片"
+                f"（查询 {dim} 维）：换过嵌入模型？请跑 tools/rebuild_vector_index.py 重建",
+                flush=True,
+            )
         if not usable:
             return []
         query = np.asarray(vector, dtype=np.float32)

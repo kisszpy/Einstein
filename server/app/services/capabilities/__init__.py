@@ -64,9 +64,14 @@ class AgentContext:
     owner_id: str = ""
     project: str = ""
     artifacts: list[dict] = field(default_factory=list)
-    # 人工确认：本会话已批准过的敏感工具（如 code_run）。未批准时调用会抛
-    # ApprovalRequired，引擎转为 approval_required 事件暂停任务。
+    # 本次运行检索到的引用（与 artifacts 同一机制：攒着，收尾帧交给前端）
+    citations: list[dict] = field(default_factory=list)
+    # 人工确认：本会话已批准过的敏感工具（如 code_run）。仅作为「检查点不可用
+    # 时按批准重跑」的兜底；正常路径由框架的 interrupt 拦截（见 hitl）。
     approved_tools: set = field(default_factory=set)
+    # 引擎是否用框架的 interrupt 做人工确认。为真时工具本身不再抛异常——
+    # 拦截发生在工具执行之前，工具代码保持"被调用就是已批准"的干净语义。
+    hitl: bool = False
 
     def note_artifact(self, rel_path: str, kind: str) -> None:
         entry = {"path": rel_path, "kind": kind}
@@ -284,8 +289,13 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
         if get_settings().agent_code_exec:
 
             def _code_run(code: str = "", path: str = "", language: str = "python", timeout: int = 60) -> str:
-                # 人工确认门：配置了审批且本会话未批准 code_run 时暂停任务
-                if "code_run" in _approval_tools() and "code_run" not in ctx.approved_tools:
+                # 人工确认门：deep 系引擎由框架 interrupt 在「执行前」拦截，工具
+                # 被调用即代表已批准；react 引擎没有 interrupt，只能在工具里抛。
+                if (
+                    not ctx.hitl
+                    and "code_run" in _approval_tools()
+                    and "code_run" not in ctx.approved_tools
+                ):
                     raise ApprovalRequired("code_run", {"code": code[:400], "language": language})
                 if ctx.project:
                     project = ctx.project

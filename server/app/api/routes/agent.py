@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.api.deps import current_uid, current_workspace
-from app.services import projects
+from app.services import approvals, projects, ratelimit
 from app.services.agent import chunk_text, run_agent
 from app.services.capabilities import AgentContext, sandbox
 from app.services.history import get_history_store
@@ -30,6 +30,10 @@ class AgentRunRequest(BaseModel):
     skill_ids: list[str] = []
     # 专家人设（可选）：只取 persona + temperature，不携带任何挂载
     expert_id: str = ""
+    # 续跑：批准/拒绝之后接着跑，而不是把整个任务重发一遍
+    resume: bool = False
+    # 拒绝时给模型的指示（"先跑测试再执行"之类），模型据此换路线
+    approval_message: str = ""
 
 
 def _sse(event: str, data: dict) -> str:
@@ -79,20 +83,42 @@ async def delete_run(
     return {"ok": True, "deleted": deleted}
 
 
-# 已批准的敏感工具：键 (session_id, tool)。进程内存即可——批准是短期状态，
-# 重启后用户重新点一次批准按钮，代价可接受，不值得为此建表。
-_APPROVALS: set[tuple[str, str]] = set()
+class ApproveRequest(BaseModel):
+    session_id: str
+    tool: str = ""
+    # 参数指纹：批准只对「这一组参数」有效，参数变了要重新确认
+    args_hash: str = ""
+    decision: str = "approve"   # approve | reject
+    message: str = ""           # reject 时给模型的指示
 
 
 @router.post("/approve")
-async def approve_tool(payload: dict, ws: str = Depends(current_workspace)) -> dict:
-    """批准某会话使用某敏感工具。批准后前端自动重发任务继续执行。"""
-    session_id = str(payload.get("session_id", "")).strip()
-    tool = str(payload.get("tool", "")).strip()
-    if not session_id or not tool:
-        raise HTTPException(status_code=400, detail="session_id 与 tool 必填")
-    _APPROVALS.add((session_id, tool))
-    return {"ok": True, "session_id": session_id, "tool": tool}
+async def approve_tool(
+    payload: ApproveRequest,
+    ws: str = Depends(current_workspace),
+    uid: str = Depends(current_uid),
+) -> dict:
+    """对一次待确认的敏感工具调用作出决定。
+
+    记录按 (workspace, owner, session) 落库，因此：别人的 session 查不到任何
+    待确认记录（统一 404，不区分"不存在"与"不是你的"），批准带 TTL，
+    过期即失效。前端拿到 200 后发 `/agent/run`（resume=true）从断点续跑。
+    """
+    session_id = payload.session_id.strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id 必填")
+    row = approvals.decide(
+        ws, uid, session_id,
+        decision=payload.decision, args_hash=payload.args_hash.strip(),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="没有待确认的操作")
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "tool": row["tool"],
+        "decision": row["decision"],
+    }
 
 
 def _resolve_mounts(
@@ -167,7 +193,8 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
         persona, pinned_skills, temperature, expert_kb_ids = _resolve_mounts(ws, uid, req)
         kb_ids = get_store().owned_kb_ids(ws, [*req.kb_ids, *expert_kb_ids], uid)
         ctx = AgentContext(workspace_id=ws, owner_id=uid, project=req.project)
-        ctx.approved_tools = {t for (sid, t) in _APPROVALS if sid == session_id}
+        # 兜底路径用：检查点丢了（服务重启）时按已批准的工具重跑，不再弹框
+        ctx.approved_tools = approvals.granted_tools(ws, uid, session_id)
         if ctx.project:
             # 挂载的项目必须属于当前用户：别人的项目名一律当「不存在」
             try:
@@ -179,6 +206,29 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
         print(f"[agent-stream] {run_id} setup-error: {type(exc).__name__}: {exc}", flush=True)
         yield _sse("error", {"message": f"{type(exc).__name__}: {exc}"})
         return
+
+    # 人工确认的恢复：批准/拒绝之后不重发任务，而是带着同一个 thread 续跑。
+    # 检查点不存在时引擎会退回「按批准重跑」并在事件流里说明。
+    thread_id = f"{ws}:{session_id}"
+    resume_decision: dict | None = None
+    if req.resume:
+        record = approvals.latest_decision(ws, uid, session_id)
+        if record is None:
+            yield _sse("error", {
+                "code": "approval_expired",
+                "message": "这次确认已过期或不存在（有效期 30 分钟），请重新发起任务。",
+            })
+            return
+        if record["decision"] == "reject":
+            resume_decision = {
+                "type": "reject",
+                "message": req.approval_message or "用户拒绝了这个操作，请改用不需要它的做法，或先说明为什么必须用它。",
+            }
+        else:
+            resume_decision = {"type": "approve"}
+        # 一次确认只用一次：续跑开始就消费，避免同一条记录被反复复用
+        approvals.consume(record["id"])
+        print(f"[agent-stream] {run_id} resume session={session_id} decision={record['decision']}", flush=True)
 
     if pinned_skills:
         from app.services import audit as audit_svc
@@ -192,6 +242,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
 
     try:
         final_text = ""
+        citations: list[dict] = []
         steps: list[dict] = []
         artifacts: list[dict] = []
         # 心跳泵：大模型思考期间流上不能长时间无数据，否则连接会被
@@ -205,6 +256,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
                 async for step in run_agent(
                     req.task, req.tool_ids, kb_ids, ws, ctx, history=lc_history,
                     persona=persona, pinned_skills=pinned_skills, temperature=temperature,
+                    thread_id=thread_id, resume=resume_decision,
                 ):
                     await queue.put(step)
             except Exception as exc:  # noqa: BLE001 — 异常也走队列，保持事件序
@@ -228,6 +280,15 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
                 kind = step["kind"]
                 if kind == "final":
                     final_text = step["text"]
+                    citations = step.get("citations") or []
+                elif kind == "approval_required":
+                    # 记下「到底在批什么」：/approve 凭这条记录定位并要求归属匹配
+                    approvals.request(
+                        ws, uid, session_id, step.get("tool", ""),
+                        args_hash=step.get("args_hash", ""),
+                    )
+                    steps.append(step)
+                    yield _sse("step", {"step": step})
                 elif kind == "artifact":
                     entry = {"path": step.get("path", ""), "kind": step.get("artifact_kind", "file")}
                     if entry not in artifacts:
@@ -243,6 +304,8 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
 
+        if citations:
+            yield _sse("citations", {"citations": citations})
         yield _sse("answer_start", {})
         for piece in chunk_text(final_text):
             yield _sse("delta", {"text": piece})
@@ -273,6 +336,16 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
         )
     except Exception as exc:  # noqa: BLE001 — 统一转 SSE error 事件
         print(f"[agent-stream] {run_id} run-error: {type(exc).__name__}: {exc}", flush=True)
+        # 失败也落一条历史：产物可能已经写到磁盘上，不给记录等于"这次根本没跑过"
+        try:
+            history.add_agent_run(
+                task=req.task, tool_ids=req.tool_ids, steps=steps, answer=final_text,
+                status="failed", workspace_id=ws, project=ctx.project,
+                artifacts=artifacts, session_id=session_id,
+                turn=len(prior_runs) + 1, owner_id=uid,
+            )
+        except Exception as save_exc:  # noqa: BLE001 — 落库失败不能盖掉原始错误
+            print(f"[agent-stream] {run_id} 失败记录未能落库：{save_exc}", flush=True)
         yield _sse("error", {"message": f"{type(exc).__name__}: {exc}"})
 
 
@@ -280,7 +353,14 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
 async def run(
     req: AgentRunRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> StreamingResponse:
-    """SSE 运行智能体。事件：meta -> (step|artifact)* -> answer_start -> delta* -> done | error。"""
+    """SSE 运行智能体。事件：meta -> (step|artifact)* -> [citations] -> answer_start -> delta* -> done | error。"""
+    # Token 日配额：以前只累加不拦截，`APP_QUOTA_DAILY_TOKENS` 形同虚设
+    allowed, used = ratelimit.quota_check(ws, "tokens")
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"今日 Token 配额已用完（已用 {used}）。配额按自然日重置，或联系管理员调整。",
+        )
     return StreamingResponse(
         _event_stream(req, ws, uid),
         media_type="text/event-stream",

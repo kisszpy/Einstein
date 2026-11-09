@@ -41,8 +41,48 @@ def _mock_embed_one(text: str) -> list[float]:
 async def _remote_embed(texts: list[str]) -> list[list[float]] | None:
     """尝试调用 OpenAI 兼容 /v1/embeddings；失败返回 None。
 
-    嵌入 8B 模型冷启动可能较慢，超时放宽到 60s 并重试一次。
+    **分批**：一次请求塞整篇文档（300 页 PDF ≈ 1500 片、几十万字）必然超过
+    60s 超时，用户看到的是"嵌入端点不可用"。按条数 + 字符数双阈值切批，
+    逐批重试，顺序拼接——顺序与输入一致是调用方的硬要求。
     """
+    settings = get_settings()
+    out: list[list[float]] = []
+    batches = _split_batches(
+        list(texts), int(settings.embedding_batch_size), int(settings.embedding_batch_chars)
+    )
+    for batch in batches:
+        vectors = await _remote_embed_batch(batch)
+        if vectors is None:
+            return None
+        out.extend(vectors)
+    return out
+
+
+def _split_batches(texts: list[str], max_items: int, max_chars: int) -> list[list[str]]:
+    """按条数 + 字符数切批，保持原顺序。
+
+    双阈值缺一不可：500 条短句（每句 20 字）按条数切就够，但 20 条长文
+    （每条 2 万字）按条数切仍然是 40 万字一个请求。
+    """
+    max_items = max(1, max_items)
+    max_chars = max(1000, max_chars)
+    batches: list[list[str]] = []
+    current: list[str] = []
+    chars = 0
+    for text in texts:
+        size = len(text)
+        if current and (len(current) >= max_items or chars + size > max_chars):
+            batches.append(current)
+            current, chars = [], 0
+        current.append(text)
+        chars += size
+    if current:
+        batches.append(current)
+    return batches
+
+
+async def _remote_embed_batch(texts: list[str]) -> list[list[float]] | None:
+    """单批嵌入（原实现）：超时 60s、重试一次，失败返回 None。"""
     settings = get_settings()
     for attempt in range(2):
         t0 = time.perf_counter()

@@ -155,7 +155,13 @@ def create_project(
     internal: bool = False,
 ) -> dict:
     """创建（或复用）项目并登记归属。目录已存在时只补文件、不改归属。"""
-    slug = sandbox.slugify(name)
+    slug = sandbox.slug_from_name(name)
+    if not slug:
+        # 以前空值回落 untitled：所有"名字不可用"的项目挤进同一个目录，
+        # 第二次创建直接复用第一次的目录，用户以为项目串了。
+        raise sandbox.SandboxError(
+            "项目名需要包含中英文、数字、下划线或连字符（不能只有表情或符号）"
+        )
     if slug in sandbox.RESERVED:
         raise sandbox.SandboxError("项目名无效")
     if not internal and is_internal_name(slug):

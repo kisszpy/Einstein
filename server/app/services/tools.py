@@ -16,8 +16,6 @@ from pydantic import BaseModel, Field, create_model
 
 import app.services.mcp as mcp_service
 from app.services.capabilities import CAPABILITIES, CAPABILITY_TOOL_IDS, AgentContext, make_tools
-from app.services.rag import search
-from app.services.store import get_store
 
 MCP_TOOL_PREFIX = "mcp:"
 
@@ -76,15 +74,43 @@ def text_stats(text: str) -> str:
     return f"总字符 {chars}，词数 {words}，中文字符 {cn}"
 
 
-def _make_kb_search(kb_ids: list[str]):
+def _format_hits(hits) -> str:
+    """检索结果 → 工具返回值：带编号、来源与分数。
+
+    带分数是刻意的：模型要能判断"这条其实不太相关"，而不是把第一个片段
+    当唯一证据。编号与 citations 对齐，答案里的 [1] 才能点开原文。
+    """
+    lines: list[str] = []
+    for i, h in enumerate(hits, 1):
+        score = h.rerank_score if h.rerank_score is not None else (
+            h.vector_score if h.vector_score is not None else h.score
+        )
+        lines.append(f"[{i}] {h.document_name}（相关度 {score:.2f}）\n{h.text}")
+    return "\n\n".join(lines)
+
+
+def _make_kb_search(kb_ids: list[str], ctx: "AgentContext | None" = None):
     class KBSearchArgs(BaseModel):
         query: str = Field(description="检索查询")
 
     async def kb_search(query: str) -> str:
-        hits = await search(get_store(), kb_ids, query, top_k=3)
-        if not hits:
-            return "知识库中没有找到相关内容。"
-        return "\n\n".join(f"[{h.document_name}] {h.text}" for h in hits)
+        # 与对话链路走同一个门面：改写/父片展开/相关性门限/引用一致
+        from app.services.retrieval import retrieve
+
+        result = await retrieve(kb_ids, query)
+        if ctx is not None and result.citations:
+            # 引用攒在 ctx 上，收尾帧一起交给前端（与 artifacts 同一机制）
+            known = {c["chunk_id"] for c in ctx.citations}
+            for c in result.citations:
+                if c["chunk_id"] not in known:
+                    ctx.citations.append({**c, "index": len(ctx.citations) + 1})
+        if not result.hits:
+            return (
+                "知识库中没有找到相关内容（检索结果均低于相关性门限）。"
+                "请明确告诉用户「知识库中未找到」，不要用参数知识冒充资料；"
+                "需要外部信息时再用 web_search。"
+            )
+        return _format_hits(result.hits)
 
     return StructuredTool.from_function(
         coroutine=kb_search,
@@ -115,7 +141,9 @@ def kb_directive(kb_ids: list[str]) -> str:
     )
 
 
-async def preflight_kb(kb_ids: list[str], task: str, top_k: int = 4) -> str | None:
+async def preflight_kb(
+    kb_ids: list[str], task: str, top_k: int = 4, ctx: "AgentContext | None" = None,
+) -> str | None:
     """首轮强制检索：把命中结果直接注入上下文。
 
     只靠提示词，模型仍会漏调 kb_search；预取把"先检索"变成确定性行为。
@@ -125,15 +153,24 @@ async def preflight_kb(kb_ids: list[str], task: str, top_k: int = 4) -> str | No
     if not kb_ids or not task.strip():
         return None
     try:
-        hits = await search(get_store(), kb_ids, task, top_k=top_k)
+        from app.services.retrieval import retrieve
+
+        result = await retrieve(kb_ids, task, top_k=top_k)
     except Exception:  # noqa: BLE001 — 检索服务挂了不阻塞对话，模型还能自己补调
         return None
-    if not hits:
-        return "[知识库预取] 知识库中没有检索到与任务相关的内容。请先告诉用户知识库未命中，再考虑其他信息源。"
-    body = "\n\n".join(f"[{h.document_name}] {h.text}" for h in hits)
+    if ctx is not None and result.citations:
+        known = {c["chunk_id"] for c in ctx.citations}
+        for c in result.citations:
+            if c["chunk_id"] not in known:
+                ctx.citations.append({**c, "index": len(ctx.citations) + 1})
+    if not result.hits:
+        return (
+            "[知识库预取] 知识库中没有检索到与任务相关的内容（均低于相关性门限）。"
+            "请先告诉用户知识库未命中，再考虑其他信息源。"
+        )
     return (
-        f"[知识库预取] 系统已按任务在知识库中检索到 {len(hits)} 条相关内容，"
-        f"回答请以这些为准并注明文档名：\n\n{body}"
+        f"[知识库预取] 系统已按任务在知识库中检索到 {len(result.hits)} 条相关内容，"
+        f"回答请以这些为准并注明文档名：\n\n{_format_hits(result.hits)}"
     )
 
 
@@ -262,7 +299,7 @@ def build_lc_tools(
         lc_tools.append(StructuredTool.from_function(text_stats, name="text_stats",
                         description="统计文本字符/词数", args_schema=TextStatsArgs))
     if kb_ids:
-        lc_tools.append(_make_kb_search(kb_ids))
+        lc_tools.append(_make_kb_search(kb_ids, ctx))
 
     if ctx is not None:
         lc_tools.extend(make_tools(ctx, builtin_ids))

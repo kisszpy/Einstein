@@ -37,7 +37,12 @@ from deepagents.backends.protocol import ExecuteResponse, SandboxBackendProtocol
 from langchain_core.tools import tool
 
 from app.core.config import get_settings
-from app.services.agent_deep import WorkspaceBackend, _build_agent, _run_deep
+from app.services.agent_deep import (
+    WorkspaceBackend,
+    _approval_plan,
+    _build_agent,
+    _run_deep,
+)
 from app.services.capabilities import AgentContext, _artifact_kind, browser_pro, sandbox
 from app.services.capabilities.code_exec import _clean_env
 from app.services.capabilities.sandbox import slugify, workspace_root
@@ -419,7 +424,7 @@ def _build_pro_agent(
         ctx,
         mode=getattr(settings, "agent_pro_sandbox", "auto"),
         image=getattr(settings, "agent_pro_image", "python:3.12-slim"),
-        network=getattr(settings, "agent_pro_network", "bridge"),
+        network=getattr(settings, "agent_pro_network", "none"),
         timeout=getattr(settings, "agent_pro_shell_timeout", 60),
         memory=getattr(settings, "agent_pro_memory", "1g"),
         cpus=getattr(settings, "agent_pro_cpus", "2"),
@@ -431,6 +436,8 @@ def _build_pro_agent(
         backend=backend,
         prompt_extra=PRO_EXTRA,
         extra_tools=_browser_tools(ctx, workspace_id),
+        # 人工确认走框架 interrupt（与默认引擎同一套语义）
+        interrupt_on=_approval_plan(ctx),
     )
     return agent, backend
 
@@ -455,6 +462,8 @@ async def run_deep_pro_agent(
     persona: str = "",
     pinned_skills: list[str] | None = None,
     temperature: float | None = None,
+    thread_id: str = "",
+    resume: dict | None = None,
 ) -> AsyncIterator[dict]:
     """Pro 引擎入口：与 deep 版共用执行循环，多的是 execute / 浏览器。"""
     def build(c: AgentContext, ws: str) -> tuple[Any, list[dict]]:
@@ -466,6 +475,7 @@ async def run_deep_pro_agent(
     async for event in _run_deep(
         task, tool_ids, kb_ids, workspace_id, ctx, history,
         build=build, metric_kind="agent_pro", pinned_skills=pinned_skills,
+        thread_id=thread_id, resume=resume,
     ):
         yield event
 

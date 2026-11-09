@@ -4,19 +4,19 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from app.api.deps import current_uid, current_workspace
-from app.services import web_augment
+from app.services import ratelimit, web_augment
 from app.services.experts import get_expert_store
 from app.services.history import get_history_store
 from app.services import memory as memory_service
-from app.services.query_rewrite import rewrite_query
 from app.services.llm import stream_chat
-from app.services.rag import build_context_block, search
+from app.services.rag import build_context_block
+from app.services.retrieval import retrieve
 from app.services.skill_installer import inline_resources
 from app.services.skills import get_skill_store
 from app.services.store import get_store
@@ -195,28 +195,16 @@ async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[st
                 )
 
             # ---- 知识库检索 ----
-            # 追问先做指代消解：「它的第二个条件呢」直接检索命不中
+            # 统一走 retrieval 门面：追问指代消解、相关性门限、父片展开、引用
+            # 构造都在那里，智能体链路用同一套参数（以前两条链路各配一套，同一
+            # 知识库在对话里准、在智能体里碎）。
             citations: list[dict] = []
             if effective_kb_ids:
-                search_query = user_text
-                if history:
-                    search_query = await rewrite_query(history, user_text)
-                hits = await search(store, effective_kb_ids, search_query, top_k=4,
-                                    parent_expand=True)
-                if hits:
-                    citations = [
-                        {
-                            "index": i + 1,
-                            "document_name": h.document_name,
-                            "chunk_id": h.chunk_id,
-                            "text": h.text,
-                            "score": h.score,
-                            "query": search_query,
-                        }
-                        for i, h in enumerate(hits)
-                    ]
+                result = await retrieve(effective_kb_ids, user_text, history=history)
+                citations = result.citations
+                if result.hits:
                     system_text = (
-                        f"{system_text}\n\n=== 参考资料 ===\n{build_context_block(hits)}\n"
+                        f"{system_text}\n\n=== 参考资料 ===\n{build_context_block(result.hits)}\n"
                         "=== 参考资料 end ==="
                     )
 
@@ -297,6 +285,13 @@ async def chat(
     事件：meta -> web(状态) -> [citations] -> (reasoning|delta)* -> done | error
     web 的 status 依次为 checking / searching / done / skipped / failed。
     """
+    # Token 日配额：以前只累加不拦截，配了 APP_QUOTA_DAILY_TOKENS 也不生效
+    allowed, used = ratelimit.quota_check(ws, "tokens")
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"今日 Token 配额已用完（已用 {used}）。配额按自然日重置，或联系管理员调整。",
+        )
     return StreamingResponse(
         _event_stream(req, ws, uid),
         media_type="text/event-stream",

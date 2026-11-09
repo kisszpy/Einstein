@@ -39,13 +39,23 @@ from deepagents.backends.protocol import (
     ReadResult,
     WriteResult,
 )
+from deepagents.middleware.filesystem import FilesystemMiddleware, supports_execution
 from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
+from langgraph.types import Command
 
 from app.core.config import get_settings
 from app.services import skill_publisher
-from app.services.agent_runtime import LlmTimer, build_messages, final_frame, short
+from app.services.agent_runtime import (
+    LlmTimer,
+    build_messages,
+    final_frame,
+    get_checkpointer,
+    short,
+    thread_config,
+)
+from app.services.approvals import args_fingerprint
 from app.services.capabilities import ApprovalRequired, AgentContext, _artifact_kind
 from app.services.capabilities.sandbox import slugify, workspace_root
 from app.services.tools import build_lc_tools, kb_directive
@@ -55,6 +65,24 @@ MAX_BUDGETS = 3        # 触顶自动续跑：把已有进展带回引擎继续�
 
 # harvest 自带的文件工具会顶掉我们的 fs_*，避免两套同名语义打架
 SUPERSEDED_TOOLS = {"fs_read", "fs_write", "fs_list"}
+
+# 框架文件工具里与项目边界无关的那部分。`execute` 不在其中——它只在后端
+# 真的能执行命令时才挂（见 _fs_tool_names）。
+FS_TOOL_NAMES = ("ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep")
+
+
+def _fs_tool_names(backend: Any) -> list[str]:
+    """按后端真实能力决定挂哪些文件工具。
+
+    框架默认把 `execute` 一并注册（`middleware/filesystem.py:2073`），但它
+    只做运行期检查——后端不支持时返回一句英文错误。模型看到"能跑命令"就会
+    先试一次，白跑一轮、计划被打断。这里在装配期就按能力裁掉，做到
+    「工具集 ⊆ 后端能力集」；Pro 引擎的后端支持执行，`execute` 照常挂上。
+    """
+    names = list(FS_TOOL_NAMES)
+    if supports_execution(backend):
+        names.append("execute")
+    return names
 
 
 class WorkspaceBackend(FilesystemBackend):
@@ -309,12 +337,16 @@ def _build_agent(
     backend: Any = None,
     prompt_extra: str = "",
     extra_tools: Sequence[Any] = (),
+    interrupt_on: dict[str, Any] | None = None,
 ):
     """装配一个 deep agent。后端与额外工具可注入（Pro 版用带 execute 的后端）。
 
     技能：引擎原生 SkillsMiddleware。发布器已在任务开始时把 DB 技能同步到
     <workspace>/.agent/skills/（热加载），这里只挂目录；模型按 description
     自主选取，被点名的技能由 pinned_skills 状态强制装载。
+
+    人工确认：走框架的 `interrupt_on` + checkpointer（见 `_approval_plan`）。
+    引擎自己不再发明"抛出异常当暂停"的协议——那样批准后只能重跑。
     """
     if backend is None:
         backend = WorkspaceBackend(str(workspace_root(workspace_id)), ctx)
@@ -333,8 +365,16 @@ def _build_agent(
         ),
         backend=backend,
         # 计划工具是这轮换引擎的主要动机，显式挂上（0.7 起默认不装）
-        middleware=[TodoListMiddleware()],
+        middleware=[
+            TodoListMiddleware(),
+            # 同名中间件会替换框架内置的那个（deepagents graph.py:236）。
+            # 这是唯一能在装配期裁掉 execute 的接缝；代价是丢掉 harness 的
+            # 工具描述覆盖，可接受——描述我们自己在提示词里写清了。
+            FilesystemMiddleware(backend=backend, tools=_fs_tool_names(backend)),
+        ],
         skills=[f"/{skill_publisher.SKILLS_SUBDIR}/"],
+        interrupt_on=interrupt_on,
+        checkpointer=get_checkpointer() if interrupt_on else None,
     )
 
 
@@ -343,6 +383,19 @@ def _get_model(temperature: float | None = None):
     from app.services.agent import _get_model as build
 
     return build(temperature)
+
+
+def _approval_plan(ctx: AgentContext) -> dict[str, Any] | None:
+    """需要人工确认的工具 → `interrupt_on` 配置；空表示不启用。
+
+    同时把 `ctx.hitl` 置真：工具层因此不再自己抛 ApprovalRequired——拦截发生
+    在工具执行之前，工具代码保持"被调用就是已批准"的干净语义。
+    """
+    tools = {t.strip() for t in (get_settings().agent_approval_tools or "").split(",") if t.strip()}
+    if not tools:
+        return None
+    ctx.hitl = True
+    return {name: True for name in tools}
 
 
 def _plan_event(todos: Any) -> dict | None:
@@ -374,15 +427,18 @@ def _continuation_note(last: bool) -> str:
 
 async def _iter_events(
     agent,
-    messages: list[tuple[str, str]],
+    payload: Any,
     ctx: AgentContext,
     pinned_skills: list[str] | None = None,
     carry: dict | None = None,
+    thread_id: str = "",
 ) -> AsyncIterator[dict]:
     """把 LangGraph 的 updates 流翻成前端协议，顺便收集计划和产物。
 
+    payload：首次输入（`{"messages": [...]}`）或续跑命令（`Command(resume=...)`）。
     carry：跨预算续跑的载体。流式过程中把真实消息对象与计划状态写回
     carry，触顶后调用方用它构造续跑输入（已完成对话 + todos 不丢）。
+    thread_id：检查点线程。有它才能中断后续跑，也让 todos 跨请求存活。
     """
     if carry is None:
         carry = {}
@@ -407,18 +463,28 @@ async def _iter_events(
 
     # pinned_skills 是 SkillsMiddleware 的状态键：被点名的技能在下一次模型
     # 调用前全文装载（用户显式指定时不赌模型自己的选择）。
-    # todos 带回计划状态：续跑时模型不用重拆计划。
-    invoke_input: dict[str, Any] = {"messages": messages}
-    if carry.get("todos"):
-        invoke_input["todos"] = carry["todos"]
-    if pinned_skills:
-        invoke_input["pinned_skills"] = pinned_skills
+    # todos 带回计划状态：续跑时模型不用重拆计划（有检查点时它本来就在图状态里）。
+    if isinstance(payload, dict):
+        invoke_input: Any = dict(payload)
+        if carry.get("todos"):
+            invoke_input["todos"] = carry["todos"]
+        if pinned_skills:
+            invoke_input["pinned_skills"] = pinned_skills
+    else:
+        invoke_input = payload      # Command(resume=...) 原样送入
+
     async for update in agent.astream(
         invoke_input,
         stream_mode="updates",
-        config={"recursion_limit": RECURSION_LIMIT},
+        config=thread_config(thread_id, RECURSION_LIMIT),
     ):
+        interrupted: Any = None
         for _node, state in (update or {}).items():
+            # 中断是「图暂停」而不是错误：LangGraph 用 __interrupt__ 键把
+            # 待确认的动作交出来，这里转成 approval_required 事件，结束本轮。
+            if _node == "__interrupt__":
+                interrupted = state
+                continue
             if not isinstance(state, dict):
                 continue
 
@@ -471,7 +537,43 @@ async def _iter_events(
                 if isinstance(msg, AIMessage) and msg.content:
                     final_text = str(msg.content)
 
+        if interrupted is not None:
+            event = _interrupt_event(interrupted)
+            if event:
+                yield {"kind": "__interrupt__", "value": event}
+            return
+
     yield {"kind": "__final_text__", "text": final_text}
+
+
+def _interrupt_event(interrupted: Any) -> dict | None:
+    """把 LangGraph 的 interrupt 载荷翻成前端要的暂停事件。
+
+    HITL 批量模式下的载荷形如
+    `{"action_requests": [{"name": "code_run", "args": {...}, "description": ...}]}`。
+    这里只取第一个动作做展示，`args_hash` 交给前端原样回传——批准只对**这一组
+    参数**有效，参数变了要重新确认（见 services/approvals.py）。
+    """
+    items = interrupted if isinstance(interrupted, (list, tuple)) else [interrupted]
+    for item in items:
+        value = getattr(item, "value", item)
+        if not isinstance(value, dict):
+            continue
+        actions = value.get("action_requests") or []
+        first = actions[0] if actions and isinstance(actions[0], dict) else {}
+        tool = str(first.get("name") or "")
+        args = first.get("args") or {}
+        if not tool:
+            configs = value.get("review_configs") or []
+            if configs and isinstance(configs[0], dict):
+                tool = str(configs[0].get("action_name") or "")
+        return {
+            "tool": tool,
+            "args": short(args),
+            "args_hash": args_fingerprint(args),
+            "count": len(actions) or 1,
+        }
+    return None
 
 
 async def _run_engine(
@@ -482,27 +584,56 @@ async def _run_engine(
     pinned: list[str],
     metric_kind: str,
     with_artifacts: bool,
+    thread_id: str = "",
+    resume: dict | None = None,
+    resume_count: int = 1,
 ) -> AsyncIterator[dict]:
-    """deep 系引擎共用的执行循环：预算续跑、审批暂停、指标、收尾帧。
+    """deep 系引擎共用的执行循环：预算续跑、审批中断、指标、收尾帧。
 
     所有 deepagents 变体（默认 / Pro）事件协议一致，差异只在「怎么装配
     agent」；执行语义必须完全一致，所以收敛到这一个函数，避免两份实现
     各自漂移。
+
+    resume：批准/拒绝决定。给了就发 `Command(resume=...)` 到同一 thread，
+    图从断点继续——已执行的工具调用不会重跑（这正是旧实现最大的坑）。
     """
     final_text = ""
     carry: dict[str, Any] = {"messages": [], "todos": None}
     base_messages = list(messages)  # 原始输入：续跑时用它 + carry 重建，不重复拼接
     budgets_used = 0
+    payload: Any = (
+        Command(resume={"decisions": [resume] * max(1, resume_count)}) if resume
+        else {"messages": messages}
+    )
 
     with LlmTimer(metric_kind, get_settings().llm_model) as timer:
         try:
             while True:
                 try:
-                    async for event in _iter_events(agent, messages, ctx, pinned_skills=pinned, carry=carry):
-                        if event["kind"] == "__final_text__":
+                    pending: dict | None = None
+                    async for event in _iter_events(
+                        agent, payload, ctx,
+                        pinned_skills=pinned, carry=carry, thread_id=thread_id,
+                    ):
+                        kind = event["kind"]
+                        if kind == "__final_text__":
                             final_text = event["text"]
                             continue
+                        if kind == "__interrupt__":
+                            pending = event["value"]
+                            continue
                         yield event
+
+                    if pending:
+                        # 图已暂停在「工具执行前」，状态在检查点里；前端批准后
+                        # 带同一 session 续跑，不会重做已完成的步骤。
+                        yield {"kind": "approval_required", **pending}
+                        final_text = (
+                            f"任务已暂停：工具 `{pending.get('tool') or '敏感工具'}` "
+                            "需要你批准后才能执行。批准后我从当前进度继续，不会重跑已完成的步骤。"
+                        )
+                        timer.status = "paused"
+                        break
                     break  # 正常完成
                 except GraphRecursionError:
                     budgets_used += 1
@@ -520,16 +651,19 @@ async def _run_engine(
                         *carry["messages"],
                         ("user", _continuation_note(last=budgets_used == MAX_BUDGETS - 1)),
                     ]
+                    payload = {"messages": messages}
                     yield {
                         "kind": "note",
                         "content": f"步数预算已用完，自动续接第 {budgets_used + 1}/{MAX_BUDGETS} 轮，从中断处继续…",
                     }
         except ApprovalRequired as approval:
-            # 敏感工具未批准：暂停任务，前端弹批准框；批准后前端自动重发任务
+            # react 引擎没有 interrupt：敏感工具在工具内部抛异常，这里暂停。
+            # deep 系正常情况下走不到这里（拦截在工具执行之前）。
             yield {
                 "kind": "approval_required",
                 "tool": approval.tool,
                 "args": short(approval.args),
+                "args_hash": args_fingerprint(approval.args),
             }
             final_text = (
                 f"任务已暂停：工具 `{approval.tool}` 需要你批准后才能执行。"
@@ -552,6 +686,33 @@ async def _run_engine(
 AgentBuilder = Callable[[AgentContext, str], "tuple[Any, Sequence[dict]]"]
 
 
+async def _pending_interrupt_count(agent: Any, thread_id: str) -> int:
+    """该线程待确认的调用数（0 = 没有中断，需要重跑而不是续跑）。
+
+    HITL 批量模式下 `decisions` 的元素个数必须与待确认调用数一致，所以这里
+    返回数量而不是布尔值——模型一轮里同时调两次 code_run 时，只回一个决定
+    会被框架判定为不匹配。
+    """
+    if not thread_id:
+        return 0
+    try:
+        snapshot = await agent.aget_state(thread_config(thread_id, RECURSION_LIMIT))
+    except Exception as exc:  # noqa: BLE001 — 检查点不可用按重跑处理，不能让任务失败
+        print(f"[agent-deep] 读取检查点失败（按重跑处理）：{type(exc).__name__}: {exc}", flush=True)
+        return 0
+    for task in getattr(snapshot, "tasks", None) or ():
+        interrupts = getattr(task, "interrupts", None)
+        if not interrupts:
+            continue
+        for item in interrupts:
+            value = getattr(item, "value", item)
+            actions = (value or {}).get("action_requests") if isinstance(value, dict) else None
+            if actions:
+                return len(actions)
+        return 1
+    return 0
+
+
 async def _run_deep(
     task: str,
     tool_ids: list[str],
@@ -563,11 +724,17 @@ async def _run_deep(
     build: AgentBuilder,
     metric_kind: str,
     pinned_skills: list[str] | None = None,
+    thread_id: str = "",
+    resume: dict | None = None,
 ) -> AsyncIterator[dict]:
     """deep 系入口的唯一实现：同步技能 → 装配 → 拼消息 → 执行。
 
     引擎之间只有 build 不同（后端、额外工具、提示词、开场自述），流程一致，
     所以两份入口共用它——否则"技能同步漏了""开场帧顺序变了"这类漂移迟早出现。
+
+    thread_id + resume：人工确认恢复。批准后带着同一个 thread 发
+    `Command(resume=...)`，图从断点继续；检查点已经丢了（进程重启过）时，
+    明确告知并退回"按批准重跑"，而不是假装续跑。
     """
     ws = workspace_id or "default"
     with_artifacts = ctx is not None
@@ -579,14 +746,29 @@ async def _run_deep(
     pinned = [n for n in (pinned_skills or []) if n]
 
     agent, prelude = build(ctx, ws)
-    messages = await build_messages(task, history, kb_ids)
-
     for event in prelude:
         yield event
+
+    resume_decision: dict | None = None
+    resume_count = 1
+    if resume:
+        pending = await _pending_interrupt_count(agent, thread_id)
+        if pending:
+            resume_decision, resume_count = resume, pending
+        else:
+            yield {
+                "kind": "note",
+                "content": "没有找到可续跑的检查点（服务可能重启过），已按你的批准重新执行。",
+            }
+
+    messages: list[tuple[str, str]] = []
+    if resume_decision is None:
+        messages = await build_messages(task, history, kb_ids, ctx)
 
     async for event in _run_engine(
         agent, ctx, messages,
         pinned=pinned, metric_kind=metric_kind, with_artifacts=with_artifacts,
+        thread_id=thread_id, resume=resume_decision, resume_count=resume_count,
     ):
         yield event
 
@@ -601,6 +783,8 @@ async def run_deep_agent(
     persona: str = "",
     pinned_skills: list[str] | None = None,
     temperature: float | None = None,
+    thread_id: str = "",
+    resume: dict | None = None,
 ) -> AsyncIterator[dict]:
     """运行 Deep Agents，产出与 ReAct 引擎完全一致的事件流。
 
@@ -608,12 +792,17 @@ async def run_deep_agent(
     的技能 name 清单（对应 SkillsMiddleware 的 pinned_skills 状态键）。
     """
     def build(c: AgentContext, ws: str) -> tuple[Any, Sequence[dict]]:
-        agent = _build_agent(c, tool_ids, kb_ids, ws, persona=persona, temperature=temperature)
+        agent = _build_agent(
+            c, tool_ids, kb_ids, ws,
+            persona=persona, temperature=temperature,
+            interrupt_on=_approval_plan(c),
+        )
         return agent, ()
 
     async for event in _run_deep(
         task, tool_ids, kb_ids, workspace_id, ctx, history,
         build=build, metric_kind="agent", pinned_skills=pinned_skills,
+        thread_id=thread_id, resume=resume,
     ):
         yield event
 

@@ -183,7 +183,12 @@ async def rerank_hits(
         zip(candidates, scores, strict=True), key=lambda pair: pair[1], reverse=True,
     )
     info["rerank_applied"] = True
-    return [h for h, _ in ranked[:top_k]], info
+    out = []
+    for hit, score in ranked[:top_k]:
+        # 重排分是唯一的"绝对相关度"：写回命中，上层据此设门限、展示依据
+        hit.rerank_score = round(float(score), 4)
+        out.append(hit)
+    return out, info
 
 
 def config_snapshot() -> dict:

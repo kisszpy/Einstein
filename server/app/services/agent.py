@@ -78,11 +78,16 @@ async def run_agent(
     persona: str = "",
     pinned_skills: list[str] | None = None,
     temperature: float | None = None,
+    thread_id: str = "",
+    resume: dict | None = None,
 ) -> AsyncIterator[dict]:
     """按配置选择引擎，对外只有这一个入口。
 
     persona/pinned_skills/temperature 仅 deep 引擎支持（技能是 deepagents
     原生能力），ReAct 引擎自动忽略。
+
+    thread_id/resume：人工确认的恢复入口。deep 系引擎据此从检查点续跑；
+    ReAct 引擎没有检查点，忽略这两个参数（批准后按批准重跑）。
 
     events：
       {kind: "tool_call", name, args}
@@ -104,6 +109,7 @@ async def run_agent(
         async for step in run_deep_pro_agent(
             task, tool_ids, kb_ids, workspace_id, ctx, history,
             persona=persona, pinned_skills=pinned_skills, temperature=temperature,
+            thread_id=thread_id, resume=resume,
         ):
             yield step
         return
@@ -113,6 +119,7 @@ async def run_agent(
     async for step in run_deep_agent(
         task, tool_ids, kb_ids, workspace_id, ctx, history,
         persona=persona, pinned_skills=pinned_skills, temperature=temperature,
+        thread_id=thread_id, resume=resume,
     ):
         yield step
 

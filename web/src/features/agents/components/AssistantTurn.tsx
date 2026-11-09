@@ -25,12 +25,14 @@ import {
   toolLabel,
   type AgentStep,
   type Artifact,
+  type Citation,
 } from "../types";
 
 interface Props {
   steps: AgentStep[];
   answer: string;
   artifacts: Artifact[];
+  citations?: Citation[];
   running: boolean;
   error: string | null;
   project: string;
@@ -65,6 +67,7 @@ export function AssistantTurn({
   steps,
   answer,
   artifacts,
+  citations = [],
   running,
   error,
   project,
@@ -261,6 +264,25 @@ export function AssistantTurn({
           {running && (
             <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-brand align-text-bottom" />
           )}
+        </div>
+      )}
+
+      {citations.length > 0 && (
+        <div className="mt-3 space-y-1">
+          <p className="text-[11.5px] font-medium tracking-wide text-tertiary">参考资料</p>
+          {citations.map((cite) => (
+            <div
+              key={`${cite.chunk_id}-${cite.index}`}
+              title={cite.text}
+              className="flex items-center gap-1.5 truncate rounded-lg bg-surface-1 px-2.5 py-1.5 text-[12px] text-secondary"
+            >
+              <span className="shrink-0 font-medium text-brand">[{cite.index}]</span>
+              <span className="truncate">{cite.document_name}</span>
+              <span className="ml-auto shrink-0 text-[11px] text-tertiary">
+                相关度 {Number(cite.score ?? 0).toFixed(2)}
+              </span>
+            </div>
+          ))}
         </div>
       )}
 

@@ -21,6 +21,7 @@ import {
   type AgentRunItem,
   type AgentStep,
   type Artifact,
+  type Citation,
   type KbInfo,
   type ProjectInfo,
   type SkillInfo,
@@ -101,10 +102,14 @@ export function AgentsPage() {
   const [steps, setSteps] = useState<AgentStep[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [answer, setAnswer] = useState("");
+  /** 本轮答案的检索引用（后端在 final 帧给出，支持点开溯源） */
+  const [citations, setCitations] = useState<Citation[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** 敏感工具等待批准：非空时展示批准条，批准后自动续跑当前任务 */
-  const [approval, setApproval] = useState<{ tool: string; args: string } | null>(null);
+  const [approval, setApproval] = useState<{ tool: string; args: string; argsHash: string } | null>(
+    null,
+  );
   /** 当前任务的会话 id：追问沿用，新任务清空（由服务端分配） */
   const [sessionId, setSessionId] = useState<string | null>(null);
   /** 同一任务里已完成的更早轮次 */
@@ -261,17 +266,22 @@ export function AgentsPage() {
   );
 
   const run = useCallback(
-    async (taskText: string) => {
+    async (taskText: string, opts?: { resume?: boolean; message?: string }) => {
       const text = taskText.trim();
       if (!text || running) return;
-      // 上一轮已有内容 → 归档到历史，让追问落在同一个任务里形成多轮
-      if (submitted && (answer || steps.length > 0 || error)) {
-        setTurns((prev) => [...prev, { task: submitted, steps, answer, artifacts, error }]);
+      const resuming = Boolean(opts?.resume);
+      // 续跑是「接着上一次的进度跑」：不清步骤、不归档，否则用户看到的是任务重来
+      if (!resuming) {
+        // 上一轮已有内容 → 归档到历史，让追问落在同一个任务里形成多轮
+        if (submitted && (answer || steps.length > 0 || error)) {
+          setTurns((prev) => [...prev, { task: submitted, steps, answer, artifacts, error }]);
+        }
+        setSubmitted(text);
+        setSteps([]);
+        setArtifacts([]);
+        setAnswer("");
+        setCitations([]);
       }
-      setSubmitted(text);
-      setSteps([]);
-      setArtifacts([]);
-      setAnswer("");
       setError(null);
       setApproval(null);
       setElapsed(null);
@@ -291,6 +301,8 @@ export function AgentsPage() {
             skill_ids: selectedSkills,
             project: boundProject,
             session_id: sessionId ?? "",
+            resume: resuming,
+            approval_message: opts?.message ?? "",
           }),
         });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
@@ -306,8 +318,12 @@ export function AgentsPage() {
             case "step": {
               const { step } = raw as { step: AgentStep };
               if (step.kind === "approval_required") {
-                // 敏感工具未批准：任务暂停，弹出批准条；不进步骤流
-                setApproval({ tool: step.tool ?? "", args: step.args ?? "" });
+                // 敏感工具未批准：图已暂停在检查点，弹出批准条；批准后从断点续跑
+                setApproval({
+                  tool: step.tool ?? "",
+                  args: step.args ?? "",
+                  argsHash: step.args_hash ?? "",
+                });
                 break;
               }
               setSteps((prev) => [...prev, step]);
@@ -317,6 +333,11 @@ export function AgentsPage() {
               const { artifact } = raw as { artifact: Artifact };
               setArtifacts((prev) => [...prev, artifact]);
               setPreviewToken((n) => n + 1);
+              break;
+            }
+            case "citations": {
+              const { citations: list } = raw as { citations: Citation[] };
+              setCitations(list ?? []);
               break;
             }
             case "delta": {
@@ -384,17 +405,38 @@ export function AgentsPage() {
     void run(text);
   };
 
-  /** 批准敏感工具：登记到服务端后自动重发当前任务继续执行 */
-  const approveTool = async () => {
+  /** 对敏感工具作出决定：批准后从检查点续跑，拒绝则让模型换路线 */
+  const approveTool = async (decision: "approve" | "reject" = "approve") => {
     if (!approval) return;
     const res = await fetch("/api/agent/approve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId ?? "", tool: approval.tool }),
+      body: JSON.stringify({
+        session_id: sessionId ?? "",
+        tool: approval.tool,
+        args_hash: approval.argsHash,
+        decision,
+      }),
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      setError(
+        res.status === 404
+          ? "这次确认已过期（有效期 30 分钟），请重新发起任务。"
+          : `确认失败：HTTP ${res.status}`,
+      );
+      setApproval(null);
+      return;
+    }
     setApproval(null);
-    if (submitted && !running) void run(submitted);
+    if (submitted && !running) {
+      void run(submitted, {
+        resume: true,
+        message:
+          decision === "reject"
+            ? "用户拒绝了这个操作。请改用不需要它的做法；如果确实必须用它，先说明原因再请求一次。"
+            : undefined,
+      });
+    }
   };
 
   const stop = () => {
@@ -413,6 +455,7 @@ export function AgentsPage() {
     setSteps([]);
     setArtifacts([]);
     setAnswer("");
+    setCitations([]);
     setError(null);
     setElapsed(null);
     setTask("");
@@ -674,6 +717,7 @@ export function AgentsPage() {
                       steps={steps}
                       answer={answer}
                       artifacts={artifacts}
+                      citations={citations}
                       running={running}
                       error={error}
                       project={browseProject}
@@ -705,8 +749,8 @@ export function AgentsPage() {
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
-                      <Button onClick={() => void approveTool()}>批准并继续</Button>
-                      <Button variant="ghost" onClick={() => setApproval(null)}>
+                      <Button onClick={() => void approveTool("approve")}>批准并继续</Button>
+                      <Button variant="ghost" onClick={() => void approveTool("reject")}>
                         拒绝
                       </Button>
                     </div>

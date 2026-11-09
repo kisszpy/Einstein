@@ -23,6 +23,15 @@ export interface ToolInfo {
   default?: boolean;
 }
 
+/** 检索引用：智能体答案的溯源依据（与对话链路的 citations 同构）。 */
+export interface Citation {
+  index: number;
+  document_name: string;
+  chunk_id: string;
+  text: string;
+  score: number;
+}
+
 export interface PlanItem {
   content: string;
   status: "pending" | "in_progress" | "completed" | string;
@@ -35,6 +44,8 @@ export interface AgentStep {
   /** approval_required 帧用 tool 携带待批准的工具 id */
   tool?: string;
   args?: string;
+  /** 参数指纹：批准只对这一组参数有效，原样回传给 /agent/approve */
+  args_hash?: string;
   content?: string;
   duration_ms?: number | null;
   /** kind=plan 时的计划清单（deepagents 的 write_todos） */

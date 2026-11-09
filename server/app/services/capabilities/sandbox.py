@@ -29,10 +29,25 @@ class SandboxError(Exception):
     """沙箱内的可预期错误，消息直接回给模型。"""
 
 
-def slugify(name: str) -> str:
+def slug_from_name(name: str) -> str:
+    """清洗成目录名；可能返回空串（纯 emoji / 纯符号）。
+
+    与 `slugify` 分开是为了让「名字不可用」这件事能被上层拒绝。以前两者合
+    成一个函数，空值回落 `untitled`，于是 `🚀`、`+++` 全落到同一个目录，
+    第二个项目直接复用第一个（用户看到的是"我的项目串了"）。
+    """
     s = _SLUG_RE.sub("-", (name or "").strip()).strip("-")
     s = re.sub(r"-{2,}", "-", s)
-    return s[:48] or "untitled"
+    return s[:48]
+
+
+def slugify(name: str) -> str:
+    """清洗成目录名，空值回落 untitled。
+
+    只用于**内部路径**（工作区名等）。用户给的项目名必须先过
+    `slug_from_name` 判空（见 projects.create_project）。
+    """
+    return slug_from_name(name) or "untitled"
 
 
 def workspace_root(workspace_id: str) -> Path:

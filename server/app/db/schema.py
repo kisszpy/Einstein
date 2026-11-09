@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from app.db.engine import Database
+from app.db.tables import AGENT_APPROVALS as _AGENT_APPROVALS_TABLE
 from app.db.tables import PROJECTS as _PROJECTS_TABLE
 from app.db.tables import ddl_all as _domain_tables_ddl
 
@@ -275,6 +276,18 @@ _MIGRATION_010 = [
     "CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(workspace_id, owner_id)",
 ]
 
+# 011：人工确认记录 —— 审批从「进程内 set」改为带归属与时效的行
+#
+# 旧实现是模块级 `_APPROVALS: set[(session_id, tool)]`：多 worker 不共享、
+# 重启即清、不校验 session 归属（可用别人的 id 预批准）、批准一次永久放行。
+# 现在每条审批是一行：谁（owner_id）在哪个会话为准哪个工具（+参数指纹）
+# 做了决定，什么时候过期。批准与 thread 的 checkpoint 配对使用。
+_MIGRATION_011 = [
+    _AGENT_APPROVALS_TABLE.ddl(),
+    "CREATE INDEX IF NOT EXISTS idx_approvals_sess "
+    "ON agent_approvals(workspace_id, owner_id, session_id)",
+]
+
 MIGRATIONS: list[tuple[int, Migration]] = [
     (1, _MIGRATION_001),
     (2, _MIGRATION_002),
@@ -286,6 +299,7 @@ MIGRATIONS: list[tuple[int, Migration]] = [
     (8, _MIGRATION_008),
     (9, _migration_009),
     (10, _MIGRATION_010),
+    (11, _MIGRATION_011),
 ]
 
 _TYPE_TOKENS = {

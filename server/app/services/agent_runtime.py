@@ -12,10 +12,45 @@ import json
 import time
 from typing import Any
 
+from app.core.config import get_settings
 from app.services import metrics
 from app.services.tools import preflight_kb
 
 TOOL_PREVIEW = 300   # 步骤条里工具参数/结果的显示上限
+
+_CHECKPOINTER: Any = None
+
+
+def get_checkpointer() -> Any:
+    """进程内 checkpointer（langgraph `InMemorySaver`），全局单例。
+
+    **为什么必须有它**：人工确认在框架里的语义是 LangGraph `interrupt`——图在
+    两次 invoke 之间暂停，恢复靠 `Command(resume=...)` 读取同一 `thread_id` 的
+    检查点。没有 checkpointer，暂停只能靠抛异常，批准后就只能把整个任务重跑。
+
+    为什么先用内存版：`langgraph.checkpoint.postgres` 需要额外安装
+    `langgraph-checkpoint-postgres`，当前环境没有；sqlite 变体需要 `aiosqlite`，
+    也没有。内存版足够撑起"暂停 → 批准 → 续跑"，代价是进程重启后检查点丢失
+    （此时 `_run_deep` 会明确降级为按批准重跑，并告知用户）。
+
+    `APP_AGENT_CHECKPOINT=off` 时返回 None（关掉中断/续跑，回到旧行为）。
+    """
+    global _CHECKPOINTER
+    if get_settings().agent_checkpoint.lower() == "off":
+        return None
+    if _CHECKPOINTER is None:
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        _CHECKPOINTER = InMemorySaver()
+    return _CHECKPOINTER
+
+
+def thread_config(thread_id: str, recursion_limit: int) -> dict:
+    """一次运行的 LangGraph config：线程（检查点）键 + 步数预算。"""
+    config: dict[str, Any] = {"recursion_limit": recursion_limit}
+    if thread_id:
+        config["configurable"] = {"thread_id": thread_id}
+    return config
 
 
 def short(obj: Any, limit: int = TOOL_PREVIEW) -> str:
@@ -28,11 +63,13 @@ async def build_messages(
     task: str,
     history: list[dict] | None,
     kb_ids: list[str],
+    ctx: Any = None,
 ) -> list[tuple[str, str]]:
     """历史 + 本轮任务；首轮挂了知识库就先预取检索结果塞进上下文。
 
     预取只在首轮做：追问轮（有 history）里「再改一下」这类任务拿去检索
     只会带回噪音，那时由提示词规则驱动模型按需调 kb_search。
+    ctx 传进来是为了把预取的引用记进本次运行（前端要能点开原文）。
     """
     messages: list[tuple[str, str]] = [
         ("assistant" if h.get("role") == "assistant" else "user", h.get("content", ""))
@@ -40,7 +77,7 @@ async def build_messages(
     ]
     messages.append(("user", task))
     if kb_ids and not history:
-        note = await preflight_kb(kb_ids, task)
+        note = await preflight_kb(kb_ids, task, ctx=ctx)
         if note:
             messages.insert(0, ("user", note))
     return messages
@@ -89,10 +126,15 @@ class LlmTimer:
 
 
 def final_frame(ctx: Any, text: str, *, with_artifacts: bool = True) -> dict:
-    """收尾帧：三个引擎的最后一个事件必须是它。"""
+    """收尾帧：三个引擎的最后一个事件必须是它。
+
+    citations 与 artifacts 同一机制：检索时攒在 ctx 上，收尾一起交给前端，
+    智能体答案因此也能点开原文溯源（以前只有对话模式有引用）。
+    """
     return {
         "kind": "final",
         "text": text,
         "artifacts": list(ctx.artifacts) if (ctx is not None and with_artifacts) else [],
         "project": getattr(ctx, "project", "") if ctx is not None else "",
+        "citations": list(getattr(ctx, "citations", []) or []) if ctx is not None else [],
     }

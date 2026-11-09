@@ -22,10 +22,12 @@ from app.services import agent_deep
 def _stub(calls: list[dict]):
     """构造一个假 _iter_events：记录每次收到的 messages，按脚本产出事件。"""
 
-    async def fake_iter(agent, messages, ctx, pinned_skills=None, carry=None):
+    async def fake_iter(agent, payload, ctx, pinned_skills=None, carry=None, thread_id=""):  # noqa: ANN001, ANN003
         if carry is None:
             carry = {}
-        calls.append({"messages": list(messages), "carry": carry})
+        # 首次输入是 {"messages": [...]}；续跑/恢复时是 Command，桩里只看 messages
+        msgs = payload.get("messages") if isinstance(payload, dict) else []
+        calls.append({"messages": list(msgs or []), "carry": carry})
         round_no = len(calls)
         if round_no == 1:
             # 模拟首轮：模型调了工具、写了计划，然后预算触顶

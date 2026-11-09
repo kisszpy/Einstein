@@ -37,8 +37,6 @@ RetrievalMode = Literal["vector", "lexical", "hybrid"]
 
 # 单路召回宽度：取 top_k 的若干倍，再融合截断
 CANDIDATE_FACTOR = 4
-# 余弦低于该值视为无关（嵌入模型对完全不相关文本也会给出 0.2~0.5，靠阈值砍掉噪声）
-MIN_SIMILARITY = 0.01
 
 
 @dataclass
@@ -50,6 +48,7 @@ class RetrievedChunk:
     score: float                      # 当前模式下的排序分（hybrid 为 RRF 分）
     vector_score: float | None = None  # 余弦相似度（词法模式下为 None）
     lexical_score: float | None = None  # BM25 分（向量模式下为 None）
+    rerank_score: float | None = None   # 重排给的绝对相关分（未重排为 None）
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -272,16 +271,24 @@ async def search(
     *,
     rerank: bool = True,
     parent_expand: bool = False,
+    min_score: float | None = None,
+    max_per_doc: int | None = None,
 ) -> list[RetrievedChunk]:
     """检索：mode 为空时用 Settings.retrieval_mode（默认 hybrid）。
 
     rerank：开启时用配置的重排提供者对融合结果打绝对相关分（失败自动回退原序）。
     parent_expand：命中父子切片的孩子片后，把同父兄弟片文本拼回去（对话注入用）。
+    min_score：相关性门限（默认 `Settings.retrieval_min_score`）。低于门限的命中
+        直接丢弃，一条都不剩时返回空列表——由上层明确告诉模型/用户「未命中」，
+        而不是把 3 条噪音当证据。0 = 关闭门限。
+    max_per_doc：同一文档最多贡献几个片段（默认 `Settings.retrieval_max_per_doc`）。
     """
     if not kb_ids:
         return []
     settings = get_settings()
     mode = mode or settings.retrieval_mode  # type: ignore[assignment]
+    floor = settings.retrieval_min_score if min_score is None else float(min_score)
+    cap = settings.retrieval_max_per_doc if max_per_doc is None else int(max_per_doc)
     width = max(top_k * CANDIDATE_FACTOR, top_k)
     index = get_vector_index()
 
@@ -323,8 +330,11 @@ async def search(
                 vec_hits = MemoryIndex.score(candidates, qvec, width)
 
     by_id = {c.id: c for c in candidates}
-    # 索引里可能残留已删切片，统一用回表结果兜底
-    vec_ranked = [(cid, s) for cid, s in vec_hits if s > MIN_SIMILARITY and cid in by_id]
+    # 索引里可能残留已删切片，统一用回表结果兜底。
+    # 这里只做「候选池」的粗剪（门限的一半），真正的判定在排序完成后按
+    # 绝对相关分做，避免过早在 RRF 融合前把可能有用的候选砍光。
+    soft_floor = floor * 0.6 if floor > 0 else 0.0
+    vec_ranked = [(cid, s) for cid, s in vec_hits if s >= soft_floor and cid in by_id]
     lex_ranked: list[tuple[str, float]] = []
 
     if mode in ("lexical", "hybrid"):
@@ -373,9 +383,75 @@ async def search(
     else:
         hits = hits[:top_k]
 
+    # 先过相关性门限，再按文档配额截断：顺序反了会把「同一篇文档占满名额」
+    # 误判成「命中不足」。
+    hits = apply_score_gate(query, hits, min_score=floor)
+    hits = cap_per_document(hits, max_per_doc=cap)
+
     if parent_expand:
         hits = expand_parents(store, hits)
     return hits
+
+
+def _term_coverage(query: str, text: str) -> float:
+    """查询词在片段里的覆盖率：没有向量分时用它判断「是否真的词面命中」。
+
+    纯词法命中的片段没有余弦分可比，但"查询里的词有多少个出现在这段文本里"
+    是个绝对量——问"报销标准"却只匹配到"标准"一个词，覆盖率 0.5 以下就该丢。
+    """
+    from app.services.lexical import tokenize
+
+    terms = set(tokenize(query))
+    if not terms:
+        return 0.0
+    body = set(tokenize(text))
+    return len(terms & body) / len(terms)
+
+
+def apply_score_gate(
+    query: str, hits: list[RetrievedChunk], *, min_score: float,
+) -> list[RetrievedChunk]:
+    """相关性门限：拿绝对分（重排分 > 余弦）判定，词法命中用词覆盖率兜底。
+
+    这是「知识库未命中」这条分支能否成立的关键——阈值取 0.01 时任何问题都能
+    拿到 3 条片段，模型于是把噪音当证据，还被系统提示要求「以知识库为准」。
+    """
+    if min_score <= 0:
+        return hits
+    kept: list[RetrievedChunk] = []
+    for h in hits:
+        absolute = h.rerank_score if h.rerank_score is not None else h.vector_score
+        if absolute is not None:
+            if absolute >= min_score:
+                kept.append(h)
+            continue
+        # 纯词法命中：词覆盖率达到一半才算相关
+        if _term_coverage(query, h.text) >= 0.5:
+            kept.append(h)
+    if not kept and hits:
+        # 全部被砍时把最高分打出来：门限是按模型标定的，日志是标定的抓手
+        best = max(
+            (h.rerank_score if h.rerank_score is not None else (h.vector_score or 0.0))
+            for h in hits
+        )
+        print(f"[rag] 全部命中低于相关性门限 {min_score:.2f}（最高 {best:.2f}），按未命中处理",
+              flush=True)
+    return kept
+
+
+def cap_per_document(hits: list[RetrievedChunk], *, max_per_doc: int) -> list[RetrievedChunk]:
+    """同一文档最多贡献 N 个片段，把名额留给跨文档证据。"""
+    if max_per_doc <= 0:
+        return hits
+    seen: dict[str, int] = {}
+    out: list[RetrievedChunk] = []
+    for h in hits:
+        used = seen.get(h.document_id, 0)
+        if used >= max_per_doc:
+            continue
+        seen[h.document_id] = used + 1
+        out.append(h)
+    return out
 
 
 def expand_parents(store: KBStore, hits: list[RetrievedChunk]) -> list[RetrievedChunk]:
@@ -407,6 +483,7 @@ def expand_parents(store: KBStore, hits: list[RetrievedChunk]) -> list[Retrieved
             score=best.score,
             vector_score=best.vector_score,
             lexical_score=best.lexical_score,
+            rerank_score=best.rerank_score,
         ))
     return out
 
