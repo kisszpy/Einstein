@@ -10,6 +10,7 @@ import { AgentsPage } from "@/features/agents/AgentsPage";
 import { AdminPage } from "@/features/admin/AdminPage";
 import { EvalPage } from "@/features/eval/EvalPage";
 import { PlatformPage } from "@/features/platform/PlatformPage";
+import { ModelsPage } from "@/features/models/ModelsPage";
 
 export const router = createBrowserRouter([
   { path: "/login", element: <LoginPage /> },
@@ -28,6 +29,7 @@ export const router = createBrowserRouter([
       { path: "experts", element: <HubPage /> },
       { path: "skills", element: <HubPage /> },
       { path: "agents", element: <AgentsPage /> },
+      { path: "models", element: <ModelsPage /> },
       { path: "mcp", element: <HubPage /> },
       { path: "eval", element: <EvalPage /> },
       { path: "platform", element: <PlatformPage /> },

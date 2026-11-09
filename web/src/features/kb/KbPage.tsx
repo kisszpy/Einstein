@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { VisibilityBadge, VisibilitySelect, VISIBILITY_HINT, type Visibility } from "@/components/ui/visibility";
 import { BatchImport } from "@/features/kb/BatchImport";
 import { cn } from "@/lib/utils";
 
 interface KBItem {
   id: string;
   name: string;
+  description: string;
+  visibility: string;
+  owner_id: string;
+  mine: boolean;
   document_count: number;
 }
 
@@ -14,6 +19,31 @@ interface DocItem {
   id: string;
   name: string;
   chunk_count: number;
+  version: number;
+  source: string;
+  status: string;
+  updated_at: string;
+}
+
+interface ChunkItem {
+  id: string;
+  seq: number;
+  text: string;
+  chars: number;
+  char_start: number;
+  char_end: number;
+  embedding_kind: string;
+  has_vector: boolean;
+  parent_seq: number | null;
+}
+
+interface DocVersion {
+  version: number;
+  chunk_count: number;
+  chars: number;
+  source: string;
+  note: string;
+  created_at: string;
 }
 
 interface SearchHit {
@@ -50,11 +80,20 @@ async function readError(res: Response): Promise<string> {
   return `请求失败（HTTP ${res.status}）`;
 }
 
+function shortTime(iso: string): string {
+  if (!iso) return "—";
+  return iso.replace("T", " ").slice(0, 16);
+}
+
 export function KbPage() {
   const [kbs, setKbs] = useState<KBItem[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [docs, setDocs] = useState<DocItem[]>([]);
   const [newKbName, setNewKbName] = useState("");
+  const [newKbDesc, setNewKbDesc] = useState("");
+  const [newKbVisibility, setNewKbVisibility] = useState<Visibility>("private");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [docName, setDocName] = useState("");
   const [docContent, setDocContent] = useState("");
   const [query, setQuery] = useState("");
@@ -63,6 +102,17 @@ export function KbPage() {
   const [mode, setMode] = useState<SearchMode>("hybrid");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  // ---- 文档管理：切片编辑 / 版本回滚 / 单篇重建 ----
+  const [openDoc, setOpenDoc] = useState<string | null>(null);
+  const [panel, setPanel] = useState<"chunks" | "versions">("chunks");
+  const [chunks, setChunks] = useState<ChunkItem[]>([]);
+  const [chunkDrafts, setChunkDrafts] = useState<Record<string, string>>({});
+  const [versions, setVersions] = useState<DocVersion[]>([]);
+  const [panelBusy, setPanelBusy] = useState(false);
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
+
+  const currentKb = kbs.find((k) => k.id === selected) ?? null;
 
   const loadKbs = useCallback(async () => {
     const res = await fetch("/api/kb");
@@ -75,6 +125,12 @@ export function KbPage() {
     void loadKbs();
   }, [loadKbs]);
 
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
   /** 导入结束后刷新文档与库计数 */
   const refreshDocs = useCallback(async () => {
     if (!selected) return;
@@ -82,30 +138,62 @@ export function KbPage() {
       fetch(`/api/kb/${selected}/documents`).then((r) => r.json()),
       fetch("/api/kb").then((r) => r.json()),
     ]);
-    setDocs(docsRes as DocItem[]);
+    const nextDocs = docsRes as DocItem[];
+    setDocs(nextDocs);
     setKbs(kbsRes as KBItem[]);
+    // 文档已被删除时收起展开的面板，避免停留在不存在的目标上
+    setOpenDoc((prev) => (prev && nextDocs.some((d) => d.id === prev) ? prev : null));
   }, [selected]);
 
   useEffect(() => {
     if (!selected) return;
     setHits(null);
     setError(null);
+    setOpenDoc(null);
     void refreshDocs();
   }, [selected, refreshDocs]);
 
   const createKb = async () => {
     if (!newKbName.trim()) return;
     setBusy(true);
-    setError(null);
+    setCreateError(null);
     try {
       const res = await fetch("/api/kb", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newKbName.trim() }),
+        body: JSON.stringify({
+          name: newKbName.trim(),
+          description: newKbDesc.trim(),
+          visibility: newKbVisibility,
+        }),
       });
       if (!res.ok) throw new Error(await readError(res));
       setNewKbName("");
+      setNewKbDesc("");
+      setNewKbVisibility("private");
+      setCreateOpen(false);
+      setNotice("知识库已创建");
       await loadKbs();
+    } catch (e) {
+      setCreateError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** 创建者改自己的库：名称 / 描述 / 可见范围走同一个 PATCH */
+  const patchKb = async (kb: KBItem, body: { name?: string; description?: string; visibility?: string }) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/kb/${kb.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      await loadKbs();
+      if (body.visibility) setNotice(`「${kb.name}」可见范围已改为 ${VISIBILITY_HINT[body.visibility as Visibility]}`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -127,12 +215,160 @@ export function KbPage() {
       if (!res.ok) throw new Error(await readError(res));
       setDocName("");
       setDocContent("");
-      setDocs(await (await fetch(`/api/kb/${selected}/documents`)).json());
-      await loadKbs();
+      await refreshDocs();
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const loadChunks = useCallback(
+    async (docId: string) => {
+      if (!selected) return;
+      setPanelBusy(true);
+      try {
+        const res = await fetch(`/api/kb/${selected}/documents/${docId}/chunks`);
+        if (!res.ok) throw new Error(await readError(res));
+        const data = (await res.json()) as ChunkItem[];
+        setChunks(data);
+        setChunkDrafts(Object.fromEntries(data.map((c) => [c.id, c.text])));
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setPanelBusy(false);
+      }
+    },
+    [selected],
+  );
+
+  const loadVersions = useCallback(
+    async (docId: string) => {
+      if (!selected) return;
+      setPanelBusy(true);
+      try {
+        const res = await fetch(`/api/kb/${selected}/documents/${docId}/versions`);
+        if (!res.ok) throw new Error(await readError(res));
+        setVersions((await res.json()) as DocVersion[]);
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setPanelBusy(false);
+      }
+    },
+    [selected],
+  );
+
+  const togglePanel = async (doc: DocItem, next: "chunks" | "versions") => {
+    if (openDoc === doc.id && panel === next) {
+      setOpenDoc(null);
+      return;
+    }
+    setOpenDoc(doc.id);
+    setPanel(next);
+    setChunks([]);
+    setVersions([]);
+    if (next === "chunks") await loadChunks(doc.id);
+    else await loadVersions(doc.id);
+  };
+
+  const saveChunk = async (chunk: ChunkItem) => {
+    if (!selected) return;
+    const text = (chunkDrafts[chunk.id] ?? "").trim();
+    if (!text) {
+      setError("切片文本不能为空");
+      return;
+    }
+    setRowBusy(chunk.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/kb/${selected}/chunks/${chunk.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      const saved = (await res.json()) as { id: string; text: string; chars: number };
+      setChunks((prev) =>
+        prev.map((c) => (c.id === saved.id ? { ...c, text: saved.text, chars: saved.chars } : c)),
+      );
+      setChunkDrafts((prev) => ({ ...prev, [saved.id]: saved.text }));
+      setNotice(`切片 #${chunk.seq} 已保存并重嵌入`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRowBusy(null);
+    }
+  };
+
+  const removeDoc = async (doc: DocItem) => {
+    if (!selected) return;
+    if (
+      !window.confirm(`删除文档「${doc.name}」？其 ${doc.chunk_count} 个切片将一并删除，不可恢复。`)
+    )
+      return;
+    setRowBusy(doc.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/kb/${selected}/documents/${doc.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(await readError(res));
+      const data = (await res.json()) as { ok: boolean; removed_chunks: number };
+      setNotice(`已删除「${doc.name}」，清理 ${data.removed_chunks} 个切片`);
+      await refreshDocs();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRowBusy(null);
+    }
+  };
+
+  const reindexDoc = async (doc: DocItem) => {
+    if (!selected) return;
+    setRowBusy(doc.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/kb/${selected}/documents/${doc.id}/reindex`, { method: "POST" });
+      if (!res.ok) throw new Error(await readError(res));
+      const data = (await res.json()) as { ok: boolean; chunk_count: number };
+      setNotice(`「${doc.name}」已重建，共 ${data.chunk_count} 个切片`);
+      await refreshDocs();
+      if (openDoc === doc.id && panel === "chunks") await loadChunks(doc.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRowBusy(null);
+    }
+  };
+
+  const rollbackDoc = async (doc: DocItem, version: number) => {
+    if (!selected) return;
+    if (
+      !window.confirm(
+        `回滚到 v${version}？该版本内容会作为新版本重新入库，历史版本不会丢失。`,
+      )
+    )
+      return;
+    setRowBusy(doc.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/kb/${selected}/documents/${doc.id}/rollback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version }),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      const data = (await res.json()) as {
+        version: number;
+        chunk_count: number;
+        rolled_back_to: number;
+      };
+      setNotice(`已回滚到 v${data.rolled_back_to}，当前 v${data.version}（${data.chunk_count} 个切片）`);
+      await refreshDocs();
+      await loadVersions(doc.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRowBusy(null);
     }
   };
 
@@ -224,8 +460,13 @@ export function KbPage() {
                     : "text-secondary hover:bg-surface-3 hover:text-primary",
                 )}
               >
-                <div className="truncate text-[13px]">{kb.name}</div>
-                <div className="text-xs opacity-70">{kb.document_count} 篇文档</div>
+                <div className="flex items-center gap-1.5">
+                  <span className="min-w-0 truncate text-[13px]">{kb.name}</span>
+                  <VisibilityBadge value={kb.visibility} className="shrink-0" />
+                </div>
+                <div className="text-xs opacity-70">
+                  {kb.document_count} 篇文档{kb.mine ? "" : " · 共享"}
+                </div>
               </button>
               {selected === kb.id && (
                 <button
@@ -239,16 +480,9 @@ export function KbPage() {
             </div>
           ))}
         </div>
-        <div className="mt-4 flex gap-2">
-          <input
-            value={newKbName}
-            onChange={(e) => setNewKbName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && void createKb()}
-            placeholder="新建知识库名称"
-            className="h-9 min-w-0 flex-1 rounded-lg border border-line bg-surface-1 px-3 text-[13px] outline-none placeholder:text-tertiary focus:border-line-strong"
-          />
-          <Button disabled={busy || !newKbName.trim()} onClick={() => void createKb()}>
-            新建
+        <div className="mt-4">
+          <Button variant="outline" className="w-full" onClick={() => setCreateOpen(true)}>
+            新建知识库
           </Button>
         </div>
       </aside>
@@ -261,6 +495,34 @@ export function KbPage() {
           </div>
         ) : (
           <div className="mx-auto max-w-[860px] space-y-6 px-8 py-8">
+            {currentKb && (
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h2 className="truncate text-[15px] font-medium">{currentKb.name}</h2>
+                    <VisibilityBadge value={currentKb.visibility} />
+                  </div>
+                  {currentKb.description && (
+                    <p className="mt-1 text-[12.5px] text-secondary">{currentKb.description}</p>
+                  )}
+                </div>
+                {currentKb.mine && (
+                  <label className="flex shrink-0 items-center gap-2 text-xs text-tertiary">
+                    可见范围
+                    <VisibilitySelect
+                      value={currentKb.visibility}
+                      disabled={busy}
+                      onChange={(v) => void patchKb(currentKb, { visibility: v })}
+                    />
+                  </label>
+                )}
+              </div>
+            )}
+            {notice && (
+              <div className="rounded-lg border border-brand/40 bg-brand-soft px-3.5 py-2.5 text-[12.5px] text-brand">
+                {notice}
+              </div>
+            )}
             {error && (
               <div className="flex items-start justify-between gap-3 rounded-lg border border-danger/40 bg-danger/10 px-3.5 py-2.5 text-[12.5px] text-danger">
                 <span className="min-w-0 break-words">{error}</span>
@@ -320,15 +582,171 @@ export function KbPage() {
                 <p className="mt-2 text-xs text-tertiary">还没有文档</p>
               ) : (
                 <div className="mt-3 space-y-1">
-                  {docs.map((d) => (
-                    <div
-                      key={d.id}
-                      className="flex items-center justify-between rounded-lg px-3 py-2 text-[13px] hover:bg-surface-3"
-                    >
-                      <span className="text-primary">{d.name}</span>
-                      <span className="text-xs text-tertiary">{d.chunk_count} 个切片</span>
-                    </div>
-                  ))}
+                  {docs.map((d) => {
+                    const expanded = openDoc === d.id;
+                    return (
+                      <div key={d.id} className="rounded-lg transition-colors duration-150 hover:bg-surface-3">
+                        <div className="group flex items-center justify-between gap-3 px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate text-[13px] text-primary">{d.name}</span>
+                              <span className="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 font-mono text-[10.5px] text-tertiary">
+                                v{d.version}
+                              </span>
+                            </div>
+                            <div className="text-xs text-tertiary">
+                              {d.chunk_count} 个切片
+                              {d.source && ` · ${d.source}`}
+                              {d.updated_at && ` · ${shortTime(d.updated_at)}`}
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100">
+                            <button
+                              onClick={() => void togglePanel(d, "chunks")}
+                              className={cn(
+                                "rounded-md px-1.5 py-1 text-xs transition-colors duration-150 hover:bg-surface-1 hover:text-primary",
+                                expanded && panel === "chunks" ? "text-brand" : "text-tertiary",
+                              )}
+                            >
+                              切片
+                            </button>
+                            <button
+                              onClick={() => void togglePanel(d, "versions")}
+                              className={cn(
+                                "rounded-md px-1.5 py-1 text-xs transition-colors duration-150 hover:bg-surface-1 hover:text-primary",
+                                expanded && panel === "versions" ? "text-brand" : "text-tertiary",
+                              )}
+                            >
+                              版本
+                            </button>
+                            <button
+                              disabled={rowBusy === d.id}
+                              onClick={() => void reindexDoc(d)}
+                              className="rounded-md px-1.5 py-1 text-xs text-tertiary transition-colors duration-150 hover:bg-surface-1 hover:text-primary disabled:opacity-50"
+                            >
+                              {rowBusy === d.id ? "处理中…" : "重建"}
+                            </button>
+                            <button
+                              disabled={rowBusy === d.id}
+                              onClick={() => void removeDoc(d)}
+                              className="rounded-md px-1.5 py-1 text-xs text-tertiary transition-colors duration-150 hover:bg-danger/10 hover:text-danger disabled:opacity-50"
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+
+                        {expanded && panel === "chunks" && (
+                          <div className="mx-3 mb-2 space-y-2 rounded-lg border border-line bg-surface-2 p-3">
+                            <div className="flex items-center justify-between text-[11.5px] text-tertiary">
+                              <span>切片（{chunks.length}）· 修改保存后会单条重嵌入</span>
+                              <button
+                                onClick={() => setOpenDoc(null)}
+                                className="transition-colors hover:text-secondary"
+                              >
+                                收起
+                              </button>
+                            </div>
+                            {panelBusy && <p className="py-3 text-center text-xs text-tertiary">加载中…</p>}
+                            {!panelBusy && chunks.length === 0 && (
+                              <p className="py-3 text-center text-xs text-tertiary">该文档没有切片</p>
+                            )}
+                            {chunks.map((c) => {
+                              const draft = chunkDrafts[c.id] ?? c.text;
+                              const dirty = draft !== c.text;
+                              return (
+                                <div key={c.id} className="rounded-lg border border-line bg-surface-1 p-2.5">
+                                  <div className="flex items-center justify-between gap-2 text-[11px] text-tertiary">
+                                    <span>
+                                      #{c.seq} · {draft.trim().length} 字
+                                      {c.parent_seq != null && ` · 父片 #${c.parent_seq}`}
+                                      {!c.has_vector && " · 无向量"}
+                                    </span>
+                                    <div className="flex items-center gap-1">
+                                      {dirty && (
+                                        <button
+                                          onClick={() =>
+                                            setChunkDrafts((prev) => ({ ...prev, [c.id]: c.text }))
+                                          }
+                                          className="rounded-md px-1.5 py-0.5 transition-colors hover:bg-surface-3 hover:text-secondary"
+                                        >
+                                          还原
+                                        </button>
+                                      )}
+                                      <button
+                                        disabled={!dirty || !draft.trim() || rowBusy === c.id}
+                                        onClick={() => void saveChunk(c)}
+                                        className="rounded-md px-1.5 py-0.5 text-brand transition-colors hover:bg-brand-soft disabled:opacity-40"
+                                      >
+                                        {rowBusy === c.id ? "保存中…" : "保存"}
+                                      </button>
+                                    </div>
+                                  </div>
+                                  <textarea
+                                    value={draft}
+                                    onChange={(e) =>
+                                      setChunkDrafts((prev) => ({ ...prev, [c.id]: e.target.value }))
+                                    }
+                                    rows={3}
+                                    className="mt-1.5 w-full resize-y rounded-md border border-line bg-surface-1 p-2 text-[12px] leading-relaxed outline-none focus:border-line-strong"
+                                  />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {expanded && panel === "versions" && (
+                          <div className="mx-3 mb-2 space-y-2 rounded-lg border border-line bg-surface-2 p-3">
+                            <div className="flex items-center justify-between text-[11.5px] text-tertiary">
+                              <span>版本历史 · 当前 v{d.version}</span>
+                              <button
+                                onClick={() => setOpenDoc(null)}
+                                className="transition-colors hover:text-secondary"
+                              >
+                                收起
+                              </button>
+                            </div>
+                            {panelBusy && <p className="py-3 text-center text-xs text-tertiary">加载中…</p>}
+                            {!panelBusy && versions.length === 0 && (
+                              <p className="py-3 text-center text-xs text-tertiary">
+                                还没有历史版本；同名文档内容变化或回滚时会生成快照。
+                              </p>
+                            )}
+                            {versions.map((v) => (
+                              <div
+                                key={v.version}
+                                className="flex items-center justify-between gap-3 rounded-lg border border-line bg-surface-1 px-3 py-2"
+                              >
+                                <div className="min-w-0">
+                                  <p className="flex items-center gap-2 text-[12px] text-primary">
+                                    <span className="font-mono">v{v.version}</span>
+                                    {v.note && <span className="text-tertiary">{v.note}</span>}
+                                    {v.version === d.version && (
+                                      <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[10.5px] text-brand">
+                                        当前
+                                      </span>
+                                    )}
+                                  </p>
+                                  <p className="truncate text-[11px] text-tertiary">
+                                    {v.chunk_count} 切片 · {v.chars} 字
+                                    {v.source && ` · ${v.source}`} · {shortTime(v.created_at)}
+                                  </p>
+                                </div>
+                                <button
+                                  disabled={rowBusy === d.id}
+                                  onClick={() => void rollbackDoc(d, v.version)}
+                                  className="shrink-0 rounded-md px-1.5 py-1 text-xs text-brand transition-colors duration-150 hover:bg-brand-soft disabled:opacity-50"
+                                >
+                                  回滚到此版
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </Card>
@@ -432,6 +850,52 @@ export function KbPage() {
           </div>
         )}
       </div>
+
+      {/* 新建知识库 */}
+      {createOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          onClick={() => setCreateOpen(false)}
+        >
+          <Card
+            className="w-full max-w-[420px] space-y-3 p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-[13px] font-medium">新建知识库</h3>
+            <input
+              autoFocus
+              value={newKbName}
+              onChange={(e) => setNewKbName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void createKb()}
+              placeholder="知识库名称"
+              className="h-9 w-full rounded-lg border border-line bg-surface-1 px-3 text-[13px] outline-none placeholder:text-tertiary focus:border-line-strong"
+            />
+            <textarea
+              value={newKbDesc}
+              onChange={(e) => setNewKbDesc(e.target.value)}
+              placeholder="描述（可选）"
+              rows={2}
+              className="w-full resize-y rounded-lg border border-line bg-surface-1 px-3 py-2 text-[13px] outline-none placeholder:text-tertiary focus:border-line-strong"
+            />
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-tertiary">可见范围</span>
+                <VisibilitySelect value={newKbVisibility} onChange={setNewKbVisibility} />
+              </div>
+              <span className="text-[11.5px] text-tertiary">{VISIBILITY_HINT[newKbVisibility]}</span>
+            </div>
+            {createError && <p className="text-xs text-danger">{createError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setCreateOpen(false)}>
+                取消
+              </Button>
+              <Button disabled={busy || !newKbName.trim()} onClick={() => void createKb()}>
+                创建
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

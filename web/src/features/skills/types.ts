@@ -36,6 +36,8 @@ export interface Skill {
   updated_at: string;
   version?: string;
   versions?: SkillVersion[];
+  visibility?: string;
+  owner_id?: string;
 }
 
 export interface RepoInfo {

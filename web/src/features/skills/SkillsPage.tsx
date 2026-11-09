@@ -12,6 +12,12 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  VisibilityBadge,
+  VisibilitySelect,
+  VISIBILITY_HINT,
+  type Visibility,
+} from "@/components/ui/visibility";
 import { InstallDialog } from "./InstallDialog";
 import { MarketPanel } from "./MarketPanel";
 import { SkillFilesDialog } from "./SkillFilesDialog";
@@ -24,7 +30,13 @@ const TOOL_OPTIONS = [
   { id: "text_stats", name: "文本统计" },
 ];
 
-const EMPTY_FORM = { name: "", description: "", system_prompt: "", tools: [] as string[] };
+const EMPTY_FORM = {
+  name: "",
+  description: "",
+  system_prompt: "",
+  tools: [] as string[],
+  visibility: "private" as Visibility,
+};
 
 function shortDate(iso: string): string {
   if (!iso) return "—";
@@ -75,6 +87,7 @@ export function SkillsPage() {
       description: s.description,
       system_prompt: s.system_prompt,
       tools: [...s.tools],
+      visibility: (s.visibility ?? "private") as Visibility,
     });
     setError(null);
   };
@@ -319,7 +332,7 @@ export function SkillsPage() {
                   rows={6}
                   className="w-full resize-y rounded-lg border border-line bg-surface-1 px-3 py-2 font-mono text-[12.5px] outline-none focus:border-brand"
                 />
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs text-tertiary">依赖工具：</span>
                   {TOOL_OPTIONS.map((t) => (
                     <button
@@ -335,6 +348,12 @@ export function SkillsPage() {
                       {t.name}
                     </button>
                   ))}
+                  <span className="ml-4 text-xs text-tertiary">可见范围</span>
+                  <VisibilitySelect
+                    value={form.visibility}
+                    onChange={(v) => setForm({ ...form, visibility: v })}
+                  />
+                  <span className="text-[11.5px] text-tertiary">{VISIBILITY_HINT[form.visibility]}</span>
                 </div>
                 {editing !== "new" && skills.find((s) => s.id === editing)?.source === "github" && (
                   <p className="text-[11.5px] text-tertiary">
@@ -379,6 +398,7 @@ export function SkillsPage() {
                             已停用
                           </span>
                         )}
+                        <VisibilityBadge value={s.visibility} />
                       </div>
                       <p className="mt-1 text-[12px] text-secondary">{s.description}</p>
 

@@ -2,6 +2,7 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Blocks,
   Bot,
+  Cpu,
   Database,
   FlaskConical,
   Globe,
@@ -38,6 +39,7 @@ const NAV: { title: string; items: NavEntry[] }[] = [
         icon: Blocks,
       },
       { to: "/agents", label: "智能体", icon: Bot },
+      { to: "/models", label: "模型", icon: Cpu },
     ],
   },
   {

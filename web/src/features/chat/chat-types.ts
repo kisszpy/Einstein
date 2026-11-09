@@ -47,6 +47,8 @@ export interface ChatMessage {
   reasoning?: string;
   /** 本轮联网状态与来源 */
   web?: WebState;
+  /** 该答案已被「重新生成」取代：仍展示在列表里，标一行「上一版」 */
+  superseded?: boolean;
 }
 
 /** 后端 SSE 事件 */

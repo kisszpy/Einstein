@@ -1,0 +1,14 @@
+import { chromium } from "playwright-core";
+import fs from "node:fs";
+const CHROME = process.env.CHROME_PATH || `${process.env.LOCALAPPDATA}\\ms-playwright\\chromium-1208\\chrome-win64\\chrome.exe`;
+const dir = "C:/Users/Admin/WorkBuddy/2026-11-05-01-05-07/.workbuddy/shots";
+fs.mkdirSync(dir, { recursive: true });
+const b = await chromium.launch({ executablePath: CHROME, headless: true });
+const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
+await p.goto("http://127.0.0.1:5173/login", { waitUntil: "networkidle", timeout: 60000 });
+await p.waitForTimeout(1500);
+await p.screenshot({ path: `${dir}/fe-login.png` });
+const txt = (await p.innerText("body")).slice(0, 160).replace(/\s+/g, " ");
+console.log("title:", await p.title());
+console.log("body :", txt);
+await b.close();

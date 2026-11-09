@@ -123,11 +123,18 @@ body {
   --login-glow: rgba(0, 194, 154, 0.2);
   --login-glow-alt: rgba(0, 140, 194, 0.14);
   --login-grid: rgba(0, 0, 0, 0.05);
+  /* 神经网络节点的 rgb 分量，canvas 里拼 rgba 用，必须是不带 rgba() 的三元组 */
+  --login-node: 0, 178, 146;
+  --login-link: 0, 150, 152;
+  --login-accent: #4f7cff;
 }
 .dark {
   --login-glow: rgba(47, 214, 176, 0.18);
   --login-glow-alt: rgba(72, 120, 255, 0.14);
   --login-grid: rgba(255, 255, 255, 0.05);
+  --login-node: 47, 214, 176;
+  --login-link: 84, 206, 198;
+  --login-accent: #7aa2ff;
 }
 
 @keyframes login-rise {
@@ -236,7 +243,166 @@ body {
   .login-fade,
   .login-drift,
   .login-shake,
-  .login-sweep {
+  .login-sweep,
+  .login-frame-spin,
+  .login-orbit,
+  .login-orbit-rev,
+  .login-halo,
+  .login-float,
+  .login-btn-sheen,
+  .login-pop,
+  .login-caret,
+  .login-done-ring,
+  .login-trace,
+  .login-card-glow {
     animation: none;
   }
+}
+
+/* ---------- 登录页 2.0：轨道 / 流动描边 / 代码行光标 ---------- */
+@keyframes login-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes login-spin-rev {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+@keyframes login-halo {
+  0%,
+  100% {
+    opacity: 0.32;
+    transform: scale(0.88);
+  }
+  50% {
+    opacity: 0.72;
+    transform: scale(1.12);
+  }
+}
+
+@keyframes login-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes login-sheen {
+  0% {
+    transform: translateX(-140%) skewX(-16deg);
+  }
+  55%,
+  100% {
+    transform: translateX(320%) skewX(-16deg);
+  }
+}
+
+@keyframes login-pop {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes login-caret {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  95% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes login-ring-out {
+  from {
+    opacity: 0.85;
+    transform: translate(-50%, -50%) scale(0.72);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.9);
+  }
+}
+
+@keyframes login-trace {
+  0% {
+    left: -18%;
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  100% {
+    left: 108%;
+    opacity: 0;
+  }
+}
+
+/* 卡片描边：一整块锥形渐变在后面缓慢转，靠内层不透明卡片遮出 1px 环 */
+.login-frame-spin {
+  animation: login-spin 24s linear infinite;
+  will-change: transform;
+}
+
+.login-orbit {
+  animation: login-spin 16s linear infinite;
+}
+
+.login-orbit-rev {
+  animation: login-spin-rev 26s linear infinite;
+}
+
+.login-halo {
+  animation: login-halo 5.5s ease-in-out infinite;
+}
+
+.login-float {
+  animation: login-float 9s ease-in-out infinite;
+}
+
+.login-card-glow {
+  background: radial-gradient(ellipse at 50% 30%, var(--login-glow), transparent 70%);
+  animation: login-halo 7.5s ease-in-out infinite;
+}
+
+.login-btn-sheen {
+  left: 0;
+  width: 42%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.34), transparent);
+  animation: login-sheen 5.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.login-pop {
+  animation: login-pop 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.login-caret {
+  animation: login-caret 1.1s steps(1) infinite;
+}
+
+.login-done-ring {
+  animation: login-ring-out 0.95s ease-out both;
+}
+
+.login-trace {
+  animation: login-trace 6.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }

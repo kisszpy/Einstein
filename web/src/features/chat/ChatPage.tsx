@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Archive, Globe, Pin, PinOff, Search, SquarePen } from "lucide-react";
+import { Archive, Globe, Pencil, Pin, PinOff, Search, SquarePen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   ComposerFrame,
@@ -46,9 +46,20 @@ interface ConversationItem {
 }
 
 export function ChatPage() {
-  const { messages, isStreaming, conversationId, send, stop, reset, loadConversation } =
-    useChatStream();
+  const {
+    messages,
+    isStreaming,
+    conversationId,
+    send,
+    regenerateAt,
+    resendFrom,
+    stop,
+    reset,
+    loadConversation,
+  } = useChatStream();
   const [input, setInput] = useState("");
+  /** 正在编辑的 user 消息下标：发送时截断它及其之后的消息 */
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -109,14 +120,37 @@ export function ChatPage() {
     const text = input;
     if (!text.trim() || isStreaming) return;
     setInput("");
+    // 编辑态：截断该条提问及其之后的消息，重新走一次普通请求
+    const editTarget = editingIndex !== null ? messages[editingIndex] : undefined;
+    if (editingIndex !== null && editTarget?.role === "user") {
+      const index = editingIndex;
+      setEditingIndex(null);
+      void resendFrom(index, text, expertId, webMode);
+      return;
+    }
+    setEditingIndex(null);
     void send(text, expertId, webMode);
+  };
+
+  /** 把这条提问填回输入框；发送时替换掉旧提问及其之后的内容 */
+  const startEdit = (index: number, content: string) => {
+    setEditingIndex(index);
+    setInput(content);
+  };
+
+  const cancelEdit = () => {
+    setEditingIndex(null);
+    setInput("");
   };
 
   const activeExpert = experts.find((e) => e.id === expertId);
 
   const removeConversation = async (id: string) => {
     await fetch(`/api/conversations/${id}`, { method: "DELETE" });
-    if (id === conversationId) reset();
+    if (id === conversationId) {
+      cancelEdit();
+      reset();
+    }
     void loadList(searchQuery);
     void loadArchived(showArchived);
   };
@@ -150,7 +184,10 @@ export function ChatPage() {
         "group flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 transition-colors duration-150 hover:bg-surface-3",
         c.id === conversationId && "bg-brand-soft",
       )}
-      onClick={() => void loadConversation(c.id)}
+      onClick={() => {
+        cancelEdit();
+        void loadConversation(c.id);
+      }}
     >
       <div className="min-w-0">
         <div
@@ -215,11 +252,32 @@ export function ChatPage() {
 
   const empty = messages.length === 0;
 
+  // 轮次按出现的 user 消息编号：重新生成会多出助手消息，不能按序号除 2
+  let turnNo = 0;
+  const turnOf = messages.map((m) => {
+    if (m.role === "user") turnNo += 1;
+    return Math.max(turnNo, 1);
+  });
+  /** 某条回答对应的用户问题（差评转评测用例时用） */
+  const queryOf = (index: number) => {
+    for (let j = index - 1; j >= 0; j -= 1) {
+      const m = messages[j];
+      if (m?.role === "user") return m.content;
+    }
+    return "";
+  };
+
   return (
     <div className="flex h-full">
       {/* 会话列表（服务端持久化，生产切 PostgreSQL） */}
       <aside className="hidden w-64 shrink-0 flex-col border-r border-line bg-surface-2 p-3 md:flex">
-        <Button className="mb-3 w-full" onClick={reset}>
+        <Button
+          className="mb-3 w-full"
+          onClick={() => {
+            cancelEdit();
+            reset();
+          }}
+        >
           新会话
         </Button>
         {/* 会话搜索：标题 + 消息正文全文匹配 */}
@@ -302,7 +360,17 @@ export function ChatPage() {
                     key={m.id}
                     message={m}
                     conversationId={conversationId}
-                    turn={Math.ceil((i + 1) / 2)}
+                    turn={turnOf[i]}
+                    userQuery={m.role === "assistant" ? queryOf(i) : undefined}
+                    busy={isStreaming}
+                    onRegenerate={
+                      m.role === "assistant"
+                        ? () => void regenerateAt(i, expertId, webMode)
+                        : undefined
+                    }
+                    onEdit={
+                      m.role === "user" ? () => startEdit(i, m.content) : undefined
+                    }
                   />
                 ))}
                 <div ref={bottomRef} />
@@ -349,13 +417,35 @@ export function ChatPage() {
               )}
             </div>
           )}
+          {/* 编辑态提示：说明这次发送会截断旧内容 */}
+          {editingIndex !== null && (
+            <div className="mb-2 flex items-center gap-2 rounded-lg border border-brand/40 bg-brand-soft px-3 py-1.5 text-xs text-brand">
+              <Pencil size={12} className="shrink-0" />
+              <span className="min-w-0 flex-1 truncate">
+                正在编辑第 {turnOf[editingIndex] ?? 1} 轮提问，发送后这条提问之后的内容将被替换
+              </span>
+              <button
+                type="button"
+                onClick={cancelEdit}
+                className="shrink-0 text-tertiary transition-colors hover:text-secondary"
+              >
+                取消
+              </button>
+            </div>
+          )}
           <ComposerFrame data-composer-frame>
             <ComposerInput
+              // 进入/退出编辑态时重挂输入框，自动聚焦并重新算高度
+              key={editingIndex ?? "compose"}
               value={input}
               onChange={setInput}
               onSubmit={submit}
               autoFocus
-              placeholder="输入消息，Enter 发送，Shift + Enter 换行"
+              placeholder={
+                editingIndex !== null
+                  ? "修改后发送，将替换这条提问之后的内容"
+                  : "输入消息，Enter 发送，Shift + Enter 换行"
+              }
               className="min-h-[52px]"
             />
             <ComposerToolbar

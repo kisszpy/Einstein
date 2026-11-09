@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  VisibilityBadge,
+  VisibilitySelect,
+  VISIBILITY_HINT,
+  type Visibility,
+} from "@/components/ui/visibility";
 import { cn } from "@/lib/utils";
 
 interface Expert {
@@ -13,15 +19,25 @@ interface Expert {
   kb_ids: string[];
   tool_ids: string[];
   temperature: number;
+  model_id?: string;
   enabled: boolean;
   greeting?: string;
   suggestions?: string[];
   status?: string;
+  visibility?: string;
+  owner_id?: string;
 }
 
 interface Skill {
   id: string;
   name: string;
+  enabled: boolean;
+}
+
+interface ModelOption {
+  id: string;
+  name: string;
+  kind: string;
   enabled: boolean;
 }
 
@@ -46,8 +62,10 @@ const EMPTY_FORM = {
   kb_ids: [] as string[],
   tool_ids: [] as string[],
   temperature: 0.7,
+  model_id: "",
   greeting: "",
   suggestions: "" as string, // 逗号/换行分隔，保存时拆分
+  visibility: "private" as Visibility,
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -103,6 +121,7 @@ export function ExpertsPage() {
   const [experts, setExperts] = useState<Expert[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [kbs, setKbs] = useState<KbInfo[]>([]);
+  const [models, setModels] = useState<ModelOption[]>([]);
   const [editing, setEditing] = useState<string | "new" | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
@@ -122,6 +141,26 @@ export function ExpertsPage() {
     void load();
   }, [load]);
 
+  // 模型列表失败不影响专家表单：选项里只剩「跟随平台默认」
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/models");
+        if (!res.ok) return;
+        const data = (await res.json()) as { items?: ModelOption[] };
+        if (alive && Array.isArray(data.items)) {
+          setModels(data.items.filter((m) => m.kind === "chat" && m.enabled));
+        }
+      } catch {
+        /* 后端没起或未登录时静默降级 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const startEdit = (e: Expert) => {
     setEditing(e.id);
     setForm({
@@ -133,8 +172,10 @@ export function ExpertsPage() {
       kb_ids: [...e.kb_ids],
       tool_ids: [...e.tool_ids],
       temperature: e.temperature,
+      model_id: e.model_id ?? "",
       greeting: e.greeting ?? "",
       suggestions: (e.suggestions ?? []).join("、"),
+      visibility: (e.visibility ?? "private") as Visibility,
     });
     setError(null);
   };
@@ -152,6 +193,7 @@ export function ExpertsPage() {
     }
     const payload = {
       ...form,
+      model_id: form.model_id || null,
       suggestions: form.suggestions
         .split(/[、,，\n]/)
         .map((s) => s.trim())
@@ -284,7 +326,7 @@ export function ExpertsPage() {
               selected={form.tool_ids}
               onToggle={(id) => toggle("tool_ids", id)}
             />
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <span className="text-xs text-tertiary">温度</span>
               <input
                 type="range"
@@ -296,6 +338,25 @@ export function ExpertsPage() {
                 className="w-48 accent-[var(--brand)]"
               />
               <span className="text-xs text-secondary">{form.temperature.toFixed(1)}</span>
+              <span className="ml-4 text-xs text-tertiary">模型</span>
+              <select
+                value={form.model_id}
+                onChange={(e) => setForm({ ...form, model_id: e.target.value })}
+                className="h-8 max-w-[200px] rounded-lg border border-line bg-surface-1 px-2 text-xs text-primary outline-none focus:border-brand"
+              >
+                <option value="">跟随平台默认</option>
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+              <span className="ml-4 text-xs text-tertiary">可见范围</span>
+              <VisibilitySelect
+                value={form.visibility}
+                onChange={(v) => setForm({ ...form, visibility: v })}
+              />
+              <span className="text-[11.5px] text-tertiary">{VISIBILITY_HINT[form.visibility]}</span>
             </div>
             {error && <p className="text-xs text-danger">{error}</p>}
             <div className="flex gap-2">
@@ -329,6 +390,7 @@ export function ExpertsPage() {
                       >
                         {STATUS_LABEL[e.status ?? "draft"] ?? e.status}
                       </span>
+                      <VisibilityBadge value={e.visibility} />
                     </div>
                     <p className="mt-0.5 text-xs text-secondary">{e.description}</p>
                     <div className="mt-1.5 flex flex-wrap gap-1">
