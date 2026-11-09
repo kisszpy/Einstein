@@ -104,6 +104,10 @@ def _make_kb_search(kb_ids: list[str], ctx: "AgentContext | None" = None):
             for c in result.citations:
                 if c["chunk_id"] not in known:
                     ctx.citations.append({**c, "index": len(ctx.citations) + 1})
+        if result.error:
+            # 向量与嵌入模型不匹配：把"该重建索引"直接告诉模型，由它转述给用户。
+            # 报成"未命中"会让人以为知识库没内容，去重传文档——完全无效的动作。
+            return f"知识库检索失败：{result.error}"
         if not result.hits:
             return (
                 "知识库中没有找到相关内容（检索结果均低于相关性门限）。"
@@ -163,6 +167,8 @@ async def preflight_kb(
         for c in result.citations:
             if c["chunk_id"] not in known:
                 ctx.citations.append({**c, "index": len(ctx.citations) + 1})
+    if result.error:
+        return f"[知识库预取] 检索失败：{result.error}"
     if not result.hits:
         return (
             "[知识库预取] 知识库中没有检索到与任务相关的内容（均低于相关性门限）。"

@@ -41,7 +41,7 @@ from deepagents.backends.protocol import (
 )
 from deepagents.middleware.filesystem import FilesystemMiddleware, supports_execution
 from langchain.agents.middleware import TodoListMiddleware
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.errors import GraphRecursionError
 from langgraph.types import Command
 
@@ -52,6 +52,8 @@ from app.services.agent_runtime import (
     build_messages,
     final_frame,
     get_checkpointer,
+    memory_block,
+    recall_memory,
     short,
     thread_config,
 )
@@ -361,6 +363,7 @@ def _build_agent(
         # 挂了知识库就追加"KB 优先"硬规则，否则任务路由会把模型带向 web_search
         system_prompt=(
             DEEP_SYSTEM_PROMPT + prompt_extra + extras
+            + memory_block(list(getattr(ctx, "memory", []) or []))
             + (kb_directive(kb_ids) if kb_ids else "")
         ),
         backend=backend,
@@ -425,6 +428,36 @@ def _continuation_note(last: bool) -> str:
     )
 
 
+def _chunk_delta(chunk: Any, meta: Any) -> str:
+    """从 messages 流的一个 chunk 里取出「可以立刻显示给用户」的文本增量。
+
+    两道过滤，缺一个就会出现"答案里混进别人的话"：
+    1. **子图/子智能体**：`task` 委派出去的 agent 用的是同一个模型，它边想边说
+       的文本也在 messages 流里。父子图在 checkpoint_ns 里用 `|` 连接
+       （`model:uuid|model:uuid`），主图的 ns 只有一段（`model:uuid`），
+       所以含 `|` 的一律丢掉。**注意不能把 `:` 当分隔符**——主图自己的 ns
+       就长这样，那样会把主模型的输出全过滤掉（实测踩过）。
+    2. **非助手增量**：只有 `AIMessageChunk` 才有正文；工具结果、状态更新都在
+       updates 流里，不在这里。
+    """
+    if not isinstance(chunk, AIMessageChunk):
+        return ""
+    ns = str((meta or {}).get("langgraph_checkpoint_ns") or "")
+    if "|" in ns:
+        return ""
+    content = chunk.content
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        # 部分网关把正文拆成 [{type:"text", text:"..."}]
+        return "".join(
+            part.get("text") or ""
+            for part in content
+            if isinstance(part, dict) and str(part.get("type", "")).startswith("text")
+        )
+    return ""
+
+
 async def _iter_events(
     agent,
     payload: Any,
@@ -439,6 +472,10 @@ async def _iter_events(
     carry：跨预算续跑的载体。流式过程中把真实消息对象与计划状态写回
     carry，触顶后调用方用它构造续跑输入（已完成对话 + todos 不丢）。
     thread_id：检查点线程。有它才能中断后续跑，也让 todos 跨请求存活。
+
+    真流式：同时订阅 `messages` 模式，把模型增量作为 `delta` 事件立刻交给
+    上层。工具调用轮次里模型也可能先说话，一旦开始调工具就发 `answer_reset`
+    让前端把这段"过程中的话"撤掉——否则最终答案里会掺进两轮草稿。
     """
     if carry is None:
         carry = {}
@@ -448,6 +485,7 @@ async def _iter_events(
     emitted_artifacts = 0
     last_plan = ""
     final_text = ""
+    answer_buf = ""                  # reset 之后已下发给前端的正文
     started: dict[str, float] = {}   # tool_call_id -> 开始时刻，用来算耗时
 
     def _plan_of(todos: Any) -> dict | None:
@@ -473,11 +511,29 @@ async def _iter_events(
     else:
         invoke_input = payload      # Command(resume=...) 原样送入
 
-    async for update in agent.astream(
+    streaming = bool(getattr(get_settings(), "agent_stream", True))
+    stream_mode: Any = ["updates", "messages"] if streaming else "updates"
+
+    async for item in agent.astream(
         invoke_input,
-        stream_mode="updates",
+        stream_mode=stream_mode,
         config=thread_config(thread_id, RECURSION_LIMIT),
     ):
+        # 多模式订阅时事件是 (mode, payload)；单模式时就是 payload 本身
+        if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str):
+            mode, data = item
+        else:
+            mode, data = "updates", item
+
+        if mode == "messages":
+            chunk, meta = data if isinstance(data, tuple) else (data, {})
+            text = _chunk_delta(chunk, meta)
+            if text:
+                answer_buf += text
+                yield {"kind": "delta", "text": text}
+            continue
+
+        update = data
         interrupted: Any = None
         for _node, state in (update or {}).items():
             # 中断是「图暂停」而不是错误：LangGraph 用 __interrupt__ 键把
@@ -521,6 +577,10 @@ async def _iter_events(
 
                 tool_calls = getattr(msg, "tool_calls", None)
                 if tool_calls:
+                    if answer_buf:
+                        # 这一轮的正文只是"调工具之前说的话"，不是最终答案
+                        answer_buf = ""
+                        yield {"kind": "answer_reset"}
                     for tc in tool_calls:
                         started[tc.get("id") or ""] = time.perf_counter()
                         yield {
@@ -543,7 +603,7 @@ async def _iter_events(
                 yield {"kind": "__interrupt__", "value": event}
             return
 
-    yield {"kind": "__final_text__", "text": final_text}
+    yield {"kind": "__final_text__", "text": final_text, "streamed": answer_buf}
 
 
 def _interrupt_event(interrupted: Any) -> dict | None:
@@ -598,6 +658,7 @@ async def _run_engine(
     图从断点继续——已执行的工具调用不会重跑（这正是旧实现最大的坑）。
     """
     final_text = ""
+    streamed_buf = ""          # 已经作为 delta 下发给前端的正文（可真流式时非空）
     carry: dict[str, Any] = {"messages": [], "todos": None}
     base_messages = list(messages)  # 原始输入：续跑时用它 + carry 重建，不重复拼接
     budgets_used = 0
@@ -618,6 +679,7 @@ async def _run_engine(
                         kind = event["kind"]
                         if kind == "__final_text__":
                             final_text = event["text"]
+                            streamed_buf = event.get("streamed") or ""
                             continue
                         if kind == "__interrupt__":
                             pending = event["value"]
@@ -652,6 +714,10 @@ async def _run_engine(
                         ("user", _continuation_note(last=budgets_used == MAX_BUDGETS - 1)),
                     ]
                     payload = {"messages": messages}
+                    if streamed_buf:
+                        # 新一轮会从头生成，前端手里那半句话已作废
+                        streamed_buf = ""
+                        yield {"kind": "answer_reset"}
                     yield {
                         "kind": "note",
                         "content": f"步数预算已用完，自动续接第 {budgets_used + 1}/{MAX_BUDGETS} 轮，从中断处继续…",
@@ -678,7 +744,7 @@ async def _run_engine(
                 ) from exc
             raise
 
-    yield final_frame(ctx, final_text, with_artifacts=with_artifacts)
+    yield final_frame(ctx, final_text, with_artifacts=with_artifacts, streamed=streamed_buf)
 
 
 # 装配回调：给 ctx 与 workspace_id，返回 (agent, 开场事件)。
@@ -744,6 +810,12 @@ async def _run_deep(
     # 增删改回滚即时生效；被点名的技能由 pinned_skills 强制装载。
     skill_publisher.sync_skills(ws, owner_id=ctx.owner_id or None)
     pinned = [n for n in (pinned_skills or []) if n]
+
+    # 长期记忆：装配前先按本轮任务召回，提示词里因此带着工作区既有事实。
+    # 续跑（resume）时不重新召回——上一轮的提示词已经在检查点里，重拼会导致
+    # 同一 thread 里出现两份不同的系统提示。
+    if not resume:
+        recall_memory(ctx, task)
 
     agent, prelude = build(ctx, ws)
     for event in prelude:

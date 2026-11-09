@@ -65,6 +65,19 @@ class Settings(BaseSettings):
     # 运行状态持久化：memory（进程内 checkpointer，支持批准后续跑）| off（不保存）
     # 换成 postgres 需要 langgraph-checkpoint-postgres（当前环境未安装）。
     agent_checkpoint: str = "memory"
+    # 智能体真流式：模型边生成边把 token 转发给前端，首字延迟从「全文生成完」
+    # 降到「第一个 token」。模型端点不支持 SSE 时设为 off 回到「生成完再切片」。
+    agent_stream: bool = True
+    # 无头浏览器空闲回收（秒）：常驻可省掉每次 1-2 秒的冷启动，
+    # 但空闲时仍占内存，超过这个时间就关掉，下次用时再起。
+    browser_idle_seconds: int = 120
+    # Pro 沙箱容器以哪个用户运行：1000:1000 = 非 root（推荐）；"root" = 不降权。
+    # Linux 上 bind mount 的属主是宿主 uid，容器内 uid 不匹配时工作目录不可写，
+    # 引擎会自动降级为 root 重试一次并打日志——功能可用优先于安全洁癖。
+    agent_pro_run_as: str = "1000:1000"
+    # 容器根文件系统只读：配合 /tmp 与 /run 的 tmpfs，阻断"改系统文件持久化后门"。
+    # 装依赖走 PIP_USER=1 落到工作区（HOME=/work），所以不影响 pip install。
+    agent_pro_readonly_root: bool = True
     # 嵌入分批：一次请求最多多少条 / 多少字符。整篇文档塞一个请求必然 60s 超时。
     embedding_batch_size: int = 32
     embedding_batch_chars: int = 40000

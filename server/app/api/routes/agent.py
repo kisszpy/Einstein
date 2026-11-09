@@ -2,14 +2,13 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.api.deps import current_uid, current_workspace
-from app.services import approvals, projects, ratelimit
+from app.services import approvals, projects, ratelimit, run_registry
 from app.services.agent import chunk_text, run_agent
 from app.services.capabilities import AgentContext, sandbox
 from app.services.history import get_history_store
@@ -176,12 +175,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
     # 会话：追问沿用同一会话，新任务分配新 id
     session_id = req.session_id or uuid.uuid4().hex[:12]
     prior_runs = history.list_session_runs(session_id, ws, uid) if req.session_id else []
-    run_id = uuid.uuid4().hex
-    print(
-        f"[agent-stream] {run_id} start session={session_id} turn={len(prior_runs) + 1} task={req.task[:40]!r}",
-        flush=True,
-    )
-    yield _sse("meta", {"run_id": run_id, "session_id": session_id, "turn": len(prior_runs) + 1})
+    turn = len(prior_runs) + 1
     # 把最近几轮问答带给模型（每轮答案截断，防止本地模型上下文被撑爆）
     lc_history: list[dict] = []
     for r in prior_runs[-3:]:
@@ -203,7 +197,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
                 yield _sse("error", {"message": str(exc)})
                 return
     except Exception as exc:  # noqa: BLE001 — 建流阶段失败也要回 error 事件，不能静默断流
-        print(f"[agent-stream] {run_id} setup-error: {type(exc).__name__}: {exc}", flush=True)
+        print(f"[agent-stream] setup-error: {type(exc).__name__}: {exc}", flush=True)
         yield _sse("error", {"message": f"{type(exc).__name__}: {exc}"})
         return
 
@@ -228,7 +222,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
             resume_decision = {"type": "approve"}
         # 一次确认只用一次：续跑开始就消费，避免同一条记录被反复复用
         approvals.consume(record["id"])
-        print(f"[agent-stream] {run_id} resume session={session_id} decision={record['decision']}", flush=True)
+        print(f"[agent-stream] resume session={session_id} decision={record['decision']}", flush=True)
 
     if pinned_skills:
         from app.services import audit as audit_svc
@@ -238,49 +232,48 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
             method="AGENT_SKILLS", path="/agent/run", status=200,
             duration_ms=0.0, detail=",".join(pinned_skills),
         )
-        print(f"[agent-stream] {run_id} skills={','.join(pinned_skills)}", flush=True)
+        print(f"[agent-stream] skills={','.join(pinned_skills)}", flush=True)
 
-    try:
+    # 执行与 SSE 解耦：任务跑在独立 task 里，事件先写登记簿，这里只做转发。
+    # 客户端断开（切标签页/网络闪断）不再连带把任务掐掉，产物与运行记录都还在。
+    run = run_registry.create(session_id=session_id, workspace_id=ws, owner_id=uid)
+    yield _sse("meta", {"run_id": run.run_id, "session_id": session_id, "turn": turn})
+    print(
+        f"[agent-stream] {run.run_id} start session={session_id} turn={turn} task={req.task[:40]!r}",
+        flush=True,
+    )
+
+    async def _execute() -> None:
+        """真正干活的那一半：跑引擎、翻译事件、落库。与是否有人看无关。"""
         final_text = ""
         citations: list[dict] = []
         steps: list[dict] = []
         artifacts: list[dict] = []
-        # 心跳泵：大模型思考期间流上不能长时间无数据，否则连接会被
-        # 空闲超时/中间层掐断（客户端只收到 meta 就 EOF）。
-        # 用独立任务把事件搬进队列，消费端超时只发注释帧，绝不取消生产者。
-        queue: asyncio.Queue[Any] = asyncio.Queue()
-        _STOP = object()
+        answer_started = False
+        streamed = ""
+        status = "ok"
 
-        async def _pump() -> None:
-            try:
-                async for step in run_agent(
-                    req.task, req.tool_ids, kb_ids, ws, ctx, history=lc_history,
-                    persona=persona, pinned_skills=pinned_skills, temperature=temperature,
-                    thread_id=thread_id, resume=resume_decision,
-                ):
-                    await queue.put(step)
-            except Exception as exc:  # noqa: BLE001 — 异常也走队列，保持事件序
-                await queue.put(exc)
-            finally:
-                await queue.put(_STOP)
-
-        pump = asyncio.create_task(_pump())
         try:
-            while True:
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
-                except asyncio.TimeoutError:
-                    yield ": ping\n\n"
-                    continue
-                if item is _STOP:
-                    break
-                if isinstance(item, Exception):
-                    raise item
-                step = item
+            async for step in run_agent(
+                req.task, req.tool_ids, kb_ids, ws, ctx, history=lc_history,
+                persona=persona, pinned_skills=pinned_skills, temperature=temperature,
+                thread_id=thread_id, resume=resume_decision,
+            ):
                 kind = step["kind"]
                 if kind == "final":
                     final_text = step["text"]
                     citations = step.get("citations") or []
+                    streamed = step.get("streamed") or ""
+                elif kind == "delta":
+                    # 真流式：第一个增量到达就开答，前端不用等全文
+                    if not answer_started:
+                        answer_started = True
+                        run.push("answer_start", {})
+                    run.push("delta", {"text": step["text"]})
+                elif kind == "answer_reset":
+                    # 上一轮的"过程中的话"作废（模型开始调工具了）
+                    run.push("answer_reset", {})
+                    answer_started = False
                 elif kind == "approval_required":
                     # 记下「到底在批什么」：/approve 凭这条记录定位并要求归属匹配
                     approvals.request(
@@ -288,65 +281,138 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
                         args_hash=step.get("args_hash", ""),
                     )
                     steps.append(step)
-                    yield _sse("step", {"step": step})
+                    run.push("step", {"step": step})
                 elif kind == "artifact":
                     entry = {"path": step.get("path", ""), "kind": step.get("artifact_kind", "file")}
                     if entry not in artifacts:
                         artifacts.append(entry)
-                        yield _sse("artifact", {"artifact": entry})
+                        run.push("artifact", {"artifact": entry})
                 else:
                     steps.append(step)
-                    yield _sse("step", {"step": step})
-        finally:
-            pump.cancel()
-            try:
-                await pump
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
+                    run.push("step", {"step": step})
 
-        if citations:
-            yield _sse("citations", {"citations": citations})
-        yield _sse("answer_start", {})
-        for piece in chunk_text(final_text):
-            yield _sse("delta", {"text": piece})
-        yield _sse(
-            "done",
-            {
-                "run_id": run_id,
+            if citations:
+                run.push("citations", {"citations": citations})
+
+            # 补发尾部：真流式已经把大部分正文发过了，只补没发到的部分；
+            # 模型改了稿（与已流出内容不一致）或压根没流式，就整段重发。
+            tail = final_text
+            if streamed and final_text.startswith(streamed):
+                tail = final_text[len(streamed):]
+            elif streamed:
+                run.push("answer_reset", {})
+                answer_started = False
+            if tail:
+                if not answer_started:
+                    answer_started = True
+                    run.push("answer_start", {})
+                for piece in chunk_text(tail):
+                    run.push("delta", {"text": piece})
+            elif not answer_started:
+                run.push("answer_start", {})
+
+            run.push("done", {
+                "run_id": run.run_id,
                 "session_id": session_id,
                 "project": ctx.project,
                 "artifacts": artifacts,
-            },
-        )
-        print(f"[agent-stream] {run_id} done steps={len(steps)}", flush=True)
+            })
+            print(f"[agent-stream] {run.run_id} done steps={len(steps)}", flush=True)
 
-        # 持久化运行历史（同一会话的多轮）
-        history.add_agent_run(
-            task=req.task,
-            tool_ids=req.tool_ids,
-            steps=steps,
-            answer=final_text,
-            status="ok",
-            workspace_id=ws,
-            project=ctx.project,
-            artifacts=artifacts,
-            session_id=session_id,
-            turn=len(prior_runs) + 1,
-            owner_id=uid,
-        )
-    except Exception as exc:  # noqa: BLE001 — 统一转 SSE error 事件
-        print(f"[agent-stream] {run_id} run-error: {type(exc).__name__}: {exc}", flush=True)
-        # 失败也落一条历史：产物可能已经写到磁盘上，不给记录等于"这次根本没跑过"
-        try:
+            # 持久化运行历史（同一会话的多轮）
             history.add_agent_run(
-                task=req.task, tool_ids=req.tool_ids, steps=steps, answer=final_text,
-                status="failed", workspace_id=ws, project=ctx.project,
-                artifacts=artifacts, session_id=session_id,
-                turn=len(prior_runs) + 1, owner_id=uid,
+                task=req.task,
+                tool_ids=req.tool_ids,
+                steps=steps,
+                answer=final_text,
+                status=status,
+                workspace_id=ws,
+                project=ctx.project,
+                artifacts=artifacts,
+                session_id=session_id,
+                turn=turn,
+                owner_id=uid,
             )
-        except Exception as save_exc:  # noqa: BLE001 — 落库失败不能盖掉原始错误
-            print(f"[agent-stream] {run_id} 失败记录未能落库：{save_exc}", flush=True)
-        yield _sse("error", {"message": f"{type(exc).__name__}: {exc}"})
+        except asyncio.CancelledError:
+            # 服务关闭（不是客户端断开）：把已发生的部分如实落库再退出
+            status = "failed"
+            try:
+                history.add_agent_run(
+                    task=req.task, tool_ids=req.tool_ids, steps=steps, answer=final_text,
+                    status=status, workspace_id=ws, project=ctx.project,
+                    artifacts=artifacts, session_id=session_id, turn=turn, owner_id=uid,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            run.push("error", {"message": "服务正在关闭，本次运行被中断。"})
+            raise
+        except Exception as exc:  # noqa: BLE001 — 统一转 SSE error 事件
+            status = "failed"
+            print(f"[agent-stream] {run.run_id} run-error: {type(exc).__name__}: {exc}", flush=True)
+            # 失败也落一条历史：产物可能已经写到磁盘上，不给记录等于"这次根本没跑过"
+            try:
+                history.add_agent_run(
+                    task=req.task, tool_ids=req.tool_ids, steps=steps, answer=final_text,
+                    status="failed", workspace_id=ws, project=ctx.project,
+                    artifacts=artifacts, session_id=session_id, turn=turn, owner_id=uid,
+                )
+            except Exception as save_exc:  # noqa: BLE001 — 落库失败不能盖掉原始错误
+                print(f"[agent-stream] {run.run_id} 失败记录未能落库：{save_exc}", flush=True)
+            run.push("error", {"message": f"{type(exc).__name__}: {exc}"})
+        finally:
+            run.finish(failed=status != "ok")
+
+    task = asyncio.create_task(_execute())
+    run_registry.attach_task(run.run_id, task)
+
+    async for chunk in _forward(run):
+        yield chunk
+
+
+async def _forward(run: run_registry.RunRecord) -> AsyncIterator[str]:
+    """把登记簿里的事件转成 SSE。断了就退出，运行本身不受影响。
+
+    同一个函数既服务「首次连接」也服务「刷新后重连接回」：登记簿是只增日志，
+    从第 0 条重放即可，前端因此不会看到半个答案。
+    """
+    index = 0
+    while True:
+        while index < len(run.events):
+            event, data = run.events[index]
+            index += 1
+            yield _sse(event, data)
+        if run.done:
+            break
+        # clear 与 await 之间可能来新事件：先清再复查长度，避免漏掉唤醒
+        run.changed.clear()
+        if index < len(run.events):
+            continue
+        try:
+            await asyncio.wait_for(run.changed.wait(), timeout=15.0)
+        except asyncio.TimeoutError:
+            # 大模型思考期间流上不能长时间无数据，否则中间层会掐断连接
+            yield ": ping\n\n"
+
+
+@router.get("/runs/{run_id}/stream")
+async def reconnect_run(
+    run_id: str,
+    ws: str = Depends(current_workspace),
+    uid: str = Depends(current_uid),
+) -> StreamingResponse:
+    """重连接回一次运行：从已有事件重放，然后继续跟到结束。
+
+    用于「刷新页面/切回标签页」：任务一直在后台跑，这里只是重新挂上一个读者。
+    别人的 run_id 一律 404（与资源隔离的其它接口同一语义）。
+    """
+    run = run_registry.get(run_id, workspace_id=ws, owner_id=uid)
+    if run is None:
+        raise HTTPException(status_code=404, detail="运行不存在或已过期")
+    return StreamingResponse(
+        _forward(run),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/run")

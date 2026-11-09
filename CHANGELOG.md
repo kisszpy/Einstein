@@ -2,6 +2,55 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.6.0] - 2026-11-09
+
+批次 B/C 的剩余项：让"看"和"跑"脱钩（流式 + 后台执行），把智能体接上长期
+记忆，给向量加上可校验的身份，容器收到非 root + 只读根，验收脚本进 pytest。
+
+### 新增
+
+- **智能体真流式**：`astream(stream_mode=["updates","messages"])` 订阅模型增量，
+  逐 token 转成 `delta` 事件。首字延迟从"全文生成完"降到"第一个 token"
+  （实测 600 字回答：首帧 1.7s / 完成 7.2s，636 帧）。工具调用轮次里模型先说
+  的那段话用 `answer_reset` 撤回，不会掺进最终答案
+- **运行与 SSE 解耦**：执行放进独立 task，事件写进 `services/run_registry.py`，
+  SSE 只是读者。客户端断开（切标签页、网络闪断）不再掐掉任务，跑完照样落库；
+  `GET /agent/runs/{run_id}/stream` 可从已有事件重连接回（归属不符 404）
+- **长期记忆接入智能体**：装配前按本轮任务召回工作区事实，拼进系统提示
+  （`recall_memory` / `memory_block`）。deep 与 react 两个引擎行为一致；记忆
+  读失败只降级为"没有背景"，不影响任务
+- **浏览器进程复用**：截图不再每次冷启动 Chromium。按线程缓存（Playwright
+  同步 API 绑定创建线程），空闲 `APP_BROWSER_IDLE_SECONDS`（默认 120s）回收，
+  进程退出时清理；容器里补 `--disable-dev-shm-usage`
+- **切片记嵌入指纹**：`chunks` 表加 `embedding_model` / `embedding_dim`（迁移 012）。
+  检索前比对当前模型，不一致直接给出可操作提示而不是返回空；`retrieval.Retrieval`
+  新增 `error` 字段，与"未命中"分开——前者要去重建索引，后者要补文档
+- **重新嵌入**：`tools/rebuild_vector_index.py --reembed --drop`。换模型后光重建
+  索引没用（旧向量还在旧空间里），必须重算向量；不重切片，保留边界与父子关系
+- **pytest 测试体系**：`server/tests/`（38 项）+ `pytest.ini` + `requirements-dev.txt`，
+  CI 增加"单元测试"步骤。测试自己把存储按到 sqlite 临时库，不碰 `.env` 里的
+  生产后端
+
+### 变更
+
+- **容器收紧**：`--read-only` + `--tmpfs /tmp,/run` + `--user 1000:1000` +
+  `PIP_USER=1`（依赖落到工作区，装包仍可用）。实测容器内 `id -u = 1000`、
+  `touch /etc/x` 被拒、`pip install six` 成功。宿主目录属主与 uid 不匹配时
+  自动降级为 root 重试一次并打日志（Linux bind mount 的现实约束）
+- 三个配置项：`APP_AGENT_STREAM`、`APP_BROWSER_IDLE_SECONDS`、
+  `APP_AGENT_PRO_RUN_AS` / `APP_AGENT_PRO_READONLY_ROOT`
+- `screenshot` 的页面错误不再连带杀掉浏览器：`new_page` 失败时重建一次
+
+### 修复
+
+- **`_safe()` 把 `ApprovalRequired` 当普通异常吞掉**：react 引擎的审批暂停
+  永远触发不了，用户看到的是工具返回一个 `{"ok": false}`，模型自己换路走。
+  人工确认在回滚引擎上形同虚设——由新增的 pytest 用例发现
+- **审批的"一次性"没落实**：`granted_tools` / `latest_decision` 没过滤
+  `consumed`，一次批准在同一会话内持续生效，又变回"批一次永久放行"
+- **检索失败伪装成"知识库未命中"**：向量与嵌入模型不匹配时返回空列表，
+  用户会以为库里没内容而去重传文档
+
 ## [0.5.1] - 2026-11-09
 
 按《评估报告-产品缺陷与改进》修掉批次 A 的 P0：**人工确认从"抛异常当暂停"

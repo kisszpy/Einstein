@@ -142,6 +142,8 @@ class ProBackend(WorkspaceBackend, SandboxBackendProtocol):
         timeout: int = 60,
         memory: str = "1g",
         cpus: str = "2",
+        run_as: str = "1000:1000",
+        readonly_root: bool = True,
     ) -> None:
         super().__init__(root, ctx)
         self.workspace_id = ctx.workspace_id
@@ -151,6 +153,8 @@ class ProBackend(WorkspaceBackend, SandboxBackendProtocol):
         self.default_timeout = max(5, min(int(timeout or 60), MAX_SHELL_TIMEOUT))
         self.memory = memory or "1g"
         self.cpus = cpus or "2"
+        self.run_as = (run_as or "").strip()
+        self.readonly_root = bool(readonly_root)
         self._id = f"pro-{uuid.uuid4().hex[:8]}"
         self._host_shells: dict[Path, LocalShellBackend] = {}
         self.mode, self.mode_note = self._resolve_mode()
@@ -229,7 +233,33 @@ class ProBackend(WorkspaceBackend, SandboxBackendProtocol):
         return self._host_exec(cmd, workdir, secs)
 
     def _container_exec(self, cmd: str, workdir: Path, secs: int) -> ExecuteResponse:
-        """容器里执行一条 sh 脚本：脚本走 stdin（`sh -s`），不经二级引号解析。"""
+        """容器里执行一条 sh 脚本：脚本走 stdin（`sh -s`），不经二级引号解析。
+
+        安全基线：非 root + 只读根 + tmpfs 临时目录 + cap-drop ALL。
+        装依赖仍然可用——`PIP_USER=1` 让它落到工作区（`HOME=/work`），
+        不需要写镜像里的 site-packages。
+        """
+        res = self._run_container(cmd, workdir, secs, as_root=False)
+        if res.exit_code in (126, 1) and self._is_permission_denied(res.output):
+            # Linux 上 bind mount 的属主是宿主 uid；uid 不匹配时工作目录不可写。
+            # 这里降级为 root 重试一次：宁可少一层隔离，也不让任务直接失败。
+            print(
+                f"[pro] 非 root（{self.run_as}）无法写工作目录，已降级为 root 重试。"
+                "要长期使用非 root，请让宿主目录属主与容器 uid 一致"
+                "（APP_AGENT_PRO_RUN_AS）。",
+                flush=True,
+            )
+            res = self._run_container(cmd, workdir, secs, as_root=True)
+        return res
+
+    @staticmethod
+    def _is_permission_denied(output: str) -> bool:
+        text = (output or "").lower()
+        return "permission denied" in text or "read-only file system" in text
+
+    def _run_container(
+        self, cmd: str, workdir: Path, secs: int, *, as_root: bool,
+    ) -> ExecuteResponse:
         name = f"einstein-pro-{uuid.uuid4().hex[:8]}"
         argv = [
             shutil.which("docker") or "docker", "run", "--rm", "-i",
@@ -247,6 +277,23 @@ class ProBackend(WorkspaceBackend, SandboxBackendProtocol):
             "-e", "HOME=/work",
             self.image, "sh", "-s",
         ]
+        # 只读根：镜像自身不可改，/tmp 与 /run 用 tmpfs 顶上（很多工具要写临时文件，
+        # 包括 python -c 编译缓存、node、以及 pip 的构建目录）
+        if self.readonly_root:
+            extra = [
+                "--read-only",
+                "--tmpfs", "/tmp:rw,exec,nosuid,size=512m",
+                "--tmpfs", "/run:rw,nosuid,size=64m",
+                "-e", "PIP_USER=1",
+                "-e", "PIP_NO_CACHE_DIR=1",
+                "-e", "PYTHONUSERBASE=/work/.local",
+            ]
+            idx = len(argv) - 3   # 插在「镜像名」之前（docker 的选项必须在镜像前）
+            argv[idx:idx] = extra
+        if self.run_as and not as_root and self.run_as.lower() != "root":
+            idx = len(argv) - 3
+            argv[idx:idx] = ["--user", self.run_as]
+
         try:
             proc = subprocess.run(
                 argv, check=False, capture_output=True, input=cmd,
@@ -428,6 +475,8 @@ def _build_pro_agent(
         timeout=getattr(settings, "agent_pro_shell_timeout", 60),
         memory=getattr(settings, "agent_pro_memory", "1g"),
         cpus=getattr(settings, "agent_pro_cpus", "2"),
+        run_as=getattr(settings, "agent_pro_run_as", "1000:1000"),
+        readonly_root=getattr(settings, "agent_pro_readonly_root", True),
     )
     agent = _build_agent(
         ctx, tool_ids, kb_ids, workspace_id,

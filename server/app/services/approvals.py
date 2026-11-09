@@ -149,9 +149,16 @@ def _latest(
 
 
 def latest_decision(workspace_id: str, owner_id: str, session_id: str) -> dict | None:
-    """最近一次已作出的决定（approve/reject），未消费且未过期。续跑时用它。"""
+    """最近一次已作出的决定（approve/reject），未消费且未过期。续跑时用它。
+
+    必须排除 `consumed`：一次批准只够续跑一次。否则同一会话里第二次遇到
+    同一个敏感工具时，会翻出上一条已用过的批准直接放行——又变回"批一次
+    永久放行"，而这正是这张表要解决的问题。
+    """
     row = _latest(workspace_id, owner_id, session_id)
     if row is None or row["decision"] not in ("approve", "reject"):
+        return None
+    if row.get("consumed"):
         return None
     return row
 
@@ -160,15 +167,15 @@ def granted_tools(workspace_id: str, owner_id: str, session_id: str) -> set[str]
     """本会话当前有效的「已批准工具」集合。
 
     用于兜底路径：检查点不可用（进程重启过）时按批准重新跑一遍，至少不会
-    再弹一次确认框。
+    再弹一次确认框。同样只看未消费的记录——兜底不等于永久豁免。
     """
     if not session_id:
         return set()
     rows = _db().query(
         "SELECT DISTINCT tool FROM agent_approvals "
         "WHERE workspace_id = ? AND owner_id = ? AND session_id = ? "
-        "AND decision = 'approve' AND expires_at > ?",
-        (workspace_id or "default", owner_id, session_id, _now().isoformat()),
+        "AND decision = 'approve' AND consumed = ? AND expires_at > ?",
+        (workspace_id or "default", owner_id, session_id, False, _now().isoformat()),
     )
     return {r["tool"] for r in rows}
 

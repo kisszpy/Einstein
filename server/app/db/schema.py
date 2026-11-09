@@ -69,8 +69,7 @@ _MIGRATION_001 = [
         vector_kind   TEXT NOT NULL DEFAULT 'mock',
         created_at    TEXT NOT NULL
     )
-    """,
-    "CREATE INDEX IF NOT EXISTS idx_chunk_kb ON chunks(kb_id)",
+    """,    "CREATE INDEX IF NOT EXISTS idx_chunk_kb ON chunks(kb_id)",
     "CREATE INDEX IF NOT EXISTS idx_chunk_doc ON chunks(document_id)",
     """
     CREATE TABLE IF NOT EXISTS jobs (
@@ -288,8 +287,26 @@ _MIGRATION_011 = [
     "ON agent_approvals(workspace_id, owner_id, session_id)",
 ]
 
-MIGRATIONS: list[tuple[int, Migration]] = [
-    (1, _MIGRATION_001),
+# 012：切片记嵌入指纹 —— 「向量是谁产的」要能查
+#
+# 以前 chunk 只记 vector_kind（remote/mock），不记模型名与维度。换了嵌入模型
+# （8B→4B，4096→2560 维）之后：Milvus 写入报"维度冲突"但文案不指向根因；
+# 内存后端更糟——静默丢弃维度不符的切片，检索永远返回空，hybrid 只剩 BM25，
+# 没人会发现。记下 model + dim，检索前就能给出"请重建索引"这种可操作的提示。
+def _migration_012(db: Database) -> list[str]:
+    statements = []
+    if not _column_exists(db, "chunks", "embedding_model"):
+        statements.append(
+            "ALTER TABLE chunks ADD COLUMN embedding_model TEXT NOT NULL DEFAULT ''"
+        )
+    if not _column_exists(db, "chunks", "embedding_dim"):
+        statements.append(
+            "ALTER TABLE chunks ADD COLUMN embedding_dim INTEGER NOT NULL DEFAULT 0"
+        )
+    return statements
+
+
+MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (2, _MIGRATION_002),
     (3, _MIGRATION_003),
     (4, _MIGRATION_004),
@@ -300,6 +317,7 @@ MIGRATIONS: list[tuple[int, Migration]] = [
     (9, _migration_009),
     (10, _MIGRATION_010),
     (11, _MIGRATION_011),
+    (12, _migration_012),
 ]
 
 _TYPE_TOKENS = {

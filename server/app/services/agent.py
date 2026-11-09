@@ -19,7 +19,14 @@ from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
 
 from app.core.config import get_settings
-from app.services.agent_runtime import LlmTimer, build_messages, final_frame, short
+from app.services.agent_runtime import (
+    LlmTimer,
+    build_messages,
+    final_frame,
+    memory_block,
+    recall_memory,
+    short,
+)
 from app.services.capabilities import AgentContext
 from app.services.tools import build_lc_tools, kb_directive
 
@@ -32,7 +39,9 @@ def _get_model(temperature: float | None = None) -> ChatOpenAI:
         base_url=settings.llm_base_url,
         api_key=settings.llm_api_key,
         model=settings.llm_model,
-        streaming=False,  # agent 内部按消息粒度交互，最终回答再切片下发
+        # 真流式的开关：astream(messages) 靠模型的 SSE 增量，streaming=False
+        # 时它只在最后吐一个完整 chunk，前端就得等全文生成完（旧行为）。
+        streaming=bool(getattr(settings, "agent_stream", True)),
         timeout=300,  # 长上下文下本地 27B 生成慢，180s 会误杀
         max_retries=2,
     )
@@ -134,11 +143,17 @@ async def _run_react_agent(
 ) -> AsyncIterator[dict]:
     """ReAct 引擎（回滚用）：单循环、无计划、无子智能体。"""
     lc_tools = build_lc_tools(tool_ids, kb_ids, workspace_id, ctx)
+    # 长期记忆与 deep 引擎同一套：回滚开关只换执行引擎，不该换掉模型的背景知识
+    memories = recall_memory(ctx, task) if ctx is not None else []
     agent = create_agent(
         _get_model(),
         lc_tools,
         # 挂了知识库就追加"KB 优先"硬规则，与 deepagents 引擎保持一致
-        system_prompt=AGENT_SYSTEM_PROMPT + (kb_directive(kb_ids) if kb_ids else ""),
+        system_prompt=(
+            AGENT_SYSTEM_PROMPT
+            + memory_block(memories)
+            + (kb_directive(kb_ids) if kb_ids else "")
+        ),
     )
     final_text = ""
     tool_call_count = 0

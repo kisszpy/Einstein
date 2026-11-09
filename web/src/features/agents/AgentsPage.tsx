@@ -345,6 +345,11 @@ export function AgentsPage() {
               setAnswer((prev) => prev + chunk);
               break;
             }
+            case "answer_reset": {
+              // 真流式：模型开始调工具，之前那段是"过程中的话"，不是最终答案
+              setAnswer("");
+              break;
+            }
             case "done": {
               const d = raw as { project?: string; artifacts?: Artifact[] };
               const pid = d.project || boundProject;

@@ -11,6 +11,7 @@
 
 import math
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
@@ -49,6 +50,65 @@ class RetrievedChunk:
     vector_score: float | None = None  # 余弦相似度（词法模式下为 None）
     lexical_score: float | None = None  # BM25 分（向量模式下为 None）
     rerank_score: float | None = None   # 重排给的绝对相关分（未重排为 None）
+
+
+class EmbeddingMismatch(RuntimeError):
+    """切片向量与当前嵌入模型不一致：检索结果不可信，必须重建索引。
+
+    为什么单独一个异常类：这不是"没命中"，而是"命中了也不对"。混在空结果里
+    会让人以为知识库没内容，白白重传文档；混成 500 又看不出该怎么办。
+    """
+
+
+# 指纹缓存：按知识库集合缓存 5 分钟，避免每次检索都回表扫一遍元数据
+_FP_CACHE: dict[tuple[str, ...], tuple[float, str, int]] = {}
+_FP_TTL_SECONDS = 300.0
+
+
+def index_fingerprint(store: KBStore, kb_ids: list[str]) -> tuple[str, int] | None:
+    """索引里第一条带指纹的切片 → (模型名, 维度)。
+
+    没有指纹（迁移前入库的老数据）返回 None：无从判断，就别误报。
+    """
+    key = tuple(sorted(kb_ids))
+    now = time.time()
+    cached = _FP_CACHE.get(key)
+    if cached and (now - cached[0]) < _FP_TTL_SECONDS:
+        return (cached[1], cached[2]) if (cached[1] or cached[2]) else None
+
+    found: tuple[str, int] | None = None
+    try:
+        for chunk in store.list_chunks(kb_ids, with_vector=False):
+            if chunk.embedding_model or chunk.embedding_dim:
+                found = (chunk.embedding_model, int(chunk.embedding_dim or 0))
+                break
+    except Exception as exc:  # noqa: BLE001 — 指纹查不到不该让检索失败
+        print(f"[rag] 读取嵌入指纹失败（跳过校验）：{type(exc).__name__}: {exc}", flush=True)
+        return None
+
+    _FP_CACHE[key] = (now, *(found or ("", 0)))
+    return found
+
+
+def check_embedding_fingerprint(
+    store: KBStore, kb_ids: list[str], *, model: str, dim: int,
+) -> str | None:
+    """索引向量是不是当前模型产的？一致返回 None，不一致返回人话说明。"""
+    fingerprint = index_fingerprint(store, kb_ids)
+    if not fingerprint:
+        return None
+    old_model, old_dim = fingerprint
+    mismatch = (old_dim and dim and old_dim != dim) or (
+        old_model and model and old_model != model
+    )
+    if not mismatch:
+        return None
+    return (
+        f"知识库里的向量由 `{old_model or '未知模型'}`（{old_dim or '?'} 维）生成，"
+        f"当前嵌入模型是 `{model}`（{dim} 维），两者不在同一向量空间——"
+        "检索结果不可信（语义排序会近似随机）。请重建索引："
+        "`python tools/rebuild_vector_index.py`"
+    )
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -146,6 +206,8 @@ async def _embed_and_store(
         return len(parent_bounds) - 1 if start >= parent_bounds[-1][0] else 0
 
     vectors, kind = await embed_texts(texts)
+    # 指纹：这条向量是谁产的。换模型后靠它判断"该重建索引了"
+    model = get_settings().embedding_model if kind == "remote" else "mock"
     chunks: list[Chunk] = []
     cursor = 0
     for seq, (text, vec) in enumerate(zip(texts, vectors, strict=True)):
@@ -158,6 +220,7 @@ async def _embed_and_store(
             Chunk(
                 id=f"{doc.id}-{seq}", kb_id=kb_id, document_id=doc.id, text=text,
                 vector=vec, embedding_kind=kind, seq=seq,
+                embedding_model=model, embedding_dim=len(vec),
                 char_start=start, char_end=end, created_at=now_iso(),
                 parent_seq=_parent_of(start) if parent_bounds else None,
             )
@@ -253,7 +316,11 @@ async def reembed_chunk(store: KBStore, chunk_id: str, text: str) -> Chunk | Non
     if not found:
         return None
     vectors, kind = await embed_texts([text])
-    store.update_chunk(chunk_id, text=text, vector=vectors[0], embedding_kind=kind)  # 内部已落盘
+    model = get_settings().embedding_model if kind == "remote" else "mock"
+    store.update_chunk(  # 内部已落盘
+        chunk_id, text=text, vector=vectors[0], embedding_kind=kind,
+        embedding_model=model, embedding_dim=len(vectors[0]),
+    )
     try:
         get_vector_index().upsert(store.get_chunks([chunk_id]))
     except VectorIndexError:
@@ -296,6 +363,13 @@ async def search(
     if mode in ("vector", "hybrid"):
         embedded, _ = await embed_texts([query])
         qvec = embedded[0]
+        # 检索前先对一次指纹：换了嵌入模型却没重建索引时，余弦排序等于随机，
+        # 与其把噪音当证据喂给模型，不如明确告诉用户去重建。
+        problem = check_embedding_fingerprint(
+            store, kb_ids, model=settings.embedding_model, dim=len(qvec)
+        )
+        if problem:
+            raise EmbeddingMismatch(problem)
 
     vec_hits: list[tuple[str, float]] = []
     if mode == "vector":

@@ -94,6 +94,7 @@ class KbRepository(Protocol):
 
     def update_chunk(
         self, chunk_id: str, *, text: str, vector: list[float], embedding_kind: str = "mock",
+        embedding_model: str = "", embedding_dim: int = 0,
     ) -> bool:
         with self._lock:
             for c in self.chunks:
@@ -101,12 +102,15 @@ class KbRepository(Protocol):
                     c.text = text
                     c.vector = vector
                     c.embedding_kind = embedding_kind
+                    c.embedding_model = embedding_model
+                    c.embedding_dim = int(embedding_dim or len(vector))
                     return True
         return False
 
     def delete_chunks_by_document(self, doc_id: str) -> int: ...
     def update_chunk(
         self, chunk_id: str, *, text: str, vector: list[float], embedding_kind: str = "mock",
+        embedding_model: str = "", embedding_dim: int = 0,
     ) -> bool: ...
     def count_chunks(self, kb_id: str) -> int: ...
     def add_version(
@@ -312,6 +316,7 @@ class JsonKbRepository:
 
     def update_chunk(
         self, chunk_id: str, *, text: str, vector: list[float], embedding_kind: str = "mock",
+        embedding_model: str = "", embedding_dim: int = 0,
     ) -> bool:
         """就地改文本与向量：切片编辑后不必整篇重建，检索能立刻命中新内容。"""
         with self._lock:
@@ -320,6 +325,8 @@ class JsonKbRepository:
                     chunk.text = text
                     chunk.vector = list(vector)
                     chunk.embedding_kind = embedding_kind
+                    chunk.embedding_model = embedding_model
+                    chunk.embedding_dim = int(embedding_dim or len(vector))
                     return True
             return False
 
@@ -391,6 +398,8 @@ class SqlKbRepository:
         return Chunk(
             id=row["id"], kb_id=row["kb_id"], document_id=row["document_id"], text=row["text"],
             vector=bytes_to_vec(row.get("vector")), embedding_kind=row["vector_kind"] or "mock",
+            embedding_model=row.get("embedding_model") or "",
+            embedding_dim=int(row.get("embedding_dim") or 0),
             seq=int(row["seq"] or 0), char_start=int(row["char_start"] or 0),
             char_end=int(row["char_end"] or 0), created_at=row["created_at"],
             parent_seq=int(parent_seq) if parent_seq is not None else None,
@@ -567,12 +576,14 @@ class SqlKbRepository:
             (
                 c.id, c.kb_id, c.document_id, c.seq, c.text, c.char_start, c.char_end,
                 vec_to_bytes(c.vector), c.embedding_kind, c.created_at or now, c.parent_seq,
+                c.embedding_model, c.embedding_dim,
             )
             for c in chunks
         ]
         self.db.executemany(
             "INSERT INTO chunks (id, kb_id, document_id, seq, text, char_start, char_end,"
-            " vector, vector_kind, created_at, parent_seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " vector, vector_kind, created_at, parent_seq, embedding_model, embedding_dim)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
 
@@ -591,7 +602,10 @@ class SqlKbRepository:
             params.append(document_id)
         clause = f" WHERE {' AND '.join(where)}" if where else ""
         # 词法检索不需要向量：4096 维 float 一条 16KB，几千条就是几十 MB 的白读
-        cols = "id, kb_id, document_id, seq, text, char_start, char_end, vector_kind, created_at, parent_seq"
+        cols = (
+            "id, kb_id, document_id, seq, text, char_start, char_end, vector_kind,"
+            " embedding_model, embedding_dim, created_at, parent_seq"
+        )
         if with_vector:
             cols = cols.replace("vector_kind", "vector, vector_kind")
         rows = self.db.query(
@@ -607,17 +621,21 @@ class SqlKbRepository:
         marks = ", ".join("?" for _ in chunk_ids)
         rows = self.db.query(
             "SELECT id, kb_id, document_id, seq, text, char_start, char_end, vector,"
-            " vector_kind, created_at, parent_seq FROM chunks WHERE id IN ({})".format(marks),
+            " vector_kind, embedding_model, embedding_dim, created_at, parent_seq"
+            " FROM chunks WHERE id IN ({})".format(marks),
             list(chunk_ids),
         )
         return [self._chunk(r) for r in rows]
 
     def update_chunk(
         self, chunk_id: str, *, text: str, vector: list[float], embedding_kind: str = "mock",
+        embedding_model: str = "", embedding_dim: int = 0,
     ) -> bool:
         affected = self.db.execute(
-            "UPDATE chunks SET text = ?, vector = ?, vector_kind = ? WHERE id = ?",
-            (text, vec_to_bytes(vector), embedding_kind, chunk_id),
+            "UPDATE chunks SET text = ?, vector = ?, vector_kind = ?,"
+            " embedding_model = ?, embedding_dim = ? WHERE id = ?",
+            (text, vec_to_bytes(vector), embedding_kind, embedding_model,
+             int(embedding_dim or len(vector)), chunk_id),
         )
         return affected == 1
 

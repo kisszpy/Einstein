@@ -13,18 +13,32 @@ Playwright 不是硬依赖：没安装时 `browser_shot` 返回明确提示，`b
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
 import shutil
 import subprocess
+import threading
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urljoin
 
+from app.core.config import get_settings
 from app.services.capabilities import web
 
 MAX_LINKS = 80
+DEFAULT_IDLE_SECONDS = 120
+
+
+def _idle_seconds() -> float:
+    """浏览器空闲多久后回收。常驻进程占内存，长任务间隙该让出来。"""
+    try:
+        value = float(getattr(get_settings(), "browser_idle_seconds", DEFAULT_IDLE_SECONDS))
+    except (TypeError, ValueError):
+        value = DEFAULT_IDLE_SECONDS
+    return max(10.0, value)
 
 
 class BrowserError(Exception):
@@ -184,19 +198,97 @@ def _shot_python(
     width: int,
     timeout_ms: int,
 ) -> dict:
-    from playwright.sync_api import sync_playwright
+    """用 Playwright 截图。浏览器进程复用，不再每次调用都冷启动。
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(args=["--no-sandbox"])
+    以前一次截图起一个 Chromium（约 1-2 秒 + 100MB 内存），同一个任务里
+    `browser_open` 看几页再截图，开销全花在起进程上。现在按线程缓存 browser
+    实例（Playwright 同步 API 绑定创建它的线程，而工具函数跑在线程池里，
+    所以不能跨线程共享），空闲超过 `APP_BROWSER_IDLE_SECONDS` 就回收。
+    """
+    browser = _thread_browser()
+    try:
+        page = browser.new_page(viewport={"width": int(width), "height": 900})
+    except Exception:  # noqa: BLE001 — 浏览器被外部关掉/崩了：重建一次
+        _close_thread_browser()
+        page = _thread_browser().new_page(viewport={"width": int(width), "height": 900})
+    try:
+        page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+        title = page.title()
+        page.screenshot(path=str(target), full_page=full_page)
+        final_url = page.url
+    finally:
         try:
-            page = browser.new_page(viewport={"width": int(width), "height": 900})
-            page.goto(url, wait_until="networkidle", timeout=timeout_ms)
-            title = page.title()
-            page.screenshot(path=str(target), full_page=full_page)
-            final_url = page.url
-        finally:
-            browser.close()
+            page.close()
+        except Exception:  # noqa: BLE001 — 页面已崩时 close 也会报错
+            pass
     return {"title": title, "final_url": final_url}
+
+
+_local = threading.local()
+
+
+def _thread_browser():  # noqa: ANN202 — playwright 的 Browser 类型不便直接标注
+    """取当前线程的浏览器；没有就启动，空闲超时先回收再启动。"""
+    state = getattr(_local, "state", None)
+    now = time.monotonic()
+    if state is not None and (now - state["used"]) > _idle_seconds():
+        _close_thread_browser()
+        state = None
+    if state is None:
+        from playwright.sync_api import sync_playwright
+
+        pw = sync_playwright().start()
+        try:
+            browser = pw.chromium.launch(args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",   # 容器里 /dev/shm 只有 64MB
+                "--disable-gpu",
+            ])
+        except Exception:
+            try:
+                pw.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        state = {"pw": pw, "browser": browser, "used": now, "launched": now}
+        _local.state = state
+    state["used"] = now
+    return state["browser"]
+
+
+def _close_thread_browser() -> None:
+    state = getattr(_local, "state", None)
+    if state is None:
+        return
+    for key, closer in (("browser", "close"), ("pw", "stop")):
+        obj = state.get(key)
+        if obj is None:
+            continue
+        try:
+            getattr(obj, closer)()
+        except Exception:  # noqa: BLE001 — 关闭失败只能忽略，进程退出会回收
+            pass
+    _local.state = None
+
+
+def shutdown_browser() -> None:
+    """显式释放当前线程的浏览器（测试与优雅停服用）。"""
+    _close_thread_browser()
+
+
+def browser_stats() -> dict:
+    """诊断：当前线程是否已有常驻浏览器、活了多久、闲了多久。"""
+    state = getattr(_local, "state", None)
+    if state is None:
+        return {"running": False}
+    return {
+        "running": True,
+        "age_s": round(time.monotonic() - state["launched"], 1),
+        "idle_s": round(time.monotonic() - state["used"], 1),
+    }
+
+
+atexit.register(_close_thread_browser)
 
 
 def _shot_node(

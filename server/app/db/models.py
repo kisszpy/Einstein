@@ -48,6 +48,11 @@ class Chunk:
     text: str
     vector: list[float]
     embedding_kind: str = "mock"
+    # 生成这条向量的模型名与维度：换嵌入模型（8B→4B，4096→2560 维）之后，
+    # 旧向量与新查询不在同一空间，检索结果毫无意义。记下来才能在检索前
+    # 说清"该重建索引了"，而不是静默返回空或抛一句维度冲突。
+    embedding_model: str = ""
+    embedding_dim: int = 0
     seq: int = 0
     char_start: int = 0
     char_end: int = 0

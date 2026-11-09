@@ -72,6 +72,9 @@ class AgentContext:
     # 引擎是否用框架的 interrupt 做人工确认。为真时工具本身不再抛异常——
     # 拦截发生在工具执行之前，工具代码保持"被调用就是已批准"的干净语义。
     hitl: bool = False
+    # 本轮召回到的长期记忆（人设之外的工作区事实）。由引擎在装配前填好，
+    # 提示词构建器负责拼进系统提示——智能体因此也带背景，而不是每次从零开始。
+    memory: list[str] = field(default_factory=list)
 
     def note_artifact(self, rel_path: str, kind: str) -> None:
         entry = {"path": rel_path, "kind": kind}
@@ -195,12 +198,18 @@ def _safe(fn):
 
     单个网页 403、某个项目不存在都不该中断整轮任务——模型读到
     {"ok": false, "error": ...} 后可以换来源或换做法继续干。
+
+    **`ApprovalRequired` 必须放行**：它是"暂停等用户确认"的控制流，不是工具
+    失败。被这里兜住的话，引擎永远收不到暂停信号，用户也永远看不到批准框，
+    任务只会收到一个 `{"ok": false, ...}` 然后自己找别的路——人工确认形同虚设。
     """
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except Exception as exc:  # noqa: BLE001 — 工具边界，兜住所有异常
+        except ApprovalRequired:
+            raise
+        except Exception as exc:  # noqa: BLE001 — 工具边界，兜住其余所有异常
             return _err(exc)
 
     return wrapper

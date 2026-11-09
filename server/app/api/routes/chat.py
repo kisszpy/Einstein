@@ -202,6 +202,13 @@ async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[st
             if effective_kb_ids:
                 result = await retrieve(effective_kb_ids, user_text, history=history)
                 citations = result.citations
+                if result.error:
+                    # 向量与嵌入模型不匹配：如实告知，别让模型拿噪音当资料
+                    system_text = (
+                        f"{system_text}\n\n[知识库检索失败] {result.error}\n"
+                        "请如实告诉用户这次没能检索到知识库内容及其原因，"
+                        "不要用参数知识冒充资料。"
+                    )
                 if result.hits:
                     system_text = (
                         f"{system_text}\n\n=== 参考资料 ===\n{build_context_block(result.hits)}\n"

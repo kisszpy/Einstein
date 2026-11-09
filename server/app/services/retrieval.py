@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.services.rag import RetrievedChunk, search
+from app.services.rag import EmbeddingMismatch, RetrievedChunk, search
 from app.services.store import get_store
 
 DEFAULT_TOP_K = 4
@@ -28,6 +28,9 @@ class Retrieval:
     citations: list[dict] = field(default_factory=list)
     # 是否做了查询改写（追问消解），前端/日志用它解释"为什么检索词变了"
     rewritten: bool = False
+    # 检索本身出了问题（目前只有"向量与嵌入模型不匹配"）：与"没命中"分开，
+    # 前者要用户去重建索引，后者要用户补文档，处理动作完全不同。
+    error: str = ""
 
     @property
     def missed(self) -> bool:
@@ -73,10 +76,16 @@ async def retrieve(
         except Exception as exc:  # noqa: BLE001 — 改写是增益项，失败用原句
             print(f"[retrieval] 查询改写失败：{type(exc).__name__}: {exc}", flush=True)
 
-    hits = await search(
-        get_store(), kb_ids, search_query,
-        top_k=top_k, parent_expand=parent_expand,
-    )
+    try:
+        hits = await search(
+            get_store(), kb_ids, search_query,
+            top_k=top_k, parent_expand=parent_expand,
+        )
+    except EmbeddingMismatch as exc:
+        # 不抛给上层：调用方（对话/工具）拿到的是一句可操作的提示，
+        # 而不是 500，也不是"知识库里没有相关内容"这种误导性结论。
+        print(f"[retrieval] 嵌入指纹不匹配：{exc}", flush=True)
+        return Retrieval(query=search_query, rewritten=rewritten, error=str(exc))
     return Retrieval(
         hits=hits,
         query=search_query,
