@@ -200,7 +200,7 @@ export function GrantsPanel({ kbId, onClose }: { kbId: string; onClose: () => vo
                 </Button>
               </div>
               {addable.length === 0 && (
-                <p className="mt-1.5 text-[11px] text-tertiary">没有可添加的成员</p>
+                <p className="mt-1.5 text-[12px] text-tertiary">没有可添加的成员</p>
               )}
             </div>
           </>

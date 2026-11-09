@@ -112,7 +112,7 @@ export function WorkspaceSwitcher() {
 
       {open && (
         <div className="absolute left-0 top-full z-20 mt-2 w-72 rounded-xl border border-line bg-surface-1 p-2 shadow-lg">
-          <p className="px-2 pb-1 pt-1 text-[11px] uppercase tracking-wide text-tertiary">
+          <p className="px-2 pb-1 pt-1 text-[12px] uppercase tracking-wide text-tertiary">
             切换工作区
           </p>
           <div className="max-h-56 overflow-y-auto">
@@ -122,14 +122,14 @@ export function WorkspaceSwitcher() {
                 onClick={() => switchTo(w.id)}
                 className={cn(
                   "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
-                  w.id === active ? "bg-brand-soft text-brand" : "text-secondary hover:bg-surface-3",
+                  w.id === active ? "bg-brand-soft text-brand-deep dark:text-brand" : "text-secondary hover:bg-surface-3",
                 )}
               >
                 <span className="flex min-w-0 items-center gap-1.5">
-                  {w.is_personal && <span className="shrink-0 text-[11px]">🏠</span>}
+                  {w.is_personal && <span className="shrink-0 text-[12px]">🏠</span>}
                   <span className="truncate">{w.name}</span>
                 </span>
-                <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-tertiary">
+                <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-tertiary">
                   <span className="rounded bg-surface-3 px-1 py-0.5">
                     {ROLE_LABEL[w.role] ?? w.role}
                   </span>
@@ -141,7 +141,7 @@ export function WorkspaceSwitcher() {
 
           <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
             {current?.is_personal ? (
-              <p className="px-2 py-1 text-[11.5px] text-tertiary">
+              <p className="px-2 py-1 text-[12px] text-tertiary">
                 私有空间，只有你自己可见
               </p>
             ) : (
@@ -177,7 +177,7 @@ export function WorkspaceSwitcher() {
                 </button>
               </>
             ) : (
-              <p className="px-2 py-1 text-[11.5px] text-tertiary">
+              <p className="px-2 py-1 text-[12px] text-tertiary">
                 工作区由管理员分配，如需新增请联系管理员。
               </p>
             )}

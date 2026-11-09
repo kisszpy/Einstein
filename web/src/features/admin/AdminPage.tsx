@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { MembersCard } from "./MembersCard";
 import { InvitesCard } from "./InvitesCard";
 import { MemoryCard } from "./MemoryCard";
+import { confirmDialog } from "@/lib/confirm";
 
 interface Summary {
   requests: {
@@ -82,7 +83,13 @@ export function AdminPage() {
   }, [load]);
 
   const clear = async () => {
-    if (!window.confirm("清空全部指标数据？")) return;
+    const ok = await confirmDialog({
+      title: "清空指标",
+      message: "清空全部指标数据？此操作不可恢复。",
+      confirmLabel: "清空",
+      danger: true,
+    });
+    if (!ok) return;
     await fetch("/api/obs", { method: "DELETE" });
     await load();
   };

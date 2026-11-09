@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { readSseStream } from "./sse-parser";
 import type { ChatMessage, Citation, WebMode, WebState } from "./chat-types";
 
@@ -20,11 +20,55 @@ export function useChatStream() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  /** 流式期间点历史会话会被挡下，置 true 让页面给出提示而不是静默吞掉 */
+  const [switchBlocked, setSwitchBlocked] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  // ---- delta 合帧：SSE 常单包多 delta，逐条 setState 每帧触发全列表重渲染。
+  // 累积到 ref，用 rAF 对齐浏览器帧率批量落盘；流结束/中断时强制冲掉残余。 ----
+  const pendingRef = useRef<{ id: string; content: string; reasoning: string } | null>(null);
+  const rafRef = useRef(0);
+
+  const flushPending = useCallback(() => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+    }
+    const p = pendingRef.current;
+    if (!p) return;
+    pendingRef.current = null;
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === p.id
+          ? {
+              ...m,
+              content: m.content + p.content,
+              reasoning: p.reasoning ? (m.reasoning ?? "") + p.reasoning : m.reasoning,
+            }
+          : m,
+      ),
+    );
+  }, []);
+
+  const scheduleFlush = useCallback(() => {
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0;
+      flushPending();
+    });
+  }, [flushPending]);
+
+  // 卸载时不再触发挂起的 flush，避免向已卸载组件 setState
+  useEffect(() => () => cancelAnimationFrame(rafRef.current), []);
 
   /** 从服务端历史加载一个会话 */
   const loadConversation = useCallback(async (id: string) => {
-    if (isStreaming) return;
+    if (isStreaming) {
+      // 以前这里静默 return，用户点了历史会话毫无反应，误以为页面卡死
+      setSwitchBlocked(true);
+      return;
+    }
+    setSwitchBlocked(false);
     const res = await fetch(`/api/conversations/${id}`);
     if (!res.ok) {
       // 以前这里静默 return，用户点了历史会话毫无反应，误以为页面卡死
@@ -92,22 +136,20 @@ export function useChatStream() {
               break;
             case "delta": {
               const { text } = raw as { text: string };
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantMsg.id ? { ...m, content: m.content + text } : m,
-                ),
-              );
+              const p =
+                pendingRef.current ??
+                (pendingRef.current = { id: assistantMsg.id, content: "", reasoning: "" });
+              p.content += text;
+              scheduleFlush();
               break;
             }
             case "reasoning": {
               const { text } = raw as { text: string };
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantMsg.id
-                    ? { ...m, reasoning: (m.reasoning ?? "") + text }
-                    : m,
-                ),
-              );
+              const p =
+                pendingRef.current ??
+                (pendingRef.current = { id: assistantMsg.id, content: "", reasoning: "" });
+              p.reasoning += text;
+              scheduleFlush();
               break;
             }
             case "web":
@@ -120,18 +162,22 @@ export function useChatStream() {
               });
               break;
             case "error":
+              flushPending();
               patchAssistant({
                 error: (raw as { message: string }).message,
                 streaming: false,
               });
               break;
             case "done":
+              flushPending();
               patchAssistant({ streaming: false });
               break;
           }
         });
+        flushPending();
         patchAssistant({ streaming: false });
       } catch (err) {
+        flushPending(); // 中断/报错也把已收到的文本落盘，气泡里能看到已生成部分
         if ((err as Error).name !== "AbortError") {
           patchAssistant({
             error: `请求失败：${(err as Error).message}`,
@@ -143,7 +189,7 @@ export function useChatStream() {
         abortRef.current = null;
       }
     },
-    [conversationId],
+    [conversationId, flushPending, scheduleFlush],
   );
 
   /** 普通发送：追加一条 user 后请求 */
@@ -218,5 +264,7 @@ export function useChatStream() {
     stop,
     reset,
     loadConversation,
+    /** 流式中点历史会话被挡下：页面据此显示提示条 */
+    switchBlocked,
   };
 }

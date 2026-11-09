@@ -113,7 +113,7 @@ export function AssistantTurn({
     <div className="group/turn mb-6">
       {plan.length > 0 && (
         <div className="mb-2 rounded-lg border border-line bg-surface-1 px-3 py-2">
-          <div className="flex items-center gap-1.5 text-[11.5px] text-tertiary">
+          <div className="flex items-center gap-1.5 text-[12px] text-tertiary">
             <span>计划</span>
             <span className="tabular-nums">
               {plan.filter((p) => p.status === "completed").length}/{plan.length}
@@ -128,7 +128,7 @@ export function AssistantTurn({
                   {done ? (
                     <Check size={12} className="mt-[5px] shrink-0 text-tertiary" />
                   ) : doing ? (
-                    <Loader2 size={11} className="mt-[6px] shrink-0 animate-spin text-brand" />
+                    <Loader2 size={11} className="mt-[6px] shrink-0 animate-spin text-brand-deep dark:text-brand"/>
                   ) : (
                     <Circle size={8} className="mt-[8px] shrink-0 text-tertiary/60" />
                   )}
@@ -150,7 +150,7 @@ export function AssistantTurn({
       {notes.length > 0 && (
         <div className="mb-2 space-y-1">
           {notes.map((n, i) => (
-            <p key={i} className="flex items-start gap-1.5 text-[11.5px] leading-relaxed text-tertiary">
+            <p key={i} className="flex items-start gap-1.5 text-[12px] leading-relaxed text-tertiary">
               <Info size={12} className="mt-[3px] shrink-0" />
               <span>{n.content}</span>
             </p>
@@ -169,9 +169,9 @@ export function AssistantTurn({
             )}
           >
             {running ? (
-              <Loader2 size={13} className="animate-spin text-brand" />
+              <Loader2 size={13} className="animate-spin text-brand-deep dark:text-brand"/>
             ) : (
-              <Sparkles size={13} className="text-brand" />
+              <Sparkles size={13} className="text-brand-deep dark:text-brand"/>
             )}
             <span>
               {running
@@ -210,7 +210,7 @@ export function AssistantTurn({
                         strokeWidth={1.9}
                         className={cn(
                           "mt-[3px] shrink-0",
-                          failed ? "text-danger" : row.result ? "text-tertiary" : "text-brand",
+                          failed ? "text-danger" : row.result ? "text-tertiary" : "text-brand-deep dark:text-brand"
                         )}
                       />
                       <span className="min-w-0 flex-1">
@@ -219,7 +219,7 @@ export function AssistantTurn({
                             {toolLabel(row.call.name ?? "")}
                           </span>
                           {row.result?.duration_ms != null && (
-                            <span className="shrink-0 text-[11px] text-tertiary">
+                            <span className="shrink-0 text-[12px] text-tertiary">
                               {row.result.duration_ms}ms
                             </span>
                           )}
@@ -227,7 +227,7 @@ export function AssistantTurn({
                             <Loader2 size={10} className="animate-spin text-tertiary" />
                           )}
                         </span>
-                        <span className="mt-0.5 block truncate text-[11.5px] text-tertiary">
+                        <span className="mt-0.5 block truncate text-[12px] text-tertiary">
                           {(row.call.args ?? "").replace(/\s+/g, " ").slice(0, 120) || "—"}
                         </span>
                       </span>
@@ -241,11 +241,11 @@ export function AssistantTurn({
                     </button>
                     {expanded && (
                       <div className="mb-1 ml-5 mr-1 space-y-1">
-                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-surface-3 p-2 text-[11.5px] leading-relaxed text-secondary">
+                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-surface-3 p-2 text-[12px] leading-relaxed text-secondary">
                           {row.call.args || "—"}
                         </pre>
                         {row.result && (
-                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-surface-3 p-2 text-[11.5px] leading-relaxed text-secondary">
+                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-surface-3 p-2 text-[12px] leading-relaxed text-secondary">
                             {(row.result.content ?? "").slice(0, 4000) || "—"}
                           </pre>
                         )}
@@ -270,16 +270,16 @@ export function AssistantTurn({
 
       {citations.length > 0 && (
         <div className="mt-3 space-y-1">
-          <p className="text-[11.5px] font-medium tracking-wide text-tertiary">参考资料</p>
+          <p className="text-[12px] font-medium tracking-wide text-tertiary">参考资料</p>
           {citations.map((cite) => (
             <div
               key={`${cite.chunk_id}-${cite.index}`}
               title={cite.text}
               className="flex items-center gap-1.5 truncate rounded-lg bg-surface-1 px-2.5 py-1.5 text-[12px] text-secondary"
             >
-              <span className="shrink-0 font-medium text-brand">[{cite.index}]</span>
+              <span className="shrink-0 font-medium text-brand-deep dark:text-brand">[{cite.index}]</span>
               <span className="truncate">{cite.document_name}</span>
-              <span className="ml-auto shrink-0 text-[11px] text-tertiary">
+              <span className="ml-auto shrink-0 text-[12px] text-tertiary">
                 相关度 {Number(cite.score ?? 0).toFixed(2)}
               </span>
             </div>
@@ -306,11 +306,11 @@ export function AssistantTurn({
                   <span className="block truncate text-[13px] text-primary">
                     {fileName(artifact.path)}
                   </span>
-                  <span className="block truncate text-[11px] text-tertiary">
+                  <span className="block truncate text-[12px] text-tertiary">
                     {artifactKindLabel(artifact)}
                   </span>
                 </span>
-                <span className="mr-1 shrink-0 rounded-md px-1.5 py-1 text-[11.5px] text-tertiary transition-colors group-hover:text-brand">
+                <span className="mr-1 shrink-0 rounded-md px-1.5 py-1 text-[12px] text-tertiary transition-colors group-hover:text-brand">
                   预览
                 </span>
               </button>
@@ -339,7 +339,7 @@ export function AssistantTurn({
             <button
               onClick={() => void copy()}
               title="复制回答"
-              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11.5px] text-tertiary transition-colors hover:bg-hover hover:text-secondary"
+              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] text-tertiary transition-colors hover:bg-hover hover:text-secondary"
             >
               {copied ? <Check size={12} /> : <Copy size={12} />}
               {copied ? "已复制" : "复制"}
@@ -348,7 +348,7 @@ export function AssistantTurn({
           <button
             onClick={onRerun}
             title="用同样的任务再跑一次"
-            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11.5px] text-tertiary transition-colors hover:bg-hover hover:text-secondary"
+            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] text-tertiary transition-colors hover:bg-hover hover:text-secondary"
           >
             <RotateCcw size={12} />
             重跑

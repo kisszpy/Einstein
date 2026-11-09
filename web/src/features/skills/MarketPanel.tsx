@@ -63,7 +63,7 @@ export function MarketPanel({ onInstall }: Props) {
         </p>
       )}
       {data && !data.rate_limited && (
-        <p className="text-[11.5px] text-tertiary">
+        <p className="text-[12px] text-tertiary">
           共 {data.total.toLocaleString()} 个仓库，按 star 排序
           {data.cached ? " · 缓存结果" : ""} · 安装前会先扫描仓库里的 SKILL.md
         </p>
@@ -85,12 +85,12 @@ export function MarketPanel({ onInstall }: Props) {
                     {item.full_name || item.name}
                   </a>
                   {item.installed > 0 && (
-                    <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[11px] text-brand">
+                    <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[12px] text-brand-deep dark:text-brand">
                       已装 {item.installed}
                     </span>
                   )}
                   {item.fallback && (
-                    <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[11px] text-tertiary">
+                    <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[12px] text-tertiary">
                       精选
                     </span>
                   )}
@@ -98,7 +98,7 @@ export function MarketPanel({ onInstall }: Props) {
                 <p className="mt-1 line-clamp-2 text-[12px] leading-5 text-secondary">
                   {item.description || "（作者未填写描述）"}
                 </p>
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-tertiary">
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-tertiary">
                   {!item.fallback && (
                     <span className="flex items-center gap-1">
                       <Star size={11} />

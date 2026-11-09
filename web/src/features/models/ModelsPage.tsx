@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
+import { confirmDialog } from "@/lib/confirm";
 
 interface ModelRow {
   id: string;
@@ -106,8 +107,8 @@ function Badge({ tone = "muted", children }: { tone?: "muted" | "brand"; childre
   return (
     <span
       className={cn(
-        "rounded px-1.5 py-0.5 text-[11px]",
-        tone === "brand" ? "bg-brand-soft text-brand" : "bg-surface-3 text-tertiary",
+        "rounded px-1.5 py-0.5 text-[12px]",
+        tone === "brand" ? "bg-brand-soft text-brand-deep dark:text-brand" : "bg-surface-3 text-tertiary",
       )}
     >
       {children}
@@ -130,7 +131,7 @@ function Field({
     <label className={cn("block", className)}>
       <span className="mb-1 flex items-baseline gap-1.5 text-xs text-tertiary">
         {label}
-        {hint && <span className="text-[11px] text-tertiary">{hint}</span>}
+        {hint && <span className="text-[12px] text-tertiary">{hint}</span>}
       </span>
       {children}
     </label>
@@ -346,7 +347,13 @@ export function ModelsPage() {
   };
 
   const remove = async (row: ModelRow) => {
-    if (!window.confirm(`删除模型「${row.name}」？引用它的专家会回到「跟随平台默认」。`)) return;
+    const ok = await confirmDialog({
+      title: "删除模型",
+      message: `删除模型「${row.name}」？引用它的专家会回到「跟随平台默认」。`,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     setBusy({ id: row.id, action: "remove" });
     setActionError("");
     try {
@@ -429,7 +436,7 @@ export function ModelsPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[13px] font-medium text-primary">{row.name}</span>
-                    <code className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-[11.5px] text-secondary">
+                    <code className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-[12px] text-secondary">
                       {row.model}
                     </code>
                     {row.is_default && <Badge tone="brand">默认</Badge>}
@@ -485,7 +492,7 @@ export function ModelsPage() {
                       {row.tags.map((t) => (
                         <span
                           key={t}
-                          className="rounded bg-surface-3 px-1.5 py-0.5 text-[11px] text-tertiary"
+                          className="rounded bg-surface-3 px-1.5 py-0.5 text-[12px] text-tertiary"
                         >
                           {t}
                         </span>
@@ -695,7 +702,7 @@ export function ModelsPage() {
                 </label>
               )}
               {editing !== "new" && editingRow?.owner_id === "" && (
-                <span className="text-[11px] text-tertiary">平台预置模型</span>
+                <span className="text-[12px] text-tertiary">平台预置模型</span>
               )}
             </div>
 

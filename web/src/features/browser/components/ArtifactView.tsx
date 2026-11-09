@@ -121,14 +121,14 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
-        <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[10.5px] text-secondary">
+        <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[12px] text-secondary">
           {KIND_LABEL[mode]}
         </span>
         <span className="min-w-0 flex-1 truncate text-[12.5px] text-secondary" title={path}>
           {path}
         </span>
         {isText && mode === "markdown" && (
-          <div className="flex items-center rounded-md border border-line p-0.5 text-[11.5px]">
+          <div className="flex items-center rounded-md border border-line p-0.5 text-[12px]">
             <button
               onClick={() => setPreview(true)}
               className={cn(
@@ -177,7 +177,7 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
             onClick={save}
             disabled={!dirty || saving}
             className={cn(
-              "flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium",
+              "flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium",
               dirty ? "bg-brand text-brand-fg" : "bg-surface-3 text-tertiary",
             )}
           >
@@ -188,13 +188,13 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
       </div>
 
       {truncated && (
-        <div className="shrink-0 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-[11.5px] text-warning">
+        <div className="shrink-0 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-[12px] text-warning">
           文件较大，仅加载前 12000 字符；已切换为只读，编辑请下载后处理
         </div>
       )}
 
       {error && (
-        <div className="shrink-0 border-b border-danger/30 bg-danger/10 px-3 py-1.5 text-[11.5px] text-danger">
+        <div className="shrink-0 border-b border-danger/30 bg-danger/10 px-3 py-1.5 text-[12px] text-danger">
           {error}
         </div>
       )}
@@ -227,7 +227,7 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
 
         {mode === "deck" && (
           <div className="flex h-full flex-col items-center justify-center gap-4">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-soft text-brand">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-soft text-brand-deep dark:text-brand">
               <Presentation size={24} strokeWidth={1.6} />
             </div>
             <div className="text-center">
@@ -286,7 +286,7 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
       </div>
 
       {editable && dirty && (
-        <div className="flex shrink-0 items-center gap-2 border-t border-line bg-warning/10 px-3 py-1.5 text-[11.5px] text-warning">
+        <div className="flex shrink-0 items-center gap-2 border-t border-line bg-warning/10 px-3 py-1.5 text-[12px] text-warning">
           <span className="h-1.5 w-1.5 rounded-full bg-warning" />
           有未保存的修改
           <button

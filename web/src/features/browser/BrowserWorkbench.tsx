@@ -131,7 +131,7 @@ export function BrowserWorkbench({
               className={cn(
                 "flex items-center gap-1.5 rounded-md px-2 py-1 text-[12.5px] transition-colors",
                 tab === id
-                  ? "bg-brand-soft font-medium text-brand"
+                  ? "bg-brand-soft font-medium text-brand-deep dark:text-brand"
                   : "text-secondary hover:bg-surface-3 hover:text-primary",
               )}
               title={label}
@@ -152,7 +152,7 @@ export function BrowserWorkbench({
             title={railOpen ? "收起文件栏" : "展开文件栏"}
             className={cn(
               "rounded-md p-1.5 transition-colors",
-              railOpen ? "text-brand" : "text-tertiary hover:bg-surface-3 hover:text-secondary",
+              railOpen ? "text-brand-deep dark:text-brand": "text-tertiary hover:bg-surface-3 hover:text-secondary",
             )}
           >
             <PanelLeft size={13} strokeWidth={1.8} />
@@ -174,7 +174,7 @@ export function BrowserWorkbench({
         </select>
 
         {!compact && (
-          <span className="ml-auto flex items-center gap-2 pr-1 text-[11px] text-tertiary">
+          <span className="ml-auto flex items-center gap-2 pr-1 text-[12px] text-tertiary">
             {activeProject && tab !== "web" && (
               <>
                 <span>{activeProject.files} 个文件</span>
@@ -198,7 +198,7 @@ export function BrowserWorkbench({
             className="flex shrink-0 flex-col border-r border-line bg-surface-2"
             style={{ width: railWidth }}
           >
-            <div className="flex items-center justify-between px-2.5 pb-1 pt-2 text-[11px] tracking-wide text-tertiary">
+            <div className="flex items-center justify-between px-2.5 pb-1 pt-2 text-[12px] tracking-wide text-tertiary">
               <span className="flex items-center gap-1">
                 {tab === "deck" ? "演示文稿" : "项目文件"}
                 {loadingTree && <Loader2 size={10} className="animate-spin" />}
@@ -206,7 +206,7 @@ export function BrowserWorkbench({
               <button
                 onClick={() => setTreeTick((n) => n + 1)}
                 title="刷新文件列表"
-                className="rounded p-0.5 text-tertiary hover:bg-surface-3 hover:text-primary"
+                className="rounded p-2 -m-1.5 text-tertiary hover:bg-surface-3 hover:text-primary"
               >
                 <RefreshCw size={10} strokeWidth={2} />
               </button>
@@ -305,7 +305,7 @@ function DeckList({
           className={cn(
             "flex w-full items-center gap-2 px-2.5 py-2 text-left text-[12.5px]",
             active === item.path
-              ? "bg-brand-soft text-brand"
+              ? "bg-brand-soft text-brand-deep dark:text-brand"
               : "text-secondary hover:bg-surface-3 hover:text-primary",
           )}
           title={item.path}
@@ -342,10 +342,10 @@ function ProjectGrid({
               <FolderOpen size={15} strokeWidth={1.8} />
             </span>
             <span className="w-full truncate text-[13px] font-medium">{item.name}</span>
-            <span className="text-[11.5px] text-tertiary">
+            <span className="text-[12px] text-tertiary">
               {item.files} 个文件 · {item.size}
             </span>
-            <span className="text-[11px] text-tertiary">更新于 {item.updated_at}</span>
+            <span className="text-[12px] text-tertiary">更新于 {item.updated_at}</span>
           </button>
         ))}
       </div>
@@ -384,7 +384,7 @@ function ProjectOverview({
       <div className="mt-5 space-y-4">
         {Object.entries(grouped).map(([dir, list]) => (
           <div key={dir}>
-            <p className="mb-1.5 flex items-center gap-1.5 text-[11px] tracking-wide text-tertiary">
+            <p className="mb-1.5 flex items-center gap-1.5 text-[12px] tracking-wide text-tertiary">
               <FolderOpen size={11} /> {dir}
             </p>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -395,7 +395,7 @@ function ProjectOverview({
                   className="flex items-center gap-2 rounded-lg border border-line bg-surface-1 px-3 py-2 text-left hover:border-brand/40 hover:bg-brand-soft/30"
                 >
                   {file.path.endsWith(".html") ? (
-                    <FileCode2 size={13} className="shrink-0 text-brand" />
+                    <FileCode2 size={13} className="shrink-0 text-brand-deep dark:text-brand"/>
                   ) : file.path.endsWith(".pptx") ? (
                     <Presentation size={13} className="shrink-0 text-warning" />
                   ) : (
@@ -404,7 +404,7 @@ function ProjectOverview({
                   <span className="min-w-0 flex-1 truncate text-[12.5px]">
                     {file.path.split("/").pop()}
                   </span>
-                  <span className="shrink-0 text-[10.5px] text-tertiary">{file.size}</span>
+                  <span className="shrink-0 text-[12px] text-tertiary">{file.size}</span>
                 </button>
               ))}
             </div>
@@ -421,7 +421,7 @@ function ProjectOverview({
 function EmptyDeck({ hasProject, hasDecks }: { hasProject: boolean; hasDecks: boolean }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
-      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft text-brand">
+      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft text-brand-deep dark:text-brand">
         <Presentation size={20} strokeWidth={1.6} />
       </span>
       <p className="text-[13.5px] font-medium">

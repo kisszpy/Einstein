@@ -119,7 +119,7 @@ export function Composer({
                 {menu && (
                   <div className="absolute bottom-full left-0 z-40 mb-2 w-[288px] overflow-hidden rounded-xl border border-line bg-surface-1 shadow-float">
                     <div className="max-h-[380px] overflow-y-auto p-1.5">
-                      <p className="px-2 pb-1 pt-1.5 text-[11px] font-medium text-tertiary">能力</p>
+                      <p className="px-2 pb-1 pt-1.5 text-[12px] font-medium text-tertiary">能力</p>
                       {capabilities.map((cap) => {
                         const on = caps.includes(cap.id);
                         return (
@@ -138,7 +138,7 @@ export function Composer({
                             </span>
                             <span className="min-w-0">
                               <span className="block text-[12.5px] text-primary">{cap.name}</span>
-                              <span className="block truncate text-[11px] text-tertiary">
+                              <span className="block truncate text-[12px] text-tertiary">
                                 {cap.description}
                               </span>
                             </span>
@@ -148,7 +148,7 @@ export function Composer({
 
                       {kbs.length > 0 && (
                         <>
-                          <p className="mt-1 border-t border-line px-2 pb-1 pt-2 text-[11px] font-medium text-tertiary">
+                          <p className="mt-1 border-t border-line px-2 pb-1 pt-2 text-[12px] font-medium text-tertiary">
                             知识库
                           </p>
                           {kbs.map((kb) => {
@@ -171,7 +171,7 @@ export function Composer({
                                 <span className="min-w-0 flex-1 truncate text-[12.5px] text-primary">
                                   {kb.name}
                                 </span>
-                                <span className="shrink-0 text-[11px] text-tertiary">
+                                <span className="shrink-0 text-[12px] text-tertiary">
                                   {kb.document_count}
                                 </span>
                               </button>
@@ -182,7 +182,7 @@ export function Composer({
 
                       {skills.length > 0 && (
                         <>
-                          <p className="mt-1 border-t border-line px-2 pb-1 pt-2 text-[11px] font-medium text-tertiary">
+                          <p className="mt-1 border-t border-line px-2 pb-1 pt-2 text-[12px] font-medium text-tertiary">
                             技能
                             <span className="ml-1 font-normal">不选则按任务自动挑选</span>
                           </p>
@@ -204,7 +204,7 @@ export function Composer({
                                 </span>
                                 <span className="min-w-0">
                                   <span className="block text-[12.5px] text-primary">{sk.name}</span>
-                                  <span className="block truncate text-[11px] text-tertiary">
+                                  <span className="block truncate text-[12px] text-tertiary">
                                     {sk.description}
                                   </span>
                                 </span>
@@ -214,7 +214,7 @@ export function Composer({
                         </>
                       )}
 
-                      <p className="mt-1 border-t border-line px-2 pb-1 pt-2 text-[11px] font-medium text-tertiary">
+                      <p className="mt-1 border-t border-line px-2 pb-1 pt-2 text-[12px] font-medium text-tertiary">
                         项目
                       </p>
                       <button
@@ -225,7 +225,7 @@ export function Composer({
                         className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors duration-150 hover:bg-hover"
                       >
                         <span className="flex-1 text-[12.5px] text-primary">由智能体创建</span>
-                        {!project && <Check size={12} className="text-brand" />}
+                        {!project && <Check size={12} className="text-brand-deep dark:text-brand"/>}
                       </button>
                       {projects.map((p) => (
                         <button
@@ -239,8 +239,8 @@ export function Composer({
                           <span className="min-w-0 flex-1 truncate text-[12.5px] text-primary">
                             {p.name}
                           </span>
-                          <span className="shrink-0 text-[11px] text-tertiary">{p.files} 文件</span>
-                          {project === p.id && <Check size={12} className="text-brand" />}
+                          <span className="shrink-0 text-[12px] text-tertiary">{p.files} 文件</span>
+                          {project === p.id && <Check size={12} className="text-brand-deep dark:text-brand"/>}
                         </button>
                       ))}
                       <button
@@ -260,22 +260,22 @@ export function Composer({
 
               {/* 已选凭据，和 WorkBuddy 的 chip 一样贴在「+」右侧 */}
               {caps.length > 0 && (
-                <span className="inline-flex h-6 items-center gap-1 rounded-full bg-surface-3 px-2 text-[11.5px] text-secondary">
+                <span className="inline-flex h-6 items-center gap-1 rounded-full bg-surface-3 px-2 text-[12px] text-secondary">
                   {caps.length} 项能力
                 </span>
               )}
               {selectedKbs.length > 0 && (
-                <span className="inline-flex h-6 items-center gap-1 rounded-full bg-surface-3 px-2 text-[11.5px] text-secondary">
+                <span className="inline-flex h-6 items-center gap-1 rounded-full bg-surface-3 px-2 text-[12px] text-secondary">
                   知识库 {selectedKbs.length}
                 </span>
               )}
               {selectedSkills.length > 0 && (
-                <span className="inline-flex h-6 items-center gap-1 rounded-full bg-surface-3 px-2 text-[11.5px] text-secondary">
+                <span className="inline-flex h-6 items-center gap-1 rounded-full bg-surface-3 px-2 text-[12px] text-secondary">
                   技能 {selectedSkills.length}
                 </span>
               )}
               {project && (
-                <span className="hidden h-6 items-center gap-1 rounded-full bg-surface-3 px-2 text-[11.5px] text-secondary sm:inline-flex">
+                <span className="hidden h-6 items-center gap-1 rounded-full bg-surface-3 px-2 text-[12px] text-secondary sm:inline-flex">
                   {project}
                 </span>
               )}
@@ -285,7 +285,7 @@ export function Composer({
             <>
               <span
                 title="工作型智能体：自主编排工具，过程与产物全程可见"
-                className="hidden items-center gap-1 rounded-full px-2 py-1 text-[11.5px] text-tertiary transition-colors hover:bg-hover hover:text-secondary sm:inline-flex"
+                className="hidden items-center gap-1 rounded-full px-2 py-1 text-[12px] text-tertiary transition-colors hover:bg-hover hover:text-secondary sm:inline-flex"
               >
                 <Sparkles size={12} strokeWidth={1.9} />
                 工作型智能体
@@ -302,7 +302,7 @@ export function Composer({
           }
         />
       </ComposerFrame>
-      <p className="mt-2 text-center text-[11px] text-tertiary">
+      <p className="mt-2 text-center text-[12px] text-tertiary">
         智能体会调用工具并写入项目文件，重要结论请核对
       </p>
     </div>

@@ -73,7 +73,7 @@ export function SkillFilesDialog({ skill, onClose }: Props) {
               href={skill.source_url}
               target="_blank"
               rel="noreferrer"
-              className="mt-0.5 block truncate text-[11.5px] text-tertiary hover:text-secondary"
+              className="mt-0.5 block truncate text-[12px] text-tertiary hover:text-secondary"
             >
               {skill.repo}@{skill.commit.slice(0, 10)}
               {skill.subpath ? ` / ${skill.subpath}` : ""}
@@ -96,13 +96,13 @@ export function SkillFilesDialog({ skill, onClose }: Props) {
                 className={cn(
                   "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] transition-colors duration-150",
                   active === file.path
-                    ? "bg-brand-soft text-brand"
+                    ? "bg-brand-soft text-brand-deep dark:text-brand"
                     : "text-secondary hover:bg-surface-3 hover:text-primary",
                 )}
               >
                 <FileText size={13} className="shrink-0 opacity-70" />
                 <span className="min-w-0 flex-1 truncate font-mono">{file.path}</span>
-                <span className="shrink-0 text-[10.5px] text-tertiary">{fileSize(file.size)}</span>
+                <span className="shrink-0 text-[12px] text-tertiary">{fileSize(file.size)}</span>
               </button>
             ))}
             {files.length === 0 && (

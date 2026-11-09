@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { confirmDialog } from "@/lib/confirm";
 
 interface EvalItem {
   query: string;
@@ -174,7 +175,13 @@ export function EvalPage() {
   }, [selectedSet, loadRuns]);
 
   const remove = async (s: EvalSet) => {
-    if (!window.confirm(`删除评测集「${s.name}」？`)) return;
+    const ok = await confirmDialog({
+      title: "删除评测集",
+      message: `删除评测集「${s.name}」？`,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     if (selectedSet === s.id) setSelectedSet("");
     await fetch(`/api/eval/sets/${s.id}`, { method: "DELETE" });
     await loadSets();
@@ -204,7 +211,7 @@ export function EvalPage() {
               className={cn(
                 "rounded-md border px-2.5 py-1 text-xs transition-colors duration-150",
                 selectedKb === kb.id
-                  ? "border-brand bg-brand-soft text-brand"
+                  ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
                   : "border-line text-secondary hover:border-line-strong",
               )}
             >
@@ -219,7 +226,7 @@ export function EvalPage() {
               className={cn(
                 "rounded-md border px-2.5 py-1 text-xs transition-colors duration-150",
                 runMode === m
-                  ? "border-brand bg-brand-soft text-brand"
+                  ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
                   : "border-line text-secondary hover:border-line-strong",
               )}
             >
@@ -374,13 +381,13 @@ export function EvalPage() {
                         <span className="text-secondary">{r.mode}</span>
                         <span className="text-secondary">
                           MRR {r.mrr}
-                          <span className={delta("mrr") && delta("mrr")! < 0 ? "text-danger" : "text-brand"}>
+                          <span className={delta("mrr") && delta("mrr")! < 0 ? "text-danger" : "text-brand-deep dark:text-brand" }>
                             {fmtDelta(delta("mrr"))}
                           </span>
                         </span>
                         <span className="text-secondary">
                           Recall {r.recall_at_k}
-                          <span className={delta("recall_at_k") && delta("recall_at_k")! < 0 ? "text-danger" : "text-brand"}>
+                          <span className={delta("recall_at_k") && delta("recall_at_k")! < 0 ? "text-danger" : "text-brand-deep dark:text-brand" }>
                             {fmtDelta(delta("recall_at_k"))}
                           </span>
                         </span>
@@ -399,7 +406,7 @@ export function EvalPage() {
                       <span
                         className={cn(
                           "rounded px-1.5 py-0.5 text-xs",
-                          it.hit ? "bg-brand-soft text-brand" : "bg-danger/10 text-danger",
+                          it.hit ? "bg-brand-soft text-brand-deep dark:text-brand" : "bg-danger/10 text-danger",
                         )}
                       >
                         {it.hit ? `检索命中 #${it.rank}` : "检索未命中"}
@@ -408,7 +415,7 @@ export function EvalPage() {
                         <span
                           className={cn(
                             "rounded px-1.5 py-0.5 text-xs",
-                            it.answer_pass ? "bg-brand-soft text-brand" : "bg-danger/10 text-danger",
+                            it.answer_pass ? "bg-brand-soft text-brand-deep dark:text-brand" : "bg-danger/10 text-danger",
                           )}
                         >
                           {it.answer_pass ? "回答通过" : "回答未通过"}

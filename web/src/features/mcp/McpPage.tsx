@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { confirmDialog } from "@/lib/confirm";
 
 interface McpToolDef {
   name: string;
@@ -35,7 +36,7 @@ const EMPTY_FORM = {
 };
 
 const STATUS_STYLE: Record<McpServer["status"], { label: string; cls: string }> = {
-  ok: { label: "已连接", cls: "bg-brand-soft text-brand" },
+  ok: { label: "已连接", cls: "bg-brand-soft text-brand-deep dark:text-brand" },
   error: { label: "连接失败", cls: "bg-danger/10 text-danger" },
   unknown: { label: "未刷新", cls: "bg-surface-3 text-tertiary" },
 };
@@ -112,7 +113,13 @@ export function McpPage() {
   };
 
   const remove = async (s: McpServer) => {
-    if (!window.confirm(`删除 MCP 服务器「${s.name}」？其工具将不再对智能体可见。`)) return;
+    const ok = await confirmDialog({
+      title: "删除 MCP 服务器",
+      message: `删除 MCP 服务器「${s.name}」？其工具将不再对智能体可见。`,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     await fetch(`/api/mcp/servers/${s.id}`, { method: "DELETE" });
     await load();
   };
@@ -153,7 +160,7 @@ export function McpPage() {
                   className={cn(
                     "rounded-md border px-3 py-1.5 text-xs transition-colors duration-150",
                     form.transport === t
-                      ? "border-brand bg-brand-soft text-brand"
+                      ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
                       : "border-line text-secondary hover:border-line-strong",
                   )}
                 >
@@ -259,7 +266,7 @@ export function McpPage() {
                               className={cn(
                                 "rounded px-1.5 py-0.5 text-xs transition-colors duration-150",
                                 approved
-                                  ? "bg-brand-soft text-brand"
+                                  ? "bg-brand-soft text-brand-deep dark:text-brand"
                                   : "bg-surface-3 text-tertiary line-through",
                               )}
                             >
@@ -270,7 +277,7 @@ export function McpPage() {
                       </div>
                     )}
                     {s.tools.length > 0 && (
-                      <p className="mt-1 text-[11px] text-tertiary">
+                      <p className="mt-1 text-[12px] text-tertiary">
                         点工具名切换审批状态
                         {(s.approved_tools?.length ?? 0) > 0
                           ? ` · 白名单 ${s.approved_tools?.length}/${s.tools.length}`

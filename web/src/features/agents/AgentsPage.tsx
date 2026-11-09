@@ -34,6 +34,7 @@ import {
   type ToolInfo,
   type TreeNode,
 } from "./types";
+import { confirmDialog, promptDialog } from "@/lib/confirm";
 
 /** 已归档的一轮问答（同一任务内的历史轮次） */
 interface TurnView {
@@ -599,7 +600,12 @@ export function AgentsPage() {
   };
 
   const createProject = async () => {
-    const name = window.prompt("项目名称（字母/数字/中文/连字符）");
+    const name = await promptDialog({
+      title: "新建项目",
+      message: "项目名称支持字母、数字、中文与连字符",
+      placeholder: "project-name",
+      confirmLabel: "创建",
+    });
     if (!name?.trim()) return;
     const res = await fetch("/api/projects", {
       method: "POST",
@@ -616,7 +622,13 @@ export function AgentsPage() {
   const deleteProject = async () => {
     const pid = browseProject;
     if (!pid) return;
-    if (!window.confirm(`删除项目「${pid}」及其全部文件？此操作不可恢复。`)) return;
+    const ok = await confirmDialog({
+      title: "删除项目",
+      message: `删除项目「${pid}」及其全部文件？此操作不可恢复。`,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     await fetch(`/api/projects/${encodeURIComponent(pid)}`, { method: "DELETE" });
     if (boundProject === pid) setBoundProject("");
     selectBrowse("");
@@ -626,7 +638,13 @@ export function AgentsPage() {
   const deleteSession = async (session: TaskSession) => {
     const label = session.title.slice(0, 30) + (session.title.length > 30 ? "…" : "");
     const extra = session.runs.length > 1 ? `（含 ${session.runs.length} 轮对话）` : "";
-    if (!window.confirm(`删除任务「${label}」${extra}？此操作不可恢复。`)) return;
+    const ok = await confirmDialog({
+      title: "删除任务",
+      message: `删除任务「${label}」${extra}？此操作不可恢复。`,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     const res = await fetch(`/api/agent/runs/${encodeURIComponent(session.id)}`, { method: "DELETE" });
     if (!res.ok) return;
     setRuns((prev) => prev.filter((r) => (r.session_id || r.id) !== session.id));
@@ -730,7 +748,7 @@ export function AgentsPage() {
 
           <div className="min-w-0 flex-1">
             <div className="truncate text-[13px] font-medium text-primary">{title}</div>
-            <div className="truncate text-[11px] text-tertiary">
+            <div className="truncate text-[12px] text-tertiary">
               {boundProject ? `项目 · ${boundProject}` : "未绑定项目（由智能体按任务决定）"} · {caps.length} 项能力
               {selectedKbs.length > 0 && ` · ${selectedKbs.length} 个知识库`}
             </div>

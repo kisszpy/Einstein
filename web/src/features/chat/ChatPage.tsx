@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Archive, Download, Globe, Pencil, Pin, PinOff, Plus, Search, Share2, SquarePen } from "lucide-react";
+import { Archive, ArrowDown, Download, Globe, Menu, Pencil, Pin, PinOff, Plus, Search, Share2, SquarePen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   ComposerFrame,
@@ -12,6 +12,7 @@ import { MessageBubble } from "./components/message-bubble";
 import type { WebMode } from "./chat-types";
 import { ShareDialog } from "@/features/share/ShareDialog";
 import { cn } from "@/lib/utils";
+import { confirmDialog, promptDialog } from "@/lib/confirm";
 
 const WEB_KEY = "einstein.chat.webMode";
 const WEB_LABEL: Record<WebMode, string> = { auto: "自动", on: "始终", off: "关闭" };
@@ -20,7 +21,6 @@ const WEB_HINT: Record<WebMode, string> = {
   on: "本轮强制联网检索",
   off: "本轮只用已有知识",
 };
-const WEB_NEXT: Record<WebMode, WebMode> = { auto: "on", on: "off", off: "auto" };
 
 /** 空会话的起步建议：都是知识库场景（问答/总结/对比），点一下填进输入框 */
 const CHAT_STARTERS = [
@@ -65,6 +65,7 @@ export function ChatPage() {
     stop,
     reset,
     loadConversation,
+    switchBlocked,
   } = useChatStream();
   const [input, setInput] = useState("");
   /** 正在编辑的 user 消息下标：发送时截断它及其之后的消息 */
@@ -79,18 +80,38 @@ export function ChatPage() {
   /** 正在分享的会话：null 表示面板关闭 */
   const [shareTarget, setShareTarget] = useState<{ id: string; title: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  /** 窄屏（<768px）会话列表抽屉：原先是 hidden md:flex 直接消失，分屏用户无法切会话 */
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     localStorage.setItem(WEB_KEY, webMode);
   }, [webMode]);
 
-  const loadList = useCallback(async (q = "") => {
-    const url = q.trim()
-      ? `/api/conversations?q=${encodeURIComponent(q.trim())}`
-      : "/api/conversations";
-    const res = await fetch(url);
-    setConversations(await res.json());
-  }, []);
+  const loadList = useCallback(
+    async (q = "", signal?: AbortSignal) => {
+      const url = q.trim()
+        ? `/api/conversations?q=${encodeURIComponent(q.trim())}`
+        : "/api/conversations";
+      try {
+        const res = await fetch(url, { signal });
+        if (!res.ok) return;
+        setConversations(await res.json());
+      } catch {
+        /* 竞态取消（AbortError）与新请求失败都静默：旧结果不允许覆盖新结果 */
+      }
+    },
+    [],
+  );
+
+  // 搜索防抖 + 竞态取消：停顿 300ms 才请求，快速输入时取消上一笔在途请求
+  const searchAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+    const timer = window.setTimeout(() => void loadList(searchQuery, controller.signal), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery, loadList]);
 
   const loadArchived = useCallback(async (visible: boolean) => {
     if (!visible) {
@@ -111,15 +132,27 @@ export function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadList, loadArchived]);
 
-  // 搜索防抖：停顿 300ms 后请求服务端全文搜索
+  // 贴底才跟随：用户上滚回看时不再被流式 delta 强行拽回底部（>80px 视为离开底部）
+  const [stickBottom, setStickBottom] = useState(true);
+  const scrollHostRef = useRef<HTMLDivElement>(null);
+  const onScrollHostScroll = () => {
+    const el = scrollHostRef.current;
+    if (!el) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    setStickBottom((prev) => (prev === near ? prev : near));
+  };
   useEffect(() => {
-    const timer = window.setTimeout(() => void loadList(searchQuery), 300);
-    return () => window.clearTimeout(timer);
-  }, [searchQuery, loadList]);
-
-  useEffect(() => {
+    if (!stickBottom) return;
+    bottomRef.current?.scrollIntoView({
+      // 流式高频滚动用 auto 瞬时跳，避免 smooth 动画队列堆积卡顿
+      behavior: isStreaming ? "auto" : "smooth",
+      block: "end",
+    });
+  }, [messages, isStreaming, stickBottom]);
+  const scrollToLatest = () => {
+    setStickBottom(true);
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages]);
+  };
 
   // 流式结束后刷新会话列表（新会话入库）
   useEffect(() => {
@@ -143,11 +176,9 @@ export function ChatPage() {
     void send(text, expertId, webMode);
   };
 
-  /** 把这条提问填回输入框；发送时替换掉旧提问及其之后的内容 */
-  const startEdit = (index: number, content: string) => {
-    setEditingIndex(index);
-    setInput(content);
-  };
+  /** messagesRef 供 useCallback 回调读取最新列表，避免依赖 messages 每帧重建回调 */
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
   const cancelEdit = () => {
     setEditingIndex(null);
@@ -157,6 +188,14 @@ export function ChatPage() {
   const activeExpert = experts.find((e) => e.id === expertId);
 
   const removeConversation = async (id: string) => {
+    // 误触即丢全部历史：删除前必须确认（danger 红键）
+    const ok = await confirmDialog({
+      title: "删除会话",
+      message: "删除后聊天记录无法恢复，确定删除吗？",
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     await fetch(`/api/conversations/${id}`, { method: "DELETE" });
     if (id === conversationId) {
       cancelEdit();
@@ -180,8 +219,8 @@ export function ChatPage() {
     void loadArchived(showArchived);
   };
 
-  const renameConversation = (c: ConversationItem) => {
-    const next = window.prompt("重命名会话", c.title);
+  const renameConversation = async (c: ConversationItem) => {
+    const next = await promptDialog({ title: "重命名会话", defaultValue: c.title });
     if (next && next.trim() && next.trim() !== c.title) {
       void patchConversation(c.id, { title: next.trim() });
     }
@@ -222,6 +261,7 @@ export function ChatPage() {
       )}
       onClick={() => {
         cancelEdit();
+        setDrawerOpen(false);
         void loadConversation(c.id);
       }}
     >
@@ -229,10 +269,10 @@ export function ChatPage() {
         <div
           className={cn(
             "flex items-center gap-1 truncate text-[13px]",
-            c.id === conversationId ? "text-brand" : "text-primary",
+            c.id === conversationId ? "text-brand-deep dark:text-brand": "text-primary",
           )}
         >
-          {c.pinned && <Pin size={11} className="shrink-0 text-brand" />}
+          {c.pinned && <Pin size={11} className="shrink-0 text-brand-deep dark:text-brand"/>}
           {c.title}
         </div>
         <div className="text-xs text-tertiary">{c.message_count} 条消息</div>
@@ -308,6 +348,20 @@ export function ChatPage() {
 
   const empty = messages.length === 0;
 
+  /** MessageBubble 是 memo 组件：回调必须引用稳定，否则 memo 白做。
+   *  index 由组件自己带上，这里不再渲染期新建箭头函数。 */
+  const handleRegenerate = useCallback(
+    (index: number) => void regenerateAt(index, expertId, webMode),
+    [regenerateAt, expertId, webMode],
+  );
+  const handleEdit = useCallback((index: number) => {
+    const m = messagesRef.current[index];
+    if (m?.role === "user") {
+      setEditingIndex(index);
+      setInput(m.content);
+    }
+  }, []);
+
   // 轮次按出现的 user 消息编号：重新生成会多出助手消息，不能按序号除 2
   let turnNo = 0;
   const turnOf = messages.map((m) => {
@@ -325,8 +379,20 @@ export function ChatPage() {
 
   return (
     <div className="flex h-full">
-      {/* 会话列表（服务端持久化，生产切 PostgreSQL） */}
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-line bg-surface-2 p-3 md:flex">
+      {/* 窄屏遮罩：抽屉打开时挡住主区，点一下收起 */}
+      {drawerOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/40 md:hidden"
+          onClick={() => setDrawerOpen(false)}
+        />
+      )}
+      {/* 会话列表（服务端持久化）：md 以上常驻，以下为滑入抽屉 */}
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col border-r border-line bg-surface-2 p-3 transition-transform duration-200 md:static md:translate-x-0",
+          drawerOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
+        )}
+      >
         <Button
           variant="soft"
           className="mb-3 w-full gap-1.5"
@@ -377,8 +443,22 @@ export function ChatPage() {
 
       {/* 聊天流：与智能体页同一条内容基准线。滚动区与输入区都留滚动条槽（gutter），
           消息多到出现滚动条时正文列也不会比输入列窄一截。 */}
-      <section className="flex min-w-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+      <section className="relative flex min-w-0 flex-1 flex-col">
+        {/* 窄屏汉堡入口：md 以上隐藏 */}
+        <button
+          type="button"
+          onClick={() => setDrawerOpen(true)}
+          title="会话列表"
+          aria-label="打开会话列表"
+          className="absolute left-3 top-3 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-line bg-surface-1 text-secondary shadow-float transition-colors hover:text-primary md:hidden"
+        >
+          <Menu size={16} />
+        </button>
+        <div
+          ref={scrollHostRef}
+          onScroll={onScrollHostScroll}
+          className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+        >
           <div className="conversation-column">
             {empty ? (
               <div className="flex h-full min-h-[60vh] flex-col items-center justify-center text-center">
@@ -429,19 +509,14 @@ export function ChatPage() {
                 {messages.map((m, i) => (
                   <MessageBubble
                     key={m.id}
+                    index={i}
                     message={m}
                     conversationId={conversationId}
                     turn={turnOf[i]}
                     userQuery={m.role === "assistant" ? queryOf(i) : undefined}
                     busy={isStreaming}
-                    onRegenerate={
-                      m.role === "assistant"
-                        ? () => void regenerateAt(i, expertId, webMode)
-                        : undefined
-                    }
-                    onEdit={
-                      m.role === "user" ? () => startEdit(i, m.content) : undefined
-                    }
+                    onRegenerate={m.role === "assistant" ? handleRegenerate : undefined}
+                    onEdit={m.role === "user" ? handleEdit : undefined}
                   />
                 ))}
                 <div ref={bottomRef} />
@@ -450,9 +525,34 @@ export function ChatPage() {
           </div>
         </div>
 
+        {/* 回到最新：用户上滚回看且流式仍在继续时出现，避免被贴底逻辑拽走后找不到入口 */}
+        {!stickBottom && !empty && (
+          <button
+            type="button"
+            onClick={scrollToLatest}
+            className="absolute bottom-28 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-line bg-surface-1 px-3 py-1.5 text-xs text-secondary shadow-float transition-colors duration-150 hover:border-line-strong hover:text-primary"
+          >
+            <ArrowDown size={12} />
+            回到最新
+          </button>
+        )}
+
         {/* 输入区：外层用同样的滚动条槽占位，保证与消息区逐像素同宽 */}
         <div className="shrink-0 overflow-y-hidden [scrollbar-gutter:stable]">
           <div className="conversation-column pb-6">
+          {/* 流式中点历史会话被挡下时的显式提示：让"点了没反应"变成"知道为什么" */}
+          {isStreaming && switchBlocked && (
+            <div className="mb-2 flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs text-primary">
+              <span className="min-w-0 flex-1">正在生成回答，请先停止再切换会话</span>
+              <button
+                type="button"
+                onClick={stop}
+                className="shrink-0 rounded px-1.5 py-0.5 font-medium transition-colors hover:text-danger"
+              >
+                停止生成
+              </button>
+            </div>
+          )}
           {/* 专家选择行 */}
           {experts.length > 0 && (
             <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -461,7 +561,7 @@ export function ChatPage() {
                 className={cn(
                   "rounded-full border px-3 py-1 text-xs transition-colors duration-150",
                   expertId === null
-                    ? "border-brand bg-brand-soft text-brand"
+                    ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
                     : "border-line text-secondary hover:border-line-strong",
                 )}
               >
@@ -475,7 +575,7 @@ export function ChatPage() {
                   className={cn(
                     "rounded-full border px-3 py-1 text-xs transition-colors duration-150",
                     expertId === e.id
-                      ? "border-brand bg-brand-soft text-brand"
+                      ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
                       : "border-line text-secondary hover:border-line-strong",
                   )}
                 >
@@ -491,7 +591,7 @@ export function ChatPage() {
           )}
           {/* 编辑态提示：说明这次发送会截断旧内容 */}
           {editingIndex !== null && (
-            <div className="mb-2 flex items-center gap-2 rounded-lg border border-brand/40 bg-brand-soft px-3 py-1.5 text-xs text-brand">
+            <div className="mb-2 flex items-center gap-2 rounded-lg border border-brand/40 bg-brand-soft px-3 py-1.5 text-xs text-brand-deep dark:text-brand">
               <Pencil size={12} className="shrink-0" />
               <span className="min-w-0 flex-1 truncate">
                 正在编辑第 {turnOf[editingIndex] ?? 1} 轮提问，发送后这条提问之后的内容将被替换
@@ -523,20 +623,32 @@ export function ChatPage() {
             <ComposerToolbar
               left={
                 <>
-                  <button
-                    type="button"
-                    onClick={() => setWebMode(WEB_NEXT[webMode])}
-                    title="联网模式：自动 → 始终 → 关闭"
-                    className={cn(
-                      "flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors duration-150",
-                      webMode === "off"
-                        ? "border-line text-tertiary hover:border-line-strong"
-                        : "border-brand bg-brand-soft text-brand",
-                    )}
+                  {/* 三态分段控件：状态全部可见可点，替代"单按钮循环切换"的不可预期 */}
+                  <div
+                    role="radiogroup"
+                    aria-label="联网模式"
+                    className="flex shrink-0 items-center gap-0.5 rounded-full border border-line p-0.5"
                   >
-                    <Globe size={12} />
-                    联网 · {WEB_LABEL[webMode]}
-                  </button>
+                    <Globe size={12} className="ml-1.5 mr-0.5 shrink-0 text-tertiary" />
+                    {(Object.keys(WEB_LABEL) as WebMode[]).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="radio"
+                        aria-checked={webMode === mode}
+                        title={WEB_HINT[mode]}
+                        onClick={() => setWebMode(mode)}
+                        className={cn(
+                          "rounded-full px-2 py-1 text-xs transition-colors duration-150",
+                          webMode === mode
+                            ? "bg-brand-soft font-medium text-brand-deep dark:text-brand"
+                            : "text-tertiary hover:text-secondary",
+                        )}
+                      >
+                        {WEB_LABEL[mode]}
+                      </button>
+                    ))}
+                  </div>
                   <span className="hidden truncate text-xs text-tertiary sm:inline">
                     {WEB_HINT[webMode]}
                   </span>

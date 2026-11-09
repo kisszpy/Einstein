@@ -7,6 +7,7 @@ import { conditionText, timeText } from "./format";
 import { RuleDialog } from "./RuleDialog";
 import type { AlertEvent, AlertKind, AlertRule, CheckResult } from "./types";
 import { cn } from "@/lib/utils";
+import { confirmDialog } from "@/lib/confirm";
 
 export function AlertsTab() {
   const [kinds, setKinds] = useState<AlertKind[]>([]);
@@ -98,7 +99,13 @@ export function AlertsTab() {
   };
 
   const remove = async (rule: AlertRule) => {
-    if (!window.confirm(`删除规则「${rule.name}」？`)) return;
+    const ok = await confirmDialog({
+      title: "删除规则",
+      message: `删除规则「${rule.name}」？`,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     setBusyId(rule.id);
     try {
       await apiDelete(`/api/alerts/rules/${rule.id}`);
@@ -153,11 +160,11 @@ export function AlertsTab() {
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[13px] font-medium text-primary">{rule.name}</span>
-                  <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[11px] text-brand">
+                  <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[12px] text-brand-deep dark:text-brand">
                     {rule.kind_label}
                   </span>
                   {!rule.enabled && (
-                    <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[11px] text-tertiary">
+                    <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[12px] text-tertiary">
                       已停用
                     </span>
                   )}
@@ -170,7 +177,7 @@ export function AlertsTab() {
                     {rule.channels.length} 个 webhook
                   </span>
                 </p>
-                <p className="mt-0.5 text-[11.5px] text-tertiary">
+                <p className="mt-0.5 text-[12px] text-tertiary">
                   最近触发：{rule.last_fired_at ? timeText(rule.last_fired_at) : "从未触发"}
                 </p>
               </div>
@@ -228,7 +235,7 @@ export function AlertsTab() {
       <Card className="p-5">
         <div className="flex items-baseline justify-between">
           <h3 className="text-[13px] font-medium">触发历史</h3>
-          <span className="text-[11.5px] text-tertiary">最近 {events.length} 条</span>
+          <span className="text-[12px] text-tertiary">最近 {events.length} 条</span>
         </div>
         <div className="mt-2">
           {events.map((event) => (
@@ -237,7 +244,7 @@ export function AlertsTab() {
               className="flex items-start justify-between gap-3 border-t border-line py-2 first:border-t-0"
             >
               <div className="min-w-0">
-                <p className="text-[11.5px] text-tertiary">
+                <p className="text-[12px] text-tertiary">
                   {timeText(event.fired_at)} · {event.rule_name}
                 </p>
                 <p
@@ -248,13 +255,13 @@ export function AlertsTab() {
                 </p>
               </div>
               {event.delivered ? (
-                <span className="inline-flex shrink-0 items-center gap-1.5 text-[11.5px] text-secondary">
+                <span className="inline-flex shrink-0 items-center gap-1.5 text-[12px] text-secondary">
                   <span className="h-1.5 w-1.5 rounded-full bg-success" />
                   已送达
                 </span>
               ) : (
                 <span
-                  className="inline-flex max-w-[300px] shrink-0 items-center gap-1.5 text-[11.5px] text-danger"
+                  className="inline-flex max-w-[300px] shrink-0 items-center gap-1.5 text-[12px] text-danger"
                   title={event.delivery_error ?? ""}
                 >
                   <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" />

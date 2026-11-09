@@ -117,7 +117,7 @@ export function TaskSidebar({
         )}
         {groups.map(([title, items]) => (
           <div key={title} className="mb-1">
-            <p className="px-2 py-1.5 text-[11px] font-medium text-tertiary">{title}</p>
+            <p className="px-2 py-1.5 text-[12px] font-medium text-tertiary">{title}</p>
             <div className="space-y-px">
               {items.map((session) => {
                 const calls = session.steps;
@@ -152,7 +152,7 @@ export function TaskSidebar({
                       >
                         {session.title}
                       </span>
-                      <span className="mt-0.5 flex items-center gap-1 text-[11px] text-tertiary">
+                      <span className="mt-0.5 flex items-center gap-1 text-[12px] text-tertiary">
                         <span className="truncate">{relativeTime(session.updated_at)}</span>
                         {turns > 1 && <span>· {turns} 轮</span>}
                         {calls > 0 && <span>· {calls} 步</span>}
@@ -180,13 +180,13 @@ export function TaskSidebar({
       {/* 工作区：项目与文件 */}
       <div className="shrink-0 border-t border-line px-2.5 pb-2.5 pt-2">
         <div className="flex items-center justify-between px-1">
-          <span className="text-[11px] font-medium text-tertiary">工作区</span>
+          <span className="text-[12px] font-medium text-tertiary">工作区</span>
           <div className="flex items-center gap-0.5">
             <button
               onClick={onPreviewProject}
               disabled={!browseProject}
               title="在右侧内置浏览器里打开项目"
-              className="rounded p-1 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:opacity-40"
+              className="rounded p-1.5 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:opacity-40"
             >
               <Eye size={12.5} strokeWidth={1.9} />
             </button>
@@ -194,14 +194,14 @@ export function TaskSidebar({
               onClick={onRefreshTree}
               disabled={!browseProject}
               title="刷新文件"
-              className="rounded p-1 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:opacity-40"
+              className="rounded p-1.5 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary disabled:opacity-40"
             >
               <RefreshCw size={12.5} strokeWidth={1.9} />
             </button>
             <button
               onClick={onCreateProject}
               title="新建项目"
-              className="rounded p-1 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary"
+              className="rounded p-1.5 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary"
             >
               <FolderPlus size={12.5} strokeWidth={1.9} />
             </button>
@@ -210,14 +210,14 @@ export function TaskSidebar({
                 <a
                   href={`/api/projects/${encodeURIComponent(browseProject)}/archive`}
                   title="下载整个项目（zip）"
-                  className="rounded p-1 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary"
+                  className="rounded p-1.5 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary"
                 >
                   <Download size={12.5} strokeWidth={1.9} />
                 </a>
                 <button
                   onClick={onDeleteProject}
                   title="删除项目"
-                  className="rounded p-1 text-tertiary transition-colors duration-150 hover:bg-danger/10 hover:text-danger"
+                  className="rounded p-1.5 text-tertiary transition-colors duration-150 hover:bg-danger/10 hover:text-danger"
                 >
                   <Trash2 size={12.5} strokeWidth={1.9} />
                 </button>
@@ -244,7 +244,7 @@ export function TaskSidebar({
           <div className="mt-1">
             <button
               onClick={() => setTreeOpen((v) => !v)}
-              className="flex w-full items-center gap-1 px-1 py-1 text-[11px] text-tertiary transition-colors hover:text-secondary"
+              className="flex w-full items-center gap-1 px-1 py-1 text-[12px] text-tertiary transition-colors hover:text-secondary"
             >
               <span>{tree.length} 个文件</span>
               <span className="ml-auto">{treeOpen ? "收起" : "展开"}</span>
@@ -252,7 +252,7 @@ export function TaskSidebar({
             {treeOpen && (
               <div className="max-h-44 space-y-px overflow-y-auto pb-0.5">
                 {tree.length === 0 && (
-                  <p className="px-1.5 py-1.5 text-[11px] text-tertiary">（空项目）</p>
+                  <p className="px-1.5 py-1.5 text-[12px] text-tertiary">（空项目）</p>
                 )}
                 {tree.map((node) => {
                   const depth = node.path.split("/").length - 1;
@@ -262,7 +262,7 @@ export function TaskSidebar({
                       <div
                         key={node.path}
                         style={base}
-                        className="truncate py-1 text-[11.5px] text-tertiary"
+                        className="truncate py-1 text-[12px] text-tertiary"
                       >
                         {node.path.split("/").pop()}
                       </div>
@@ -277,7 +277,7 @@ export function TaskSidebar({
                       <button
                         onClick={() => onOpenFile(node.path)}
                         title="在右侧预览（不改页面）"
-                        className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left text-[11.5px] text-secondary transition-colors hover:text-primary"
+                        className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left text-[12px] text-secondary transition-colors hover:text-primary"
                       >
                         <span className="truncate">{fileName(node.path)}</span>
                       </button>

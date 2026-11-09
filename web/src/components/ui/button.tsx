@@ -9,7 +9,7 @@ const VARIANTS: Record<Variant, string> = {
   primary:
     "bg-linear-to-b from-brand to-brand-strong text-brand-fg shadow-[var(--shadow-btn)] hover:brightness-[1.04] active:brightness-[0.97]",
   // soft：轻量主操作（侧栏「新会话」这类），保留品牌识别但不抢正文
-  soft: "bg-brand-soft text-brand-deep hover:bg-brand/20 dark:text-brand",
+  soft: "bg-brand-soft text-brand-deep dark:text-brand hover:bg-brand/20 dark:text-brand",
   ghost: "text-secondary hover:bg-surface-3 hover:text-primary",
   outline: "border border-line text-primary hover:border-line-strong hover:bg-surface-3",
   // 破坏性操作：常驻可见但只在 hover 时变红，避免页面里到处是红色按钮

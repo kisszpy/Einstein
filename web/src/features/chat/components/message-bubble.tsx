@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AppWindow,
@@ -49,7 +49,7 @@ function WebPanel({ web }: { web: WebState }) {
   if (web.status === "checking" || web.status === "searching") {
     return (
       <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-surface-2 px-2.5 py-1.5 text-xs text-tertiary">
-        <Globe size={12} className="shrink-0 animate-pulse text-brand" />
+        <Globe size={12} className="shrink-0 animate-pulse text-brand-deep dark:text-brand"/>
         <span className="truncate">
           {web.status === "checking" ? "判断是否需要联网…" : `联网检索：${web.query ?? ""}`}
         </span>
@@ -93,7 +93,7 @@ function WebPanel({ web }: { web: WebState }) {
                 target="_blank"
                 rel="noreferrer"
                 title={s.snippet}
-                className="text-brand hover:underline"
+                className="text-brand-deep underline-offset-2 hover:underline dark:text-brand"
               >
                 [W{s.index}] {s.title}
               </a>
@@ -124,8 +124,11 @@ async function readError(res: Response): Promise<string> {
   }
 }
 
-export function MessageBubble({
+/** memo：流式时每个 delta 都会让消息列表重渲染，props 不变的气泡直接跳过。
+ *  配合 ChatPage 用 useCallback 提供的稳定回调与 delta 合帧才真正生效。 */
+export const MessageBubble = memo(function MessageBubble({
   message,
+  index,
   conversationId,
   turn = 1,
   userQuery = "",
@@ -134,6 +137,8 @@ export function MessageBubble({
   onEdit,
 }: {
   message: ChatMessage;
+  /** 本条消息在列表中的下标：回调按 index 定位，保持引用稳定 */
+  index: number;
   /** 反馈上报需要会话归属；历史会话由 ChatPage 传入 */
   conversationId?: string | null;
   /** 会话内的轮次（第几轮问答），随消息序号传入 */
@@ -142,10 +147,10 @@ export function MessageBubble({
   userQuery?: string;
   /** 正在流式生成：禁用会改变对话结构的操作 */
   busy?: boolean;
-  /** 重新生成这条回答（由 ChatPage 绑定到消息序号） */
-  onRegenerate?: () => void;
+  /** 重新生成这条回答（ChatPage 传入稳定引用，内部按 index 定位） */
+  onRegenerate?: (index: number) => void;
   /** 编辑这条提问后重发 */
-  onEdit?: () => void;
+  onEdit?: (index: number) => void;
 }) {
   const isUser = message.role === "user";
   const [reasoningOpen, setReasoningOpen] = useState(false);
@@ -169,6 +174,11 @@ export function MessageBubble({
   const [evalError, setEvalError] = useState<string | null>(null);
   const webRunning =
     message.web?.status === "checking" || message.web?.status === "searching";
+  // 引用编号归一化是两个全局正则的全文扫描，流式下每个 delta 都跑一遍太浪费
+  const normalized = useMemo(
+    () => normalizeCitations(message.content),
+    [message.content],
+  );
 
   const sendRating = async (next: "up" | "down") => {
     const final = rating === next ? null : next;
@@ -292,7 +302,7 @@ export function MessageBubble({
               <div className="mt-1 flex justify-end opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100">
                 <button
                   type="button"
-                  onClick={onEdit}
+                  onClick={() => onEdit(index)}
                   disabled={busy}
                   title="编辑后重发"
                   className="flex items-center gap-1 rounded px-1 py-0.5 text-xs text-tertiary transition-colors hover:text-brand disabled:opacity-50"
@@ -326,15 +336,27 @@ export function MessageBubble({
                 )}
               </div>
             )}
-            <Markdown content={normalizeCitations(message.content)} />
+            {/* 引用编号归一化随内容变化才重算；Markdown 自身 memo，内容不变不重解析 */}
+            <Markdown content={normalized} />
             {message.streaming && (
               <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-brand align-text-bottom" />
             )}
             {!webRunning && message.web && <WebPanel web={message.web} />}
             {message.error && (
-              <p className="mt-2 rounded-lg bg-danger/10 px-2 py-1 text-xs text-danger">
-                {message.error}
-              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-danger/10 px-2 py-1.5 text-xs text-danger">
+                <span className="min-w-0 flex-1">{message.error}</span>
+                {/* 断线/报错时已生成的文本仍在气泡里，提供一键续答而不是从头再来 */}
+                {onRegenerate && !busy && (
+                  <button
+                    type="button"
+                    onClick={() => onRegenerate(index)}
+                    className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium transition-colors duration-150 hover:bg-danger/10"
+                  >
+                    <RefreshCw size={11} />
+                    继续生成
+                  </button>
+                )}
+              </div>
             )}
             {message.citations && message.citations.length > 0 && !message.streaming && (
               <div className="mt-2 border-t border-line pt-2">
@@ -380,7 +402,7 @@ export function MessageBubble({
                   title="有帮助"
                   className={cn(
                     "rounded p-1 transition-colors duration-150 hover:text-brand",
-                    rating === "up" && "text-brand",
+                    rating === "up" && "text-brand-deep dark:text-brand"
                   )}
                 >
                   <ThumbsUp size={13} />
@@ -398,7 +420,7 @@ export function MessageBubble({
                 {onRegenerate && (
                   <button
                     type="button"
-                    onClick={onRegenerate}
+                    onClick={() => onRegenerate(index)}
                     disabled={busy}
                     title="重新生成一版，旧答案会保留"
                     className="ml-0.5 flex items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors duration-150 hover:text-brand disabled:cursor-not-allowed disabled:opacity-40"
@@ -437,7 +459,7 @@ export function MessageBubble({
                         {evalBusy ? "处理中…" : "把这个问题加入评测集"}
                       </button>
                       {evalNotice && (
-                        <span className={cn("text-xs", evalAdded ? "text-brand" : "text-tertiary")}>
+                        <span className={cn("text-xs", evalAdded ? "text-brand-deep dark:text-brand": "text-tertiary")}>
                           {evalNotice}
                         </span>
                       )}
@@ -527,4 +549,4 @@ export function MessageBubble({
       </div>
     </div>
   );
-}
+});

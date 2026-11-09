@@ -2,7 +2,8 @@ import { useEffect } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { bootstrap, useAuth } from "@/lib/auth";
 
-function BootScreen() {
+/** 首屏启动态：路由懒加载的 Suspense fallback 也复用它，保持同一观感。 */
+export function BootScreen() {
   return (
     <div className="flex h-screen items-center justify-center bg-page">
       <div className="flex items-center gap-2.5 text-[13px] text-tertiary">

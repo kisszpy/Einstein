@@ -13,6 +13,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
+import { DialogHost } from "@/lib/confirm";
 import { UserMenu } from "./UserMenu";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { useAuth } from "@/lib/auth";
@@ -63,7 +64,7 @@ function NavItem({ to, label, icon: Icon, match }: NavEntry) {
       className={cn(
         "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-[13px] transition-colors duration-150",
         isActive
-          ? "bg-brand-soft font-medium text-brand"
+          ? "bg-brand-soft font-medium text-brand-deep dark:text-brand"
           : "text-secondary hover:bg-surface-3 hover:text-primary",
       )}
     >
@@ -79,7 +80,7 @@ function NavItem({ to, label, icon: Icon, match }: NavEntry) {
         strokeWidth={1.75}
         className={cn(
           "shrink-0 transition-colors duration-150",
-          isActive ? "text-brand" : "text-tertiary group-hover:text-secondary",
+          isActive ? "text-brand-deep dark:text-brand" : "text-tertiary group-hover:text-secondary",
         )}
       />
       <span className="truncate">{label}</span>
@@ -101,7 +102,7 @@ export function AppLayout() {
       {/* 侧导航 */}
       <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-surface-2">
         <div className="flex h-14 items-center gap-2.5 px-4">
-          <span className="flex h-6 w-6 items-center justify-center rounded-[7px] bg-linear-to-b from-brand to-brand-strong text-[11px] font-semibold tracking-tight text-brand-fg shadow-[var(--shadow-btn)]">
+          <span className="flex h-6 w-6 items-center justify-center rounded-[7px] bg-linear-to-b from-brand to-brand-strong text-[12px] font-semibold tracking-tight text-brand-fg shadow-[var(--shadow-btn)]">
             E
           </span>
           <span className="text-[15px] font-medium tracking-wide">Einstein</span>
@@ -110,7 +111,7 @@ export function AppLayout() {
         <nav className="flex-1 space-y-4 overflow-y-auto px-2.5 pb-4">
           {groups.map((group) => (
             <div key={group.title}>
-              <p className="px-2.5 pb-1.5 text-[11px] tracking-wide text-tertiary">
+              <p className="px-2.5 pb-1.5 text-[12px] tracking-wide text-tertiary">
                 {group.title}
               </p>
               <div className="space-y-0.5">
@@ -122,7 +123,7 @@ export function AppLayout() {
           ))}
         </nav>
 
-        <div className="flex items-center gap-1.5 border-t border-line px-4 py-3 text-[11.5px] text-tertiary">
+        <div className="flex items-center gap-1.5 border-t border-line px-4 py-3 text-[12px] text-tertiary">
           <span className="h-1.5 w-1.5 rounded-full bg-success" title="服务正常" />
           <span>v{__APP_VERSION__}</span>
         </div>
@@ -142,6 +143,8 @@ export function AppLayout() {
           <Outlet />
         </main>
       </div>
+      {/* 全站命令式 Confirm/Prompt 对话框宿主（替代 window.confirm/alert/prompt） */}
+      <DialogHost />
     </div>
   );
 }

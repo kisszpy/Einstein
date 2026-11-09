@@ -45,7 +45,7 @@ export function TemplateBar({
   if (items.length === 0) return null;
   return (
     <div className="mb-3 flex flex-wrap items-center justify-center gap-1.5">
-      <span className="mr-0.5 text-[11px] text-tertiary">模板</span>
+      <span className="mr-0.5 text-[12px] text-tertiary">模板</span>
       {items.slice(0, 6).map((tpl) => (
         <button
           key={tpl.id}
@@ -142,7 +142,7 @@ export function SaveTemplateDialog({
       >
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-1.5 text-[13px] font-medium text-primary">
-            <BookmarkPlus size={14} strokeWidth={1.9} className="text-brand" />
+            <BookmarkPlus size={14} strokeWidth={1.9} className="text-brand-deep dark:text-brand"/>
             存为模板
           </div>
           <button
@@ -153,7 +153,7 @@ export function SaveTemplateDialog({
           </button>
         </div>
 
-        <label className="mb-1 block text-[11px] text-tertiary">名称</label>
+        <label className="mb-1 block text-[12px] text-tertiary">名称</label>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -162,7 +162,7 @@ export function SaveTemplateDialog({
           className="mb-3 w-full rounded-md border border-line bg-surface-2 px-2.5 py-1.5 text-[13px] text-primary outline-none focus:border-brand"
         />
 
-        <label className="mb-1 block text-[11px] text-tertiary">说明（可选）</label>
+        <label className="mb-1 block text-[12px] text-tertiary">说明（可选）</label>
         <input
           value={description}
           onChange={(e) => setDescription(e.target.value)}
@@ -170,7 +170,7 @@ export function SaveTemplateDialog({
           className="mb-3 w-full rounded-md border border-line bg-surface-2 px-2.5 py-1.5 text-[13px] text-primary outline-none focus:border-brand"
         />
 
-        <p className="mb-3 line-clamp-3 rounded-md bg-surface-2 px-2.5 py-2 text-[11px] leading-relaxed text-tertiary">
+        <p className="mb-3 line-clamp-3 rounded-md bg-surface-2 px-2.5 py-2 text-[12px] leading-relaxed text-tertiary">
           {prompt}
         </p>
 

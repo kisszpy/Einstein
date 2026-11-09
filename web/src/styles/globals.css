@@ -11,18 +11,19 @@
   --bg-hover: rgba(15, 23, 42, 0.05);
   --text-primary: #17181a;
   --text-secondary: rgba(15, 23, 42, 0.68);
-  --text-tertiary: rgba(15, 23, 42, 0.45);
+  /* 60% 才过 AA 4.5:1；45% 只有 2.86:1，全站辅助文字都读不清 */
+  --text-tertiary: rgba(15, 23, 42, 0.61);
   --text-placeholder: #8a9099;
   --line-subtle: rgba(15, 23, 42, 0.08);
   --line-strong: rgba(15, 23, 42, 0.16);
   --brand: #00c29a;
   --brand-strong: #00997a;     /* 渐变深端 / hover；大面积实心时不再刺眼 */
-  --brand-deep: #087866;
+  --brand-deep: #066255;
   --brand-fg: #ffffff;
-  --brand-soft: rgba(0, 194, 154, 0.11);
-  --success: #2f9e63;
-  --warning: #d98600;
-  --danger: #d93f3f;
+  --brand-soft: rgba(0, 194, 154, 0.08);
+  --success: #218552;
+  --warning: #a35c00;
+  --danger: #cc3232;
   --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04);
   --shadow-input: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.04);
   --shadow-pop: 0 8px 24px rgba(15, 23, 42, 0.1), 0 2px 6px rgba(15, 23, 42, 0.04);
@@ -37,7 +38,8 @@
   --bg-hover: rgba(255, 255, 255, 0.06);
   --text-primary: #e9eaec;
   --text-secondary: rgba(233, 234, 236, 0.66);
-  --text-tertiary: rgba(233, 234, 236, 0.45);
+  /* 同亮色：45% 只有 3.79:1，提到 62% 过 AA */
+  --text-tertiary: rgba(233, 234, 236, 0.62);
   --text-placeholder: #7c7c7c;
   --line-subtle: rgba(255, 255, 255, 0.1);
   --line-strong: rgba(255, 255, 255, 0.18);

@@ -147,7 +147,7 @@ export function InstallDialog({ open, initialUrl = "", onClose, onInstalled }: P
 
           <button
             onClick={() => setShowRef((v) => !v)}
-            className="mt-2 text-[11.5px] text-tertiary transition-colors duration-150 hover:text-secondary"
+            className="mt-2 text-[12px] text-tertiary transition-colors duration-150 hover:text-secondary"
           >
             {showRef ? "收起高级选项" : "指定分支 / 标签（默认跟随默认分支）"}
           </button>
@@ -178,15 +178,15 @@ export function InstallDialog({ open, initialUrl = "", onClose, onInstalled }: P
                   >
                     {preview.repo.repo}
                   </a>
-                  <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[11px] text-secondary">
+                  <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[12px] text-secondary">
                     {preview.repo.ref} @ {preview.repo.commit_short}
                   </span>
-                  <span className="flex items-center gap-1 text-[11.5px] text-tertiary">
+                  <span className="flex items-center gap-1 text-[12px] text-tertiary">
                     <Star size={11} />
                     {preview.repo.stars.toLocaleString()}
                   </span>
                   {preview.repo.license && (
-                    <span className="text-[11.5px] text-tertiary">{preview.repo.license}</span>
+                    <span className="text-[12px] text-tertiary">{preview.repo.license}</span>
                   )}
                 </div>
                 {preview.repo.description && (
@@ -208,7 +208,7 @@ export function InstallDialog({ open, initialUrl = "", onClose, onInstalled }: P
                           : preview.candidates.map((c) => c.path),
                       )
                     }
-                    className="text-[11.5px] text-brand transition-opacity duration-150 hover:opacity-80"
+                    className="text-[12px] text-brand-deep transition-opacity dark:text-brand duration-150 hover:opacity-80"
                   >
                     {picked.length === preview.candidates.length ? "取消全选" : "全选"}
                   </button>
@@ -240,15 +240,15 @@ export function InstallDialog({ open, initialUrl = "", onClose, onInstalled }: P
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-2">
                           <span className="truncate text-[13px] font-medium text-primary">{c.name}</span>
-                          <span className="shrink-0 text-[11px] text-tertiary">
+                          <span className="shrink-0 text-[12px] text-tertiary">
                             {c.file_count} 文件 · {fileSize(c.size_bytes)}
                           </span>
                         </span>
-                        <span className="mt-0.5 block truncate font-mono text-[11px] text-tertiary">
+                        <span className="mt-0.5 block truncate font-mono text-[12px] text-tertiary">
                           {c.path || "仓库根目录"}
                         </span>
                         {c.description && (
-                          <span className="mt-0.5 line-clamp-2 block text-[11.5px] leading-4 text-secondary">
+                          <span className="mt-0.5 line-clamp-2 block text-[12px] leading-4 text-secondary">
                             {c.description}
                           </span>
                         )}
@@ -262,7 +262,7 @@ export function InstallDialog({ open, initialUrl = "", onClose, onInstalled }: P
         </div>
 
         <div className="flex items-center justify-between border-t border-line px-5 py-3">
-          <p className="text-[11.5px] text-tertiary">
+          <p className="text-[12px] text-tertiary">
             {preview ? `已选 ${picked.length} 个` : "先预览，再安装"}
           </p>
           <div className="flex gap-2">

@@ -353,7 +353,7 @@ export function BatchImport({ kbId, onFinished }: Props) {
             选 ZIP 包
           </Button>
         </div>
-        <p className="mt-2.5 text-[11.5px] text-tertiary">
+        <p className="mt-2.5 text-[12px] text-tertiary">
           支持 PDF / Word / Excel / PPT / CSV / HTML / Markdown / TXT ·
           图片（PNG / JPG / WebP / TIFF，走 OCR 取字）· 不限文件数 · 单文件 ≤ 50MB ·
           目录结构会保留为文档名
@@ -415,12 +415,12 @@ export function BatchImport({ kbId, onFinished }: Props) {
             </div>
           </div>
           {!ocrReady && imageCount > 0 && (
-            <p className="mt-2 rounded-md bg-warning/10 px-2.5 py-1.5 text-[11.5px] text-warning">
+            <p className="mt-2 rounded-md bg-warning/10 px-2.5 py-1.5 text-[12px] text-warning">
               其中 {imageCount} 个是图片，但服务端未启用 OCR，导入会失败。
               配置 <code className="font-mono">APP_OCR_MODEL</code> 或安装 pytesseract 后可自动识别文字。
             </p>
           )}
-          <ul className="mt-2 max-h-32 space-y-0.5 overflow-y-auto text-[11.5px] text-tertiary">
+          <ul className="mt-2 max-h-32 space-y-0.5 overflow-y-auto text-[12px] text-tertiary">
             {picked.slice(0, 50).map((p) => (
               <li key={p.path} className="truncate">{p.path}</li>
             ))}
@@ -450,10 +450,10 @@ export function BatchImport({ kbId, onFinished }: Props) {
             />
           </div>
           {failedJob?.error && (
-            <p className="mt-2 break-words text-[11.5px] text-danger">{failedJob.error}</p>
+            <p className="mt-2 break-words text-[12px] text-danger">{failedJob.error}</p>
           )}
           {failedItems.length > 0 && (
-            <ul className="mt-2 space-y-0.5 text-[11.5px] text-danger/90">
+            <ul className="mt-2 space-y-0.5 text-[12px] text-danger/90">
               {failedItems.slice(0, 6).map((f) => (
                 <li key={f.name} className="truncate">
                   {f.name}：{f.error}
@@ -467,7 +467,7 @@ export function BatchImport({ kbId, onFinished }: Props) {
 
       {/* 跳过明细 */}
       {skipped.length > 0 && (
-        <div className="text-[11.5px] text-tertiary">
+        <div className="text-[12px] text-tertiary">
           <button
             className="transition-colors hover:text-secondary"
             onClick={() => setShowSkipped((v) => !v)}
@@ -488,9 +488,9 @@ export function BatchImport({ kbId, onFinished }: Props) {
       )}
 
       {/* 服务器目录（本地部署场景，后端默认关闭） */}
-      <div className="text-[11.5px]">
+      <div className="text-[12px]">
         <button
-          className="text-tertiary transition-colors hover:text-secondary"
+          className="-mx-1 rounded px-1 py-1 text-tertiary transition-colors hover:text-secondary"
           onClick={() => setDirOpen((v) => !v)}
         >
           {dirOpen ? "收起" : "从服务器目录导入（本地部署）"}
@@ -509,7 +509,7 @@ export function BatchImport({ kbId, onFinished }: Props) {
                 扫描导入
               </Button>
             </div>
-            <p className="text-[11px] text-tertiary">
+            <p className="text-[12px] text-tertiary">
               文件就地读取、不复制也不修改源目录。需在服务端 .env 配置
               <code className="mx-1 rounded bg-surface-3 px-1">APP_LOCAL_IMPORT_ROOTS</code>
               后才可用。

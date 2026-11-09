@@ -57,7 +57,7 @@ export function UserMenu() {
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-secondary transition-colors duration-150 hover:bg-surface-3 hover:text-primary"
       >
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-soft text-[11px] font-medium text-brand">
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-soft text-[12px] font-medium text-brand-deep dark:text-brand">
           {initial}
         </span>
         <span className="max-w-[7rem] truncate">{user.display_name}</span>
@@ -71,7 +71,7 @@ export function UserMenu() {
             <p className="mt-0.5 text-[12px] text-tertiary">
               {user.username} · {user.role_label}
             </p>
-            <p className="mt-1.5 text-[11.5px] text-tertiary">
+            <p className="mt-1.5 text-[12px] text-tertiary">
               可见空间 {user.workspaces.length} 个 · 你在各空间内的角色见左上角切换器
             </p>
           </div>
@@ -87,7 +87,7 @@ export function UserMenu() {
                   placeholder="粘贴邀请码"
                   className="h-8 w-full rounded-lg border border-line bg-surface-2 px-2 text-[12.5px] outline-none focus:border-line-strong"
                 />
-                {joinError && <p className="mt-1 text-[11.5px] text-danger">{joinError}</p>}
+                {joinError && <p className="mt-1 text-[12px] text-danger">{joinError}</p>}
                 <div className="mt-1.5 flex gap-2">
                   <button
                     onClick={() => void join()}

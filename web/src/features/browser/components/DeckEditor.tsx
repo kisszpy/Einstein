@@ -243,7 +243,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-[13px]">
         <p className="text-danger">{error}</p>
-        <button onClick={onClose} className="text-brand hover:underline">
+        <button onClick={onClose} className="text-brand-deep underline-offset-2 hover:underline dark:text-brand">
           返回列表
         </button>
       </div>
@@ -278,7 +278,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
           placeholder="演示标题"
         />
         {!compact && (
-          <span className="hidden text-[11.5px] text-tertiary sm:inline">
+          <span className="hidden text-[12px] text-tertiary sm:inline">
             {deck.slides.length} 页 · {deck.path}
           </span>
         )}
@@ -295,7 +295,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                 onClick={() => setDesignMode(true)}
                 className={cn(
                   "rounded-l-md px-2 py-1",
-                  designMode ? "bg-brand/10 font-medium text-brand" : "text-secondary hover:bg-surface-3",
+                  designMode ? "bg-brand/10 font-medium text-brand-deep dark:text-brand": "text-secondary hover:bg-surface-3",
                 )}
               >
                 设计稿
@@ -304,7 +304,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                 onClick={() => setDesignMode(false)}
                 className={cn(
                   "rounded-r-md px-2 py-1",
-                  !designMode ? "bg-brand/10 font-medium text-brand" : "text-secondary hover:bg-surface-3",
+                  !designMode ? "bg-brand/10 font-medium text-brand-deep dark:text-brand": "text-secondary hover:bg-surface-3",
                 )}
               >
                 可编辑
@@ -316,7 +316,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
               onClick={() => setPropsOpen((prev) => !prev)}
               className={cn(
                 "rounded-md p-1.5 hover:bg-surface-3",
-                propsOpen ? "text-brand" : "text-secondary",
+                propsOpen ? "text-brand-deep dark:text-brand": "text-secondary",
               )}
               title="页面属性"
               aria-label="页面属性"
@@ -389,7 +389,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
       {(notice || error) && (
         <div
           className={cn(
-            "shrink-0 border-b px-4 py-1.5 text-[11.5px]",
+            "shrink-0 border-b px-4 py-1.5 text-[12px]",
             error
               ? "border-danger/30 bg-danger/10 text-danger"
               : "border-line bg-surface-2 text-secondary",
@@ -515,12 +515,12 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
 
           {/* 画布 */}
           <div className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-page">
-            <div className="flex items-center justify-between gap-2 px-4 py-2 text-[11.5px] text-tertiary">
+            <div className="flex items-center justify-between gap-2 px-4 py-2 text-[12px] text-tertiary">
               <span className="min-w-0 truncate">
                 第 {selected + 1} / {deck.slides.length} 页
                 {!showDesign && LAYOUT_LABELS[slide.layout]}
                 {showDesign && (
-                  <span className="ml-2 rounded bg-brand/10 px-1.5 py-0.5 text-brand">
+                  <span className="ml-2 rounded bg-brand/10 px-1.5 py-0.5 text-brand-deep dark:text-brand">
                     真实渲染
                   </span>
                 )}
@@ -544,7 +544,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                     onError={onPreviewError}
                     onLoad={onPreviewLoad}
                   />
-                  <p className="mt-2 text-center text-[11.5px] text-tertiary">
+                  <p className="mt-2 text-center text-[12px] text-tertiary">
                     {readOnlyDesign
                       ? "PowerPoint 真实渲染，与文件完全一致；要修改内容请在智能体里重新生成"
                       : "设计稿 · PowerPoint 真实渲染（还原渐变/圆角/玻璃质感）；切「可编辑」改文字，保存会按主题重排"}
@@ -726,7 +726,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                 const col = slide.columns?.[ci] ?? { title: "", bullets: [] };
                 return (
                   <div key={ci} className="mb-3 rounded-md bg-surface-2 p-2">
-                    <p className="mb-1.5 text-[11px] text-tertiary">
+                    <p className="mb-1.5 text-[12px] text-tertiary">
                       {ci === 0 ? "左栏" : "右栏"}
                     </p>
                     <input
@@ -859,7 +859,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                 const col = slide[key] ?? { title: "", bullets: [] };
                 return (
                   <div key={key} className="mb-3 rounded-md bg-surface-2 p-2">
-                    <p className="mb-1.5 text-[11px] text-tertiary">
+                    <p className="mb-1.5 text-[12px] text-tertiary">
                       {key === "left" ? "左侧" : "右侧"}
                     </p>
                     <input
@@ -932,7 +932,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
             />
           </Field>
 
-          <p className="mt-4 border-t border-line pt-3 text-[11px] leading-relaxed text-tertiary">
+          <p className="mt-4 border-t border-line pt-3 text-[12px] leading-relaxed text-tertiary">
             保存时按当前版式重新生成 pptx，文件 {Math.max(1, Math.round(deck.bytes / 1024))} KB。
             {deck.theme_inferred && " 主题由原文件推断，可能与原稿略有差异。"}
           </p>
@@ -948,7 +948,7 @@ function AddSlideButton({ onClick, compact = false }: { onClick: () => void; com
     <button
       onClick={onClick}
       className={cn(
-        "flex items-center justify-center gap-1 rounded-md border border-dashed border-line-strong text-[11.5px] text-tertiary hover:border-brand hover:text-brand",
+        "flex items-center justify-center gap-1 rounded-md border border-dashed border-line-strong text-[12px] text-tertiary hover:border-brand hover:text-brand",
         compact ? "h-[52px] w-[84px] shrink-0" : "py-2",
       )}
     >
@@ -1015,9 +1015,9 @@ function Field({
 }) {
   return (
     <label className="mb-3 block">
-      <span className="mb-1 block text-[11px] tracking-wide text-tertiary">{label}</span>
+      <span className="mb-1 block text-[12px] tracking-wide text-tertiary">{label}</span>
       {children}
-      {hint && <span className="mt-1 block text-[10.5px] text-tertiary">{hint}</span>}
+      {hint && <span className="mt-1 block text-[12px] text-tertiary">{hint}</span>}
     </label>
   );
 }

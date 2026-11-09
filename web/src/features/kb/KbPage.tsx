@@ -14,6 +14,7 @@ import {
   type StaleResult,
 } from "@/features/kb/kbShared";
 import { cn } from "@/lib/utils";
+import { confirmDialog } from "@/lib/confirm";
 
 interface KBItem {
   id: string;
@@ -88,7 +89,7 @@ function ReadonlyBadge({ className }: { className?: string }) {
   return (
     <span
       title="只有查看权限，无法修改"
-      className={cn("shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[11px] text-tertiary", className)}
+      className={cn("shrink-0 rounded bg-surface-3 px-1.5 py-0.5 text-[12px] text-tertiary", className)}
     >
       只读
     </span>
@@ -347,10 +348,13 @@ export function KbPage() {
 
   const removeDoc = async (doc: DocItem) => {
     if (!selected) return;
-    if (
-      !window.confirm(`删除文档「${doc.name}」？其 ${doc.chunk_count} 个切片将一并删除，不可恢复。`)
-    )
-      return;
+    const ok = await confirmDialog({
+      title: "删除文档",
+      message: `删除文档「${doc.name}」？其 ${doc.chunk_count} 个切片将一并删除，不可恢复。`,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     setRowBusy(doc.id);
     setError(null);
     try {
@@ -442,11 +446,12 @@ export function KbPage() {
 
   const rollbackDoc = async (doc: DocItem, version: number) => {
     if (!selected) return;
-    if (
-      !window.confirm(
-        `回滚到 v${version}？该版本内容会作为新版本重新入库，历史版本不会丢失。`,
-      )
-    )
+    const ok = await confirmDialog({
+      title: "回滚版本",
+      message: `回滚到 v${version}？该版本内容会作为新版本重新入库，历史版本不会丢失。`,
+      confirmLabel: "回滚",
+    });
+    if (!ok) return;
       return;
     setRowBusy(doc.id);
     setError(null);
@@ -525,17 +530,18 @@ export function KbPage() {
   };
 
   const removeKb = async (kb: KBItem) => {
-    if (
-      !window.confirm(
-        `删除知识库「${kb.name}」？其 ${kb.document_count} 篇文档与全部切片将一并删除，不可恢复。`,
-      )
-    )
-      return;
+    const ok = await confirmDialog({
+      title: "删除知识库",
+      message: `删除知识库「${kb.name}」？其 ${kb.document_count} 篇文档与全部切片将一并删除，不可恢复。`,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(true);
     const res = await fetch(`/api/kb/${kb.id}`, { method: "DELETE" });
     setBusy(false);
     if (!res.ok) {
-      window.alert("删除失败");
+      setError(await readError(res));
       return;
     }
     setSelected(null);
@@ -556,7 +562,7 @@ export function KbPage() {
                 className={cn(
                   "min-w-0 flex-1 rounded-lg px-3 py-2 text-left transition-colors duration-150",
                   selected === kb.id
-                    ? "bg-brand-soft text-brand"
+                    ? "bg-brand-soft text-brand-deep dark:text-brand"
                     : "text-secondary hover:bg-surface-3 hover:text-primary",
                 )}
               >
@@ -632,7 +638,7 @@ export function KbPage() {
               </div>
             )}
             {notice && (
-              <div className="rounded-lg border border-brand/40 bg-brand-soft px-3.5 py-2.5 text-[12.5px] text-brand">
+              <div className="rounded-lg border border-brand/40 bg-brand-soft px-3.5 py-2.5 text-[12.5px] text-brand-deep dark:text-brand">
                 {notice}
               </div>
             )}
@@ -641,7 +647,7 @@ export function KbPage() {
                 <span className="min-w-0 break-words">{error}</span>
                 <button
                   onClick={() => setError(null)}
-                  className="shrink-0 text-[11px] opacity-70 transition-opacity hover:opacity-100"
+                  className="shrink-0 text-[12px] opacity-70 transition-opacity hover:opacity-100"
                 >
                   关闭
                 </button>
@@ -652,7 +658,7 @@ export function KbPage() {
               <Card className="p-5">
                 <div className="flex items-baseline justify-between gap-3">
                   <h3 className="text-[13px] font-medium">添加文档</h3>
-                  <span className="text-[11.5px] text-tertiary">可整目录导入</span>
+                  <span className="text-[12px] text-tertiary">可整目录导入</span>
                 </div>
                 <div className="mt-3">
                   <BatchImport kbId={selected} onFinished={() => void refreshDocs()} />
@@ -754,7 +760,7 @@ export function KbPage() {
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="truncate text-[13px] text-primary">{d.name}</span>
-                              <span className="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 font-mono text-[10.5px] text-tertiary">
+                              <span className="shrink-0 rounded bg-surface-3 px-1.5 py-0.5 font-mono text-[12px] text-tertiary">
                                 v{d.version}
                               </span>
                             </div>
@@ -764,7 +770,7 @@ export function KbPage() {
                               {d.updated_at && ` · ${shortTime(d.updated_at)}`}
                             </div>
                             {d.source_url && (
-                              <div className="mt-0.5 flex items-center gap-2 text-[11px]">
+                              <div className="mt-0.5 flex items-center gap-2 text-[12px]">
                                 <a
                                   href={d.source_url}
                                   target="_blank"
@@ -794,7 +800,7 @@ export function KbPage() {
                                 onClick={() => void togglePanel(d, "chunks")}
                                 className={cn(
                                   "rounded-md px-1.5 py-1 text-xs transition-colors duration-150 hover:bg-surface-1 hover:text-primary",
-                                  expanded && panel === "chunks" ? "text-brand" : "text-tertiary",
+                                  expanded && panel === "chunks" ? "text-brand-deep dark:text-brand": "text-tertiary",
                                 )}
                               >
                                 切片
@@ -804,7 +810,7 @@ export function KbPage() {
                               onClick={() => void togglePanel(d, "versions")}
                               className={cn(
                                 "rounded-md px-1.5 py-1 text-xs transition-colors duration-150 hover:bg-surface-1 hover:text-primary",
-                                expanded && panel === "versions" ? "text-brand" : "text-tertiary",
+                                expanded && panel === "versions" ? "text-brand-deep dark:text-brand": "text-tertiary",
                               )}
                             >
                               版本
@@ -841,7 +847,7 @@ export function KbPage() {
 
                         {expanded && panel === "chunks" && (
                           <div className="mx-3 mb-2 space-y-2 rounded-lg border border-line bg-surface-2 p-3">
-                            <div className="flex items-center justify-between text-[11.5px] text-tertiary">
+                            <div className="flex items-center justify-between text-[12px] text-tertiary">
                               <span>切片（{chunks.length}）· 修改保存后会单条重嵌入</span>
                               <button
                                 onClick={() => setOpenDoc(null)}
@@ -859,7 +865,7 @@ export function KbPage() {
                               const dirty = draft !== c.text;
                               return (
                                 <div key={c.id} className="rounded-lg border border-line bg-surface-1 p-2.5">
-                                  <div className="flex items-center justify-between gap-2 text-[11px] text-tertiary">
+                                  <div className="flex items-center justify-between gap-2 text-[12px] text-tertiary">
                                     <span>
                                       #{c.seq} · {draft.trim().length} 字
                                       {c.parent_seq != null && ` · 父片 #${c.parent_seq}`}
@@ -879,7 +885,7 @@ export function KbPage() {
                                       <button
                                         disabled={!dirty || !draft.trim() || rowBusy === c.id}
                                         onClick={() => void saveChunk(c)}
-                                        className="rounded-md px-1.5 py-0.5 text-brand transition-colors hover:bg-brand-soft disabled:opacity-40"
+                                        className="rounded-md px-1.5 py-0.5 text-brand-deep transition-colors dark:text-brand hover:bg-brand-soft disabled:opacity-40"
                                       >
                                         {rowBusy === c.id ? "保存中…" : "保存"}
                                       </button>
@@ -901,7 +907,7 @@ export function KbPage() {
 
                         {expanded && panel === "versions" && (
                           <div className="mx-3 mb-2 space-y-2 rounded-lg border border-line bg-surface-2 p-3">
-                            <div className="flex items-center justify-between text-[11.5px] text-tertiary">
+                            <div className="flex items-center justify-between text-[12px] text-tertiary">
                               <span>版本历史 · 当前 v{d.version}</span>
                               <button
                                 onClick={() => setOpenDoc(null)}
@@ -926,12 +932,12 @@ export function KbPage() {
                                     <span className="font-mono">v{v.version}</span>
                                     {v.note && <span className="text-tertiary">{v.note}</span>}
                                     {v.version === d.version && (
-                                      <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[10.5px] text-brand">
+                                      <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[12px] text-brand-deep dark:text-brand">
                                         当前
                                       </span>
                                     )}
                                   </p>
-                                  <p className="truncate text-[11px] text-tertiary">
+                                  <p className="truncate text-[12px] text-tertiary">
                                     {v.chunk_count} 切片 · {v.chars} 字
                                     {v.source && ` · ${v.source}`} · {shortTime(v.created_at)}
                                   </p>
@@ -940,7 +946,7 @@ export function KbPage() {
                                   <button
                                     disabled={rowBusy === d.id}
                                     onClick={() => void rollbackDoc(d, v.version)}
-                                    className="shrink-0 rounded-md px-1.5 py-1 text-xs text-brand transition-colors duration-150 hover:bg-brand-soft disabled:opacity-50"
+                                    className="shrink-0 rounded-md px-1.5 py-1 text-xs text-brand-deep transition-colors dark:text-brand duration-150 hover:bg-brand-soft disabled:opacity-50"
                                   >
                                     回滚到此版
                                   </button>
@@ -968,7 +974,7 @@ export function KbPage() {
                       className={cn(
                         "rounded-md border px-2 py-0.5 text-xs transition-colors duration-150",
                         mode === m
-                          ? "border-brand bg-brand-soft text-brand"
+                          ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
                           : "border-line text-secondary hover:border-line-strong",
                       )}
                     >
@@ -1092,7 +1098,7 @@ export function KbPage() {
                 <span className="text-xs text-tertiary">可见范围</span>
                 <VisibilitySelect value={newKbVisibility} onChange={setNewKbVisibility} />
               </div>
-              <span className="text-[11.5px] text-tertiary">{VISIBILITY_HINT[newKbVisibility]}</span>
+              <span className="text-[12px] text-tertiary">{VISIBILITY_HINT[newKbVisibility]}</span>
             </div>
             {createError && <p className="text-xs text-danger">{createError}</p>}
             <div className="flex justify-end gap-2">

@@ -23,7 +23,7 @@ export const VISIBILITY_HINT: Record<Visibility, string> = {
 
 const BADGE_STYLE: Record<Visibility, string> = {
   private: "bg-surface-3 text-tertiary",
-  workspace: "bg-brand-soft text-brand",
+  workspace: "bg-brand-soft text-brand-deep dark:text-brand",
   shared: "bg-warning/15 text-warning",
 };
 
@@ -39,7 +39,7 @@ export function VisibilityBadge({
   return (
     <span
       title={VISIBILITY_HINT[v] ?? label}
-      className={cn("rounded px-1.5 py-0.5 text-[11px]", BADGE_STYLE[v] ?? BADGE_STYLE.private, className)}
+      className={cn("rounded px-1.5 py-0.5 text-[12px]", BADGE_STYLE[v] ?? BADGE_STYLE.private, className)}
     >
       {label}
     </span>

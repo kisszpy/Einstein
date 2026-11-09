@@ -138,7 +138,7 @@ export function RuleDialog({
           </Field>
         </div>
         {meta?.unit === "比例" && (
-          <p className="-mt-1.5 text-[11px] text-tertiary">比例填小数，0.2 即 20%。</p>
+          <p className="-mt-1.5 text-[12px] text-tertiary">比例填小数，0.2 即 20%。</p>
         )}
 
         <div className="grid grid-cols-2 gap-3">
@@ -171,7 +171,7 @@ export function RuleDialog({
             placeholder="https://example.com/hooks/einstein"
             className={INPUT_CLASS}
           />
-          <p className="mt-1 text-[11px] text-tertiary">留空则只记录触发历史，不发通知。</p>
+          <p className="mt-1 text-[12px] text-tertiary">留空则只记录触发历史，不发通知。</p>
         </Field>
 
         <label className="flex items-center gap-2 text-[12.5px] text-secondary">
@@ -202,7 +202,7 @@ export function RuleDialog({
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[11.5px] text-tertiary">{label}</span>
+      <span className="mb-1 block text-[12px] text-tertiary">{label}</span>
       {children}
     </label>
   );

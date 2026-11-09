@@ -23,6 +23,7 @@ import { MarketPanel } from "./MarketPanel";
 import { SkillFilesDialog } from "./SkillFilesDialog";
 import type { Skill, SkillVersion } from "./types";
 import { cn } from "@/lib/utils";
+import { confirmDialog } from "@/lib/confirm";
 
 const TOOL_OPTIONS = [
   { id: "calculator", name: "计算器" },
@@ -130,7 +131,13 @@ export function SkillsPage() {
 
   const remove = async (s: Skill) => {
     const hint = s.source === "github" ? "同时删除已下载的技能文件" : "";
-    if (!window.confirm(`删除技能「${s.name}」？${hint}`)) return;
+    const ok = await confirmDialog({
+      title: "删除技能",
+      message: `删除技能「${s.name}」？${hint}`,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     setBusyId(s.id);
     await fetch(`/api/skills/${s.id}`, { method: "DELETE" });
     setBusyId("");
@@ -341,7 +348,7 @@ export function SkillsPage() {
                       className={cn(
                         "rounded-md border px-2 py-1 text-xs transition-colors duration-150",
                         form.tools.includes(t.id)
-                          ? "border-brand bg-brand-soft text-brand"
+                          ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
                           : "border-line text-secondary hover:border-line-strong",
                       )}
                     >
@@ -353,10 +360,10 @@ export function SkillsPage() {
                     value={form.visibility}
                     onChange={(v) => setForm({ ...form, visibility: v })}
                   />
-                  <span className="text-[11.5px] text-tertiary">{VISIBILITY_HINT[form.visibility]}</span>
+                  <span className="text-[12px] text-tertiary">{VISIBILITY_HINT[form.visibility]}</span>
                 </div>
                 {editing !== "new" && skills.find((s) => s.id === editing)?.source === "github" && (
-                  <p className="text-[11.5px] text-tertiary">
+                  <p className="text-[12px] text-tertiary">
                     该技能来自 GitHub：手动修改后，再次「更新」会用仓库内容覆盖名称、描述与提示词。
                   </p>
                 )}
@@ -378,23 +385,23 @@ export function SkillsPage() {
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-[13px] font-medium text-primary">{s.name}</span>
                         {s.version && (
-                          <span className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-[11px] text-secondary">
+                          <span className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-[12px] text-secondary">
                             v{s.version}
                           </span>
                         )}
                         {s.builtin && (
-                          <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[11px] text-tertiary">
+                          <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[12px] text-tertiary">
                             内置
                           </span>
                         )}
                         {s.source === "github" && (
-                          <span className="flex items-center gap-1 rounded bg-surface-3 px-1.5 py-0.5 text-[11px] text-secondary">
+                          <span className="flex items-center gap-1 rounded bg-surface-3 px-1.5 py-0.5 text-[12px] text-secondary">
                             <GitBranch size={10} />
                             GitHub
                           </span>
                         )}
                         {!s.enabled && (
-                          <span className="rounded bg-danger/10 px-1.5 py-0.5 text-[11px] text-danger">
+                          <span className="rounded bg-danger/10 px-1.5 py-0.5 text-[12px] text-danger">
                             已停用
                           </span>
                         )}
@@ -407,7 +414,7 @@ export function SkillsPage() {
                           href={s.source_url}
                           target="_blank"
                           rel="noreferrer"
-                          className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-tertiary transition-colors duration-150 hover:text-secondary"
+                          className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[12px] text-tertiary transition-colors duration-150 hover:text-secondary"
                         >
                           <span>{s.repo}</span>
                           <span className="rounded bg-surface-3 px-1 py-0.5">{s.commit.slice(0, 8)}</span>
@@ -417,7 +424,7 @@ export function SkillsPage() {
                         </a>
                       ) : (
                         s.system_prompt && (
-                          <p className="mt-1 line-clamp-2 text-[11.5px] text-tertiary">
+                          <p className="mt-1 line-clamp-2 text-[12px] text-tertiary">
                             {s.system_prompt}
                           </p>
                         )
@@ -428,7 +435,7 @@ export function SkillsPage() {
                           {s.tools.map((t) => (
                             <span
                               key={t}
-                              className="rounded bg-surface-3 px-1.5 py-0.5 text-[11px] text-secondary"
+                              className="rounded bg-surface-3 px-1.5 py-0.5 text-[12px] text-secondary"
                             >
                               {TOOL_OPTIONS.find((o) => o.id === t)?.name ?? t}
                             </span>
@@ -536,7 +543,7 @@ export function SkillsPage() {
             >
               <h3 className="text-[13px] font-medium">
                 版本历史 · {versionSkill.name}
-                <span className="ml-2 font-mono text-[11px] text-tertiary">
+                <span className="ml-2 font-mono text-[12px] text-tertiary">
                   当前 v{versionSkill.version}
                 </span>
               </h3>
@@ -551,7 +558,7 @@ export function SkillsPage() {
                         v{v.version}
                         {v.note && <span className="ml-2 text-tertiary">{v.note}</span>}
                       </p>
-                      <p className="truncate text-[11px] text-tertiary">
+                      <p className="truncate text-[12px] text-tertiary">
                         {v.saved_at.replace("T", " ")} · {(v.system_prompt ?? "").slice(0, 40)}
                       </p>
                     </div>
@@ -582,7 +589,7 @@ export function SkillsPage() {
             >
               <h3 className="text-[13px] font-medium">
                 沙箱试运行 · {trySkill.name}
-                <span className="ml-2 font-mono text-[11px] text-tertiary">
+                <span className="ml-2 font-mono text-[12px] text-tertiary">
                   v{trySkill.version}
                 </span>
               </h3>

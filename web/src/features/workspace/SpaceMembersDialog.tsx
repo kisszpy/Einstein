@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { confirmDialog } from "@/lib/confirm";
 
 interface SpaceMember {
   user_id: string;
@@ -79,7 +80,13 @@ export function SpaceMembersDialog({
   };
 
   const remove = async (member: SpaceMember) => {
-    if (!window.confirm(`把 ${member.display_name} 移出「${workspaceName}」？`)) return;
+    const ok = await confirmDialog({
+      title: "移出成员",
+      message: `把 ${member.display_name} 移出「${workspaceName}」？`,
+      confirmLabel: "移出",
+      danger: true,
+    });
+    if (!ok) return;
     setError("");
     const res = await fetch(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(member.user_id)}`,
@@ -122,7 +129,7 @@ export function SpaceMembersDialog({
         <div className="flex items-start justify-between">
           <div>
             <h3 className="text-[13.5px] font-medium">「{workspaceName}」成员</h3>
-            <p className="mt-0.5 text-[11.5px] text-tertiary">
+            <p className="mt-0.5 text-[12px] text-tertiary">
               {canManage ? "角色随时可调；移除后该账号立刻失去此空间的数据访问" : "只有空间管理员可以调整成员"}
             </p>
           </div>
@@ -137,9 +144,9 @@ export function SpaceMembersDialog({
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13px] text-secondary">
                   {m.display_name}
-                  {m.disabled && <span className="ml-1.5 text-[11px] text-danger">已禁用</span>}
+                  {m.disabled && <span className="ml-1.5 text-[12px] text-danger">已禁用</span>}
                 </p>
-                <p className="truncate text-[11px] text-tertiary">{m.username}</p>
+                <p className="truncate text-[12px] text-tertiary">{m.username}</p>
               </div>
               {canManage && m.role !== "owner" ? (
                 <select
@@ -154,14 +161,14 @@ export function SpaceMembersDialog({
                   ))}
                 </select>
               ) : (
-                <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[11px] text-tertiary">
+                <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[12px] text-tertiary">
                   {ROLE_LABEL[m.role] ?? m.role}
                 </span>
               )}
               {canManage && m.role !== "owner" && (
                 <button
                   onClick={() => void remove(m)}
-                  className="shrink-0 text-[11.5px] text-tertiary transition-colors hover:text-danger"
+                  className="shrink-0 text-[12px] text-tertiary transition-colors hover:text-danger"
                 >
                   移除
                 </button>
@@ -194,13 +201,13 @@ export function SpaceMembersDialog({
                 </code>
                 <button
                   onClick={() => void navigator.clipboard?.writeText(invite.code)}
-                  className="text-[11.5px] text-tertiary transition-colors hover:text-primary"
+                  className="text-[12px] text-tertiary transition-colors hover:text-primary"
                 >
                   复制
                 </button>
               </div>
             )}
-            <p className="mt-1.5 text-[11px] text-tertiary">
+            <p className="mt-1.5 text-[12px] text-tertiary">
               对方在控制台「加入空间」输入即可；角色随码上的设定。
             </p>
           </div>

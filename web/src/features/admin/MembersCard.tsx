@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useAuth } from "@/lib/auth";
+import { confirmDialog, promptDialog } from "@/lib/confirm";
 import { cn } from "@/lib/utils";
 
 interface Member {
@@ -39,6 +40,7 @@ export function MembersCard() {
   const [spaces, setSpaces] = useState<Workspace[]>([]);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [draft, setDraft] = useState({
     username: "",
     display_name: "",
@@ -92,7 +94,15 @@ export function MembersCard() {
   };
 
   const resetPassword = async (m: Member) => {
-    const pw = window.prompt(`为 ${m.username} 设置新密码（至少 6 位）`);
+    // 明文 prompt 输密码是安全和可用性双输：改带显隐切换的对话框
+    const pw = await promptDialog({
+      title: `重置 ${m.username} 的密码`,
+      message: "至少 6 位；重置后该账号现有会话立即失效。",
+      placeholder: "新密码",
+      type: "password",
+      confirmLabel: "重置",
+      validate: (v) => (v.length < 6 ? "密码至少 6 位" : null),
+    });
     if (!pw) return;
     const res = await fetch(`/api/users/${m.id}/password`, {
       method: "POST",
@@ -100,15 +110,25 @@ export function MembersCard() {
       body: JSON.stringify({ password: pw }),
     });
     const data = await res.json().catch(() => ({}));
-    window.alert(res.ok ? "密码已重置，该账号现有会话已失效" : data.detail ?? "重置失败");
+    if (!res.ok) {
+      setError(data.detail ?? "重置失败");
+      return;
+    }
+    setNotice(`已重置 ${m.username} 的密码，其现有会话已失效`);
   };
 
   const remove = async (m: Member) => {
-    if (!window.confirm(`删除成员 ${m.username}？该账号的会话会立即失效。`)) return;
+    const ok = await confirmDialog({
+      title: "删除成员",
+      message: `删除成员 ${m.username}？该账号的会话会立即失效。`,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     const res = await fetch(`/api/users/${m.id}`, { method: "DELETE" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      window.alert(data.detail ?? "删除失败");
+      setError(data.detail ?? "删除失败");
       return;
     }
     await load();
@@ -184,6 +204,7 @@ export function MembersCard() {
           </div>
 
           {error && <p className="mt-2 text-[12px] text-danger">{error}</p>}
+          {notice && <p className="mt-2 text-[12px] text-success">{notice}</p>}
 
           <div className="mt-3 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setAdding(false)}>
@@ -226,24 +247,24 @@ export function MembersCard() {
                   </span>
                 </td>
                 <td className="py-2 text-right">
-                  <div className="inline-flex gap-3">
+                  <div className="inline-flex items-center gap-1">
                     <button
                       onClick={() => void resetPassword(m)}
-                      className="text-tertiary transition-colors duration-150 hover:text-primary"
+                      className="rounded-md px-2 py-1.5 text-[12.5px] text-secondary transition-colors duration-150 hover:bg-surface-3 hover:text-primary"
                     >
                       改密码
                     </button>
                     <button
                       onClick={() => void toggleDisabled(m)}
                       disabled={m.id === user?.id}
-                      className="text-tertiary transition-colors duration-150 hover:text-primary disabled:opacity-40"
+                      className="rounded-md px-2 py-1.5 text-[12.5px] text-secondary transition-colors duration-150 hover:bg-surface-3 hover:text-primary disabled:opacity-40"
                     >
                       {m.disabled ? "启用" : "禁用"}
                     </button>
                     <button
                       onClick={() => void remove(m)}
                       disabled={m.id === user?.id}
-                      className="text-tertiary transition-colors duration-150 hover:text-danger disabled:opacity-40"
+                      className="rounded-md px-2 py-1.5 text-[12.5px] text-danger/80 transition-colors duration-150 hover:bg-danger/10 hover:text-danger disabled:opacity-40"
                     >
                       删除
                     </button>

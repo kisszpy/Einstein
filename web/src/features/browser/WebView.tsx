@@ -201,8 +201,8 @@ export function WebView({ url, ticket, onNavigate }: Props) {
           onClick={loadArticle}
           disabled={readLoading}
           className={cn(
-            "flex items-center gap-1.5 rounded-md border border-line px-2 py-1.5 text-[11.5px]",
-            readMode ? "bg-brand-soft text-brand" : "text-secondary hover:bg-surface-3",
+            "flex items-center gap-1.5 rounded-md border border-line px-2 py-1.5 text-[12px]",
+            readMode ? "bg-brand-soft text-brand-deep dark:text-brand" : "text-secondary hover:bg-surface-3",
           )}
           title="抽取正文，不受框架限制"
         >
@@ -221,7 +221,7 @@ export function WebView({ url, ticket, onNavigate }: Props) {
       </div>
 
       {notice && (
-        <div className="flex shrink-0 items-center gap-1.5 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-[11.5px] text-warning">
+        <div className="flex shrink-0 items-center gap-1.5 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-[12px] text-warning">
           <TriangleAlert size={12} /> {notice}
           <button
             onClick={loadArticle}
@@ -241,7 +241,7 @@ export function WebView({ url, ticket, onNavigate }: Props) {
               <h1 className="text-[19px] font-medium leading-snug">
                 {article?.title || entry}
               </h1>
-              <p className="mt-1 truncate text-[11.5px] text-tertiary">{article?.final_url || entry}</p>
+              <p className="mt-1 truncate text-[12px] text-tertiary">{article?.final_url || entry}</p>
               {readError ? (
                 <p className="mt-6 text-[13px] text-danger">{readError}</p>
               ) : (
@@ -267,7 +267,7 @@ export function WebView({ url, ticket, onNavigate }: Props) {
 
         {entry && !readMode && !ready && !loading && (
           <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
-            <span className="pointer-events-auto rounded-full border border-line bg-surface-1/95 px-3 py-1 text-[11px] text-tertiary shadow-[0_2px_8px_rgb(0_0_0/0.08)]">
+            <span className="pointer-events-auto rounded-full border border-line bg-surface-1/95 px-3 py-1 text-[12px] text-tertiary shadow-[0_2px_8px_rgb(0_0_0/0.08)]">
               页面可能只加载了部分内容 · 可切换阅读模式
             </span>
           </div>
@@ -281,7 +281,7 @@ function StartPage({ onPick }: { onPick: (url: string) => void }) {
   return (
     <div className="h-full overflow-y-auto px-6 py-10">
       <div className="mx-auto max-w-[620px]">
-        <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-soft text-brand">
+        <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-soft text-brand-deep dark:text-brand">
           <Globe size={19} strokeWidth={1.7} />
         </span>
         <h2 className="mt-4 text-[17px] font-medium">内置浏览器</h2>

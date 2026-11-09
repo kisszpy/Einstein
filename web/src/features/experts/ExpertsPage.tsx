@@ -8,6 +8,7 @@ import {
   type Visibility,
 } from "@/components/ui/visibility";
 import { cn } from "@/lib/utils";
+import { confirmDialog } from "@/lib/confirm";
 
 interface Expert {
   id: string;
@@ -104,7 +105,7 @@ function MultiSelect({
             className={cn(
               "rounded-md border px-2.5 py-1.5 text-xs transition-colors duration-150",
               selected.includes(o.id)
-                ? "border-brand bg-brand-soft text-brand"
+                ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
                 : "border-line text-secondary hover:border-line-strong",
             )}
           >
@@ -221,14 +222,20 @@ export function ExpertsPage() {
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      window.alert(data.detail ?? "状态转移失败");
+      setError(data.detail ?? "状态转移失败");
       return;
     }
     await load();
   };
 
   const remove = async (e: Expert) => {
-    if (!window.confirm(`删除专家「${e.name}」？`)) return;
+    const ok = await confirmDialog({
+      title: "删除专家",
+      message: `删除专家「${e.name}」？`,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
     await fetch(`/api/experts/${e.id}`, { method: "DELETE" });
     await load();
   };
@@ -356,7 +363,7 @@ export function ExpertsPage() {
                 value={form.visibility}
                 onChange={(v) => setForm({ ...form, visibility: v })}
               />
-              <span className="text-[11.5px] text-tertiary">{VISIBILITY_HINT[form.visibility]}</span>
+              <span className="text-[12px] text-tertiary">{VISIBILITY_HINT[form.visibility]}</span>
             </div>
             {error && <p className="text-xs text-danger">{error}</p>}
             <div className="flex gap-2">
@@ -380,9 +387,9 @@ export function ExpertsPage() {
                       <span className="text-[13px] font-medium text-primary">{e.name}</span>
                       <span
                         className={cn(
-                          "rounded px-1.5 py-0.5 text-[11px]",
+                          "rounded px-1.5 py-0.5 text-[12px]",
                           e.status === "live"
-                            ? "bg-brand-soft text-brand"
+                            ? "bg-brand-soft text-brand-deep dark:text-brand"
                             : e.status === "testing"
                               ? "bg-warning/15 text-warning"
                               : "bg-surface-3 text-tertiary",
@@ -397,7 +404,7 @@ export function ExpertsPage() {
                       {e.skill_ids.map((id) => (
                         <span
                           key={id}
-                          className="rounded bg-brand-soft px-1.5 py-0.5 text-xs text-brand"
+                          className="rounded bg-brand-soft px-1.5 py-0.5 text-xs text-brand-deep dark:text-brand"
                         >
                           {skillName(id)}
                         </span>

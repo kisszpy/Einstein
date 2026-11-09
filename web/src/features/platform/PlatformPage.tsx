@@ -115,7 +115,7 @@ export function PlatformPage() {
 
           {issued && (
             <div className="mt-3 rounded-lg border border-brand bg-brand-soft p-3">
-              <p className="text-xs text-brand">密钥已创建，请立即复制（关闭后不再显示）</p>
+              <p className="text-xs text-brand-deep dark:text-brand">密钥已创建，请立即复制（关闭后不再显示）</p>
               <div className="mt-1.5 flex items-center gap-2">
                 <code className="min-w-0 flex-1 truncate rounded bg-surface-1 px-2 py-1 text-xs text-primary">
                   {issued}
@@ -180,7 +180,7 @@ export function PlatformPage() {
             兼容 OpenAI Chat Completions；额外支持 <code>kb_ids</code> / <code>expert_id</code> 字段挂载知识库与专家。
             另有 <code>/v1/search</code>（纯检索）与 <code>/v1/agent/run</code>（智能体）。
           </p>
-          <pre className="mt-3 overflow-x-auto rounded-lg bg-surface-3 p-3 text-[11px] leading-relaxed text-secondary">
+          <pre className="mt-3 overflow-x-auto rounded-lg bg-surface-3 p-3 text-[12px] leading-relaxed text-secondary">
             {CURL_SAMPLE}
           </pre>
         </Card>
@@ -198,7 +198,7 @@ export function PlatformPage() {
               )}
               <a
                 href="/api/audit/export.csv"
-                className="rounded border border-line px-2 py-0.5 text-xs text-secondary transition-colors duration-150 hover:border-line-strong hover:text-primary"
+                className="rounded-md border border-line px-2.5 py-1.5 text-xs text-secondary transition-colors duration-150 hover:border-line-strong hover:text-primary"
               >
                 导出 CSV
               </a>

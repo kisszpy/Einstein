@@ -39,6 +39,7 @@ export function ShareDialog({ open, onClose, kind, targetId, title }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [copyFailed, setCopyFailed] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -84,8 +85,9 @@ export function ShareDialog({ open, onClose, kind, targetId, title }: Props) {
       setCopied(tag);
       window.setTimeout(() => setCopied(null), 1500);
     } catch {
-      // 非 HTTPS / 无剪贴板权限时退化为选中：让对方手动复制，不假装成功
-      window.prompt("复制下面的内容", text);
+      // 非 HTTPS / 无剪贴板权限时明说失败，让用户手动选择文本复制，不假装成功
+      setCopyFailed(tag);
+      window.setTimeout(() => setCopyFailed(null), 2500);
     }
   };
 
@@ -136,7 +138,7 @@ export function ShareDialog({ open, onClose, kind, targetId, title }: Props) {
               生成链接
             </Button>
           </div>
-          <p className="mt-2 text-[11.5px] leading-relaxed text-tertiary">
+          <p className="mt-2 text-[12px] leading-relaxed text-tertiary">
             {kind === "conversation"
               ? "拿到链接的人无需登录即可阅读这段对话，包含全部问答正文。"
               : "拿到链接的人无需登录即可查看这个知识库的问答入口；不开提问时只有标题与说明。"}
@@ -152,19 +154,19 @@ export function ShareDialog({ open, onClose, kind, targetId, title }: Props) {
           {items.map((s) => (
             <div key={s.id} className="rounded-lg border border-line p-3">
               <div className="flex items-center gap-2">
-                <Link2 size={13} className={s.live ? "text-brand" : "text-tertiary"} />
+                <Link2 size={13} className={s.live ? "text-brand-deep dark:text-brand": "text-tertiary"} />
                 <span className="min-w-0 flex-1 truncate text-[12.5px]">{shareUrl(s.id)}</span>
                 <span
                   className={
                     s.live
-                      ? "shrink-0 rounded-full bg-brand-soft px-2 py-0.5 text-[11px] text-brand"
-                      : "shrink-0 rounded-full bg-surface-3 px-2 py-0.5 text-[11px] text-tertiary"
+                      ? "shrink-0 rounded-full bg-brand-soft px-2 py-0.5 text-[12px] text-brand-deep dark:text-brand"
+                      : "shrink-0 rounded-full bg-surface-3 px-2 py-0.5 text-[12px] text-tertiary"
                   }
                 >
                   {s.revoked ? "已撤销" : s.live ? "有效" : "已过期"}
                 </span>
               </div>
-              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-tertiary">
+              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-tertiary">
                 <span>浏览 {s.view_count} 次</span>
                 {s.allow_ask && <span>· 允许提问</span>}
                 {s.expires_at && <span>· 到期 {s.expires_at.slice(0, 10)}</span>}
@@ -174,7 +176,7 @@ export function ShareDialog({ open, onClose, kind, targetId, title }: Props) {
                     onClick={() => void copy(shareUrl(s.id), `${s.id}-link`)}
                   >
                     <Copy size={12} />
-                    {copied === `${s.id}-link` ? "已复制" : "复制链接"}
+                    {copied === `${s.id}-link` ? "已复制" : copyFailed === `${s.id}-link` ? "复制失败，请手动选择" : "复制链接"}
                   </button>
                   {kind === "kb" && (
                     <button
@@ -182,7 +184,7 @@ export function ShareDialog({ open, onClose, kind, targetId, title }: Props) {
                       onClick={() => void copy(embedSnippet(s.id), `${s.id}-embed`)}
                     >
                       <Copy size={12} />
-                      {copied === `${s.id}-embed` ? "已复制" : "复制嵌入代码"}
+                      {copied === `${s.id}-embed` ? "已复制" : copyFailed === `${s.id}-embed` ? "复制失败，请手动选择" : "复制嵌入代码"}
                     </button>
                   )}
                   <a

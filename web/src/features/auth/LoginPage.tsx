@@ -43,7 +43,7 @@ const FIELD =
   "outline-none transition-all duration-300 placeholder:text-placeholder hover:border-line-strong " +
   "focus:border-brand/70 focus:bg-surface-1 focus:shadow-[0_0_0_4px_var(--brand-soft)]";
 
-const LABEL = "mb-2 flex items-center gap-1.5 text-[11px] font-medium tracking-[0.08em] text-tertiary";
+const LABEL = "mb-2 flex items-center gap-1.5 text-[12px] font-medium tracking-[0.08em] text-tertiary";
 
 function safeNext(search: string): string {
   const next = new URLSearchParams(search).get("next") ?? "";
@@ -74,9 +74,9 @@ function Ticker() {
   return (
     <p
       aria-hidden
-      className="mt-4 flex h-[18px] items-center justify-center gap-1.5 font-mono text-[11px] tracking-[0.02em] text-tertiary"
+      className="mt-4 flex h-[18px] items-center justify-center gap-1.5 font-mono text-[12px] tracking-[0.02em] text-tertiary"
     >
-      <span className="text-brand">›</span>
+      <span className="text-brand-deep dark:text-brand">›</span>
       <span className="tabular-nums">{text}</span>
       {!reduce && <span className="login-caret inline-block h-3 w-[1.5px] bg-brand" />}
     </p>
@@ -135,7 +135,8 @@ export function LoginPage() {
     try {
       await login(username.trim(), password);
       setDone(true);
-      window.setTimeout(() => nav(next, { replace: true }), 640);
+      // 短暂停留展示"验证通过"反馈，但不再拖 640ms 的人为延迟
+      window.setTimeout(() => nav(next, { replace: true }), 400);
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败，请稍后再试");
       setNonce((n) => n + 1);
@@ -348,7 +349,7 @@ export function LoginPage() {
                         </button>
                       </div>
                       {caps && (
-                        <p className="login-fade mt-2 flex items-center gap-1.5 text-[11.5px] text-warning">
+                        <p className="login-fade mt-2 flex items-center gap-1.5 text-[12px] text-warning">
                           <AlertCircle size={12} />
                           大写锁定已开启
                         </p>
@@ -411,8 +412,10 @@ export function LoginPage() {
                   </button>
                 </form>
 
+                {/* 初始账号提示只在开发构建展示：生产环境不该把默认凭据印在登录页上 */}
+                {import.meta.env.DEV && (
                 <div className="mt-6 flex items-center justify-between gap-3 rounded-xl border border-dashed border-line bg-surface-2/50 px-3 py-2.5">
-                  <p className="text-[11.5px] leading-5 text-tertiary">
+                  <p className="text-[12px] leading-5 text-tertiary">
                     初始账号{" "}
                     <span className="tabular-nums text-secondary">admin / admin123</span>
                   </p>
@@ -423,11 +426,12 @@ export function LoginPage() {
                       setPassword("admin123");
                       setError("");
                     }}
-                    className="shrink-0 rounded-md px-2 py-1 text-[11.5px] text-brand transition-colors duration-150 hover:bg-brand-soft"
+                    className="shrink-0 rounded-md px-2 py-1 text-[12px] text-brand-deep transition-colors duration-150 hover:bg-brand-soft dark:text-brand"
                   >
                     一键填入
                   </button>
                 </div>
+                )}
               </div>
             </div>
           </div>
@@ -437,10 +441,10 @@ export function LoginPage() {
             {FEATURES.map((f, i) => (
               <span
                 key={f.label}
-                className="login-pop flex items-center gap-1.5 rounded-full border border-line bg-surface-1/55 px-3 py-1.5 text-[11.5px] text-secondary backdrop-blur transition-colors duration-200 hover:border-brand/30 hover:text-primary"
+                className="login-pop flex items-center gap-1.5 rounded-full border border-line bg-surface-1/55 px-3 py-1.5 text-[12px] text-secondary backdrop-blur transition-colors duration-200 hover:border-brand/30 hover:text-primary"
                 style={{ animationDelay: `${340 + i * 90}ms` }}
               >
-                <f.icon size={12} strokeWidth={1.8} className="text-brand" />
+                <f.icon size={12} strokeWidth={1.8} className="text-brand-deep dark:text-brand"/>
                 {f.label}
               </span>
             ))}
@@ -449,7 +453,7 @@ export function LoginPage() {
       </main>
 
       {/* ---------- 底栏 ---------- */}
-      <footer className="relative z-10 mx-auto flex w-full max-w-[1180px] items-center justify-between gap-3 px-5 py-5 text-[11px] text-tertiary sm:px-8">
+      <footer className="relative z-10 mx-auto flex w-full max-w-[1180px] items-center justify-between gap-3 px-5 py-5 text-[12px] text-tertiary sm:px-8">
         <span className="flex items-center gap-2">
           <span className="relative flex h-1.5 w-1.5">
             {online && !reduce && (

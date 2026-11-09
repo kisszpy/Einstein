@@ -87,9 +87,9 @@ export function UsageTab({ days }: { days: number }) {
       <Card className="p-5">
         <h3 className="text-[13px] font-medium">按模型</h3>
         {unpriced && (
-          <p className="mt-1 text-[11.5px] text-tertiary">
+          <p className="mt-1 text-[12px] text-tertiary">
             标注「未定价」的模型还没有填单价，
-            <Link to="/models" className="text-brand hover:underline">
+            <Link to="/models" className="rounded px-0.5 py-1 text-brand-deep underline-offset-2 hover:underline dark:text-brand">
               去模型页
             </Link>
             填写后才会计算金额。
@@ -214,7 +214,7 @@ export function UsageTab({ days }: { days: number }) {
       </Card>
 
       {error && <p className="text-[12px] text-danger">刷新失败：{error}</p>}
-      {loading && <p className="text-[11.5px] text-tertiary">更新中…</p>}
+      {loading && <p className="text-[12px] text-tertiary">更新中…</p>}
     </div>
   );
 }
@@ -230,9 +230,9 @@ function Metric({
 }) {
   return (
     <Card className="p-4">
-      <p className="text-[11.5px] text-tertiary">{label}</p>
+      <p className="text-[12px] text-tertiary">{label}</p>
       <p className="mt-1 truncate text-[17px] font-medium tabular-nums">{value}</p>
-      <p className="mt-0.5 h-4 text-[11px] text-tertiary">{children}</p>
+      <p className="mt-0.5 h-4 text-[12px] text-tertiary">{children}</p>
     </Card>
   );
 }
@@ -256,13 +256,14 @@ function DayChart({ items }: { items: Array<Bucket & { day: string }> }) {
             <div
               key={d.day}
               title={`${d.day} · ${d.runs} 次运行 · ${tokens} token · ${money(d.cost)}`}
-              className="group flex h-full min-w-0 flex-1 items-end"
+              className="group flex h-full min-w-0 flex-1 items-end justify-center"
             >
               <div
                 className={
                   tokens > 0
-                    ? "w-full rounded-t-[3px] bg-brand/70 transition-colors duration-150 group-hover:bg-brand"
-                    : "w-full bg-line"
+                    ? // 限宽 + 向下渐隐：数据只有一天时柱子不再占满整行变成大色块
+                      "w-full max-w-7 rounded-t-[3px] bg-linear-to-b from-brand to-brand/30 transition-colors duration-150 group-hover:from-brand-strong"
+                    : "w-full max-w-7 bg-line"
                 }
                 style={{ height: tokens > 0 ? `${Math.max(ratio * 100, 2)}%` : "2px" }}
               />
@@ -271,7 +272,7 @@ function DayChart({ items }: { items: Array<Bucket & { day: string }> }) {
         })}
       </div>
       {dense ? (
-        <div className="mt-1.5 flex justify-between text-[10.5px] text-tertiary">
+        <div className="mt-1.5 flex justify-between text-[12px] text-tertiary">
           <span>{first.slice(5)}</span>
           <span>{middle.slice(5)}</span>
           <span>{last.slice(5)}</span>
@@ -279,7 +280,7 @@ function DayChart({ items }: { items: Array<Bucket & { day: string }> }) {
       ) : (
         <div className="mt-1.5 flex gap-1">
           {items.map((d) => (
-            <div key={d.day} className="min-w-0 flex-1 text-center text-[10.5px] text-tertiary">
+            <div key={d.day} className="min-w-0 flex-1 text-center text-[12px] text-tertiary">
               {d.day.slice(5)}
             </div>
           ))}
