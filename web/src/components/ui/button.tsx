@@ -1,12 +1,19 @@
 import { cn } from "@/lib/utils";
 import type { ButtonHTMLAttributes } from "react";
 
-type Variant = "primary" | "ghost" | "outline";
+type Variant = "primary" | "soft" | "ghost" | "outline" | "danger";
 
 const VARIANTS: Record<Variant, string> = {
-  primary: "bg-brand text-brand-fg hover:opacity-90",
+  // 主按钮用品牌色纵向渐变：大面积实心的纯 #00c29a 明度太高、太扎眼，
+  // 渐变到深一档后视觉重心沉下去（登录页按钮一直是这个做法，全站对齐）。
+  primary:
+    "bg-linear-to-b from-brand to-brand-strong text-brand-fg shadow-[var(--shadow-btn)] hover:brightness-[1.04] active:brightness-[0.97]",
+  // soft：轻量主操作（侧栏「新会话」这类），保留品牌识别但不抢正文
+  soft: "bg-brand-soft text-brand-deep hover:bg-brand/20 dark:text-brand",
   ghost: "text-secondary hover:bg-surface-3 hover:text-primary",
-  outline: "border border-line text-primary hover:border-line-strong",
+  outline: "border border-line text-primary hover:border-line-strong hover:bg-surface-3",
+  // 破坏性操作：常驻可见但只在 hover 时变红，避免页面里到处是红色按钮
+  danger: "border border-line text-secondary hover:border-danger/50 hover:bg-danger/10 hover:text-danger",
 };
 
 export function Button({

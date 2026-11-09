@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Archive, Download, Globe, Pencil, Pin, PinOff, Search, Share2, SquarePen } from "lucide-react";
+import { Archive, Download, Globe, Pencil, Pin, PinOff, Plus, Search, Share2, SquarePen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   ComposerFrame,
@@ -21,6 +21,14 @@ const WEB_HINT: Record<WebMode, string> = {
   off: "本轮只用已有知识",
 };
 const WEB_NEXT: Record<WebMode, WebMode> = { auto: "on", on: "off", off: "auto" };
+
+/** 空会话的起步建议：都是知识库场景（问答/总结/对比），点一下填进输入框 */
+const CHAT_STARTERS = [
+  "根据知识库里的资料，总结接入步骤",
+  "帮我梳理这份文档的关键风险点",
+  "对比知识库中两份文档的差异",
+  "这份资料讲了什么？用三句话说清",
+];
 
 function readWebMode(): WebMode {
   const saved = localStorage.getItem(WEB_KEY);
@@ -320,12 +328,14 @@ export function ChatPage() {
       {/* 会话列表（服务端持久化，生产切 PostgreSQL） */}
       <aside className="hidden w-64 shrink-0 flex-col border-r border-line bg-surface-2 p-3 md:flex">
         <Button
-          className="mb-3 w-full"
+          variant="soft"
+          className="mb-3 w-full gap-1.5"
           onClick={() => {
             cancelEdit();
             reset();
           }}
         >
+          <Plus size={14} strokeWidth={2} />
           新会话
         </Button>
         {/* 会话搜索：标题 + 消息正文全文匹配 */}
@@ -398,6 +408,18 @@ export function ChatPage() {
                     <p className="mt-2 text-[13px] text-secondary">
                       直接提问，或在下方选择专家获得专业视角。回答将带知识库引用与思考过程。
                     </p>
+                    {/* 与专家视角的建议条同一套交互：点一下填进输入框，降低"第一句说什么"的门槛 */}
+                    <div className="mt-5 flex max-w-[560px] flex-wrap justify-center gap-1.5">
+                      {CHAT_STARTERS.map((q) => (
+                        <button
+                          key={q}
+                          onClick={() => setInput(q)}
+                          className="rounded-full border border-line bg-surface-1 px-3 py-1.5 text-xs text-secondary transition-colors duration-150 hover:border-brand hover:text-brand"
+                        >
+                          {q}
+                        </button>
+                      ))}
+                    </div>
                   </>
                 )}
               </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { VisibilityBadge, VisibilitySelect, VISIBILITY_HINT, type Visibility } from "@/components/ui/visibility";
@@ -549,7 +550,7 @@ export function KbPage() {
         <h2 className="mb-3 text-[13px] font-medium">知识库</h2>
         <div className="space-y-1">
           {kbs.map((kb) => (
-            <div key={kb.id} className="flex items-center gap-1">
+            <div key={kb.id} className="group flex items-center gap-1">
               <button
                 onClick={() => setSelected(kb.id)}
                 className={cn(
@@ -571,10 +572,11 @@ export function KbPage() {
               {selected === kb.id && kb.my_role !== "read" && (
                 <button
                   title="删除知识库"
+                  aria-label="删除知识库"
                   onClick={() => void removeKb(kb)}
-                  className="shrink-0 rounded-md px-1.5 py-1 text-xs text-tertiary transition-colors duration-150 hover:bg-danger/10 hover:text-danger"
+                  className="shrink-0 rounded-md p-1.5 text-tertiary opacity-0 transition-all duration-150 hover:bg-danger/10 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
                 >
-                  删除
+                  <Trash2 size={13} strokeWidth={1.75} />
                 </button>
               )}
             </div>

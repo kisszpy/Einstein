@@ -4,51 +4,55 @@
 
 /* ---------- 语义 token（对齐 WorkBuddy 设计系统，亮暗两套） ---------- */
 :root {
-  --bg-page: #f2f2f2;          /* 页面底 */
+  --bg-page: #f5f6f8;          /* 页面底：微冷灰，比卡片低一档（原 #f2f2f2 偏脏黄） */
   --bg-surface-1: #ffffff;     /* 卡片 / 输入器 */
-  --bg-surface-2: #f7f7f7;     /* 侧栏 / 次级面板 */
-  --bg-surface-3: #f2f2f2;     /* 浮层内嵌块 / 用户消息 */
-  --bg-hover: rgba(0, 0, 0, 0.04);
-  --text-primary: #1a1a1a;
-  --text-secondary: rgba(0, 0, 0, 0.66);
-  --text-tertiary: rgba(0, 0, 0, 0.45);
+  --bg-surface-2: #eef0f3;     /* 侧栏 / 次级面板：比页面底再深一档，形成"侧栏凹陷"层次 */
+  --bg-surface-3: #f3f4f6;     /* 浮层内嵌块 / 用户消息 */
+  --bg-hover: rgba(15, 23, 42, 0.05);
+  --text-primary: #17181a;
+  --text-secondary: rgba(15, 23, 42, 0.68);
+  --text-tertiary: rgba(15, 23, 42, 0.45);
   --text-placeholder: #8a9099;
-  --line-subtle: rgba(0, 0, 0, 0.08);
-  --line-strong: rgba(0, 0, 0, 0.16);
+  --line-subtle: rgba(15, 23, 42, 0.08);
+  --line-strong: rgba(15, 23, 42, 0.16);
   --brand: #00c29a;
+  --brand-strong: #00997a;     /* 渐变深端 / hover；大面积实心时不再刺眼 */
   --brand-deep: #087866;
   --brand-fg: #ffffff;
-  --brand-soft: rgba(0, 194, 154, 0.12);
+  --brand-soft: rgba(0, 194, 154, 0.11);
   --success: #2f9e63;
   --warning: #d98600;
   --danger: #d93f3f;
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-input: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.04);
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-input: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.04);
   --shadow-pop: 0 8px 24px rgba(15, 23, 42, 0.1), 0 2px 6px rgba(15, 23, 42, 0.04);
+  --shadow-btn: 0 1px 2px rgba(0, 153, 122, 0.28);
 }
 
 .dark {
-  --bg-page: #1a1a1a;
-  --bg-surface-1: #242424;
-  --bg-surface-2: #1f1f1f;
-  --bg-surface-3: #2b2b2b;
+  --bg-page: #17181a;          /* 带一丝冷调的死灰，比纯 #1a1a1a 更接近现代编辑器 */
+  --bg-surface-1: #212327;
+  --bg-surface-2: #1b1d20;
+  --bg-surface-3: #2a2d31;
   --bg-hover: rgba(255, 255, 255, 0.06);
-  --text-primary: #e8e8e8;
-  --text-secondary: rgba(255, 255, 255, 0.66);
-  --text-tertiary: rgba(255, 255, 255, 0.45);
+  --text-primary: #e9eaec;
+  --text-secondary: rgba(233, 234, 236, 0.66);
+  --text-tertiary: rgba(233, 234, 236, 0.45);
   --text-placeholder: #7c7c7c;
   --line-subtle: rgba(255, 255, 255, 0.1);
   --line-strong: rgba(255, 255, 255, 0.18);
   --brand: #2fd6b0;
+  --brand-strong: #14b595;
   --brand-deep: #0dbfa3;
   --brand-fg: #06251f;
-  --brand-soft: rgba(0, 194, 154, 0.16);
+  --brand-soft: rgba(47, 214, 176, 0.14);
   --success: #55b982;
   --warning: #e0a44a;
   --danger: #e46a6a;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-input: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.24);
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --shadow-btn: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 /* ---------- 映射为 Tailwind 类 ---------- */
@@ -65,6 +69,7 @@
   --color-line: var(--line-subtle);
   --color-line-strong: var(--line-strong);
   --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
   --color-brand-deep: var(--brand-deep);
   --color-brand-fg: var(--brand-fg);
   --color-brand-soft: var(--brand-soft);
@@ -84,6 +89,14 @@ body {
     -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "HarmonyOS Sans SC", "Microsoft YaHei", "Helvetica Neue", system-ui, sans-serif;
   font-feature-settings: "tnum";
+}
+
+/* 键盘可达性：所有可交互元素在 Tab 聚焦时给一圈品牌色描边。
+   之前没有任何 focus-visible 样式，键盘用户完全看不出焦点在哪。 */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+  border-radius: 6px;
 }
 
 /* 细滚动条，贴合 WorkBuddy 的克制观感 */

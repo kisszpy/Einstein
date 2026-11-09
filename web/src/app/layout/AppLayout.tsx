@@ -36,7 +36,7 @@ const NAV: { title: string; items: NavEntry[] }[] = [
       {
         to: "/experts",
         match: ["/experts", "/skills", "/mcp"],
-        label: "专家 & 技能 & MCP",
+        label: "专家 · 技能 · MCP",
         icon: Blocks,
       },
       { to: "/agents", label: "智能体", icon: Bot },
@@ -101,7 +101,7 @@ export function AppLayout() {
       {/* 侧导航 */}
       <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-surface-2">
         <div className="flex h-14 items-center gap-2.5 px-4">
-          <span className="flex h-6 w-6 items-center justify-center rounded-[7px] bg-brand text-[11px] font-semibold tracking-tight text-brand-fg">
+          <span className="flex h-6 w-6 items-center justify-center rounded-[7px] bg-linear-to-b from-brand to-brand-strong text-[11px] font-semibold tracking-tight text-brand-fg shadow-[var(--shadow-btn)]">
             E
           </span>
           <span className="text-[15px] font-medium tracking-wide">Einstein</span>
@@ -123,8 +123,8 @@ export function AppLayout() {
         </nav>
 
         <div className="flex items-center gap-1.5 border-t border-line px-4 py-3 text-[11.5px] text-tertiary">
-          <span className="h-1 w-1 rounded-full bg-tertiary" />
-          v{__APP_VERSION__} · M14
+          <span className="h-1.5 w-1.5 rounded-full bg-success" title="服务正常" />
+          <span>v{__APP_VERSION__}</span>
         </div>
       </aside>
 

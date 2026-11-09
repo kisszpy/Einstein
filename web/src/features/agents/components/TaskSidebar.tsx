@@ -86,7 +86,7 @@ export function TaskSidebar({
       <div className="px-3 pb-1.5 pt-3">
         <button
           onClick={onNewTask}
-          className="flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-line bg-surface-1 text-[13px] font-medium text-primary shadow-card transition-colors duration-150 hover:bg-hover"
+          className="flex h-8 w-full items-center justify-center gap-1.5 rounded-lg bg-brand-soft text-[13px] font-medium text-brand-deep transition-colors duration-150 hover:bg-brand/20 dark:text-brand"
         >
           <Plus size={14} strokeWidth={2} />
           新建任务
@@ -131,15 +131,23 @@ export function TaskSidebar({
                     onClick={() => onSelectSession(session)}
                     onKeyDown={(e) => e.key === "Enter" && onSelectSession(session)}
                     className={cn(
-                      "group flex w-full cursor-pointer items-center gap-1 rounded-lg px-2 py-1.5 text-left transition-colors duration-150",
-                      active ? "bg-surface-3" : "hover:bg-hover",
+                      "group relative flex w-full cursor-pointer items-center gap-1 rounded-lg px-2 py-1.5 text-left transition-colors duration-150",
+                      active ? "bg-brand-soft" : "hover:bg-hover",
                     )}
                   >
+                    {/* 选中指示条：与主侧栏导航同一套语言 */}
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "absolute left-0 top-1/2 h-3.5 w-[2.5px] -translate-y-1/2 rounded-r-full bg-brand transition-opacity duration-150",
+                        active ? "opacity-100" : "opacity-0",
+                      )}
+                    />
                     <div className="min-w-0 flex-1">
                       <span
                         className={cn(
                           "block truncate text-[12.5px] leading-5",
-                          active ? "text-primary" : "text-secondary",
+                          active ? "text-brand-deep dark:text-brand" : "text-secondary",
                         )}
                       >
                         {session.title}
