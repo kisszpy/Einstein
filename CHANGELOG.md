@@ -2,6 +2,90 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.8.0] - 2026-11-09
+
+团队与运营。0.7.0 把闭环补齐之后，剩下的问题不是"能不能用"，而是"多人用起来
+谁在花钱、谁在出错、这把钥匙归谁管"。这一版把模型、权限、账单、告警四件事
+从"写死在 `.env` 里"变成"可配置、可审计、可追责"。
+
+### 新增
+
+- **模型注册表** `models` 表 + `/api/models`（增删改查 + `POST /{id}/test` 真发一次
+  `max_tokens=8` 的补全）。解析顺序为 `指定 model_id → 空间默认 → .env`，
+  未登记模型时行为与升级前完全一致——不预置任何行
+- **按专家选模型**：`experts.model_id`，对话与智能体共用同一份解析（`services/models.py`
+  的 `resolve()`），不再两处各写一遍 `base_url/model` 然后慢慢漂移
+- **成本看板** `GET /api/obs/cost?days=7`：按天 / 模型 / 成员 / 入口四个视角，
+  每桶含 `runs/errors/tokens_in/tokens_out/llm_calls/cost/avg_ms`。`run_traces.cost`
+  在 `finish()` 时按当时单价定格——改单价不改历史账
+- **告警** `alert_rules` + `alert_events`：四类规则（错误率 / 检索空手率 / 日花费 /
+  模型探活失败），webhook 按域名自动选格式（企业微信 / 钉钉 / 飞书 / 通用 JSON），
+  带冷却时间与投递留痕（`delivered=false` 在页面上标红）
+- **文档源同步**：文档记 `source_url` / `fetched_at`，单篇与批量重抓、过期清单。
+  `digest` 未变时只更新 `meta.fetched_at`、**不重嵌入**
+- **库级授权** `kb_grants`：`kb_access.access()` 返回 `read|write|None`，
+  知识库列表把"授权给我的私有库"并进来并带 `my_role`
+- **任务模板** `task_templates` + `/api/templates` + 智能体页模板条：只存起步参数
+  （prompt / 专家 / 项目 / 工具 / 知识库），不写死步骤
+
+### 变更
+
+- **知识库读写拆开**（行为变化）：原实现用 `owns()` 同时判读写，"工作区可见"等于
+  顺带给全空间写权限。现在读宽写严——18 个写入口单独标 `write=True`，
+  预置库（`owner_id=''`）对所有人只读，改内容需显式 write 授权
+- 告警评估分两条入口：`evaluate(owner_id=None)` 供后台定时任务（不看归属），
+  `evaluate(owner_id=当前用户)` 供界面手动触发（只看自己的规则）
+- 新增配置 `APP_KB_STALE_DAYS`（默认 30）、`APP_ALERT_INTERVAL_MINUTES`（默认 10），
+  后台 `alert_loop` 与手动检查共用同一份 `evaluate_all()`
+
+### 修复
+
+- **token 从来没进过轨迹**：`traces.note_tokens` 从定义起没有任何调用点，
+  `run_traces` 的 token 永远是 0——成本看板会是一张空表。补了 `llm.py` 两处与
+  `LlmTimer.__exit__` 一处
+- **默认模型跨空间串台**：`resolve()` 的缓存键只有 `model_id`，A 空间解析出的默认
+  模型会被 B 空间命中。键改为 `model_id or f"default:{workspace_id}"`，
+  `workspace_id` 一路透传到 `chat/agent/agent_deep`
+- **冷却时间戳写不进去**：`update_rule()` 有字段白名单，`last_fired_at` 被静默丢弃，
+  等于冷却永不生效。新增独立的 `mark_fired()` 写路径——否则任何能调 PATCH 的人
+  都能把冷却清零
+- **`visibility` 列从未建过**：dataclass 有字段、判定逻辑也在，但 `TableState.write`
+  按 `tables.py` 的列声明取值，多出来的字段被静默丢弃，重启即失效。迁移 015 补列
+
+## [0.7.0] - 2026-11-09
+
+把插头插上。这一版不新增能力，只补闭环——审计列出的问题里，绝大多数是
+"代码在、开关没通、界面没接"：限流中间件读不到用户、`note_tokens` 没人调用、
+断连转后台做完了但前端从不接回。所以逐条跑起来看现象，而不是读代码判断。
+
+### 新增
+
+- **知识库管理界面**：切片列表与编辑、删单篇、单篇重建、版本列表与回滚、失败重试，
+  六个接口接上前端。传错文件终于能单独删，不用删整库重传、重付一次嵌入成本
+- **三档可见性**：知识库 / 专家 / 技能统一为 `private`（默认）/ `workspace` / `shared`，
+  下拉 + 徽标，共享需显式操作
+- **检索可信**：重排默认 `auto`；评测支持负例集（`expect_miss`，只测检索层，
+  不进生成环节）；报告分出正例 / 负例通过率
+- **可信对话**：重新生成（旧答案留一版，且不把上一版喂给模型）、编辑后重发、
+  赞踩采集原因
+- **运行可见**：`run_traces` 表 + `/api/obs/traces`，前端刷新后自动接回仍在跑的任务
+
+### 变更
+
+- 审批默认覆盖 `code_run`（原先只有显式配置才拦）
+- 知识库 / 专家 / 技能的列表接口改为按可见性过滤，默认私有
+
+### 修复
+
+- **限流实际等于全放行**：中间件排在鉴权之前，读不到 `request.state.user`；
+  重排到鉴权之后。`quota_incr("requests")` 也补上了调用点——日请求配额原先
+  只有 tokens 在累加，`requests` 是个空转开关
+- **删库 / 删文档不级联**：`document_versions` 里的正文留在库里，重建时命中旧数据。
+  两套仓储四处一起改
+- **MCP 凭证是自写 XOR 流**：换为 `enc:v2`（Encrypt-then-MAC，HMAC-SHA256 截断
+  16 字节），v1 密文仍可解；篡改不再静默。`APP_ENV=prod` 时拒绝以默认
+  `secret_key` 启动
+
 ## [0.6.1] - 2026-11-09
 
 短期记忆落盘。0.5.1 把审批迁到了框架的 `interrupt` + `checkpointer`，但检查点

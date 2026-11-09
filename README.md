@@ -10,6 +10,9 @@
 - **智能体**：Deep Agents harness（LangGraph）——显式计划（write_todos）、子智能体、
   上下文自动压缩、按项目授权的文件系统；多轮会话、过程与产物可见，
   `APP_AGENT_ENGINE=react` 可回退到旧单循环（事件协议一致，前端无感）
+- **运营与治理**：模型注册表（多端点 / 按专家选模型 / 连通性检测）、成本看板
+  （按工作区隔离，再看天 × 模型 × 成员 × 入口，单价改动不改历史账）、四类告警（错误率 /
+  空手率 / 日花费 / 探活）走企业微信·钉钉·飞书 webhook、知识库级读写授权、任务模板
 - **开放平台**：`/v1` 兼容 OpenAI 协议，按工作区隔离、API Key 与审计
 - **数据层**：JSON 文件 / SQLite / PostgreSQL 三后端同一套代码，向量层 memory / Milvus，
   队列 local / Redis，全部由环境变量切换
@@ -19,7 +22,7 @@
 | 文档 | 内容 |
 |---|---|
 | `README.md` | 起步、配置、验收、排障（本文） |
-| [docs/API参考.md](docs/API参考.md) | 95 个接口的路径、参数、请求体字段、鉴权与 SSE 协议（由代码生成） |
+| [docs/API参考.md](docs/API参考.md) | 154 个接口的路径、参数、请求体字段、鉴权与 SSE 协议（由代码生成） |
 | [docs/运维手册.md](docs/运维手册.md) | 部署拓扑、巡检、备份恢复、升级、性能基线、故障手册 |
 
 ## 架构
@@ -138,6 +141,11 @@ APP_QUEUE_BACKEND=redis
 | `APP_EMBEDDING_MODEL` | `qwen3-embedding-8b` | 嵌入模型 |
 | `APP_RETRIEVAL_MODE` | `hybrid` | `vector` / `lexical` / `hybrid` |
 | `APP_RRF_K` | `60` | RRF 融合平滑常数 |
+| `APP_RETRIEVAL_MIN_SCORE` | `0.35` | 相关性门限，低于它的命中丢弃（按嵌入模型标定） |
+| `APP_RERANK_PROVIDER` | `auto` | `auto` / `none` / `http`（OpenAI 兼容 `/rerank`）/ `onnx`（本机 bge-reranker） |
+| `APP_RERANK_ENDPOINT` | 空 | `http` 档的重排端点，如 `http://127.0.0.1:8080/v1/rerank` |
+| `APP_KB_STALE_DAYS` | `30` | 网页来源文档超过这么多天没重抓就在列表里标"可能过期"，`0` 关闭 |
+| `APP_ALERT_INTERVAL_MINUTES` | `10` | 后台告警评估间隔，`0` 只留手动检查（规则本身在「运营 → 告警」里配） |
 | `APP_AGENT_CODE_EXEC` | `true` | 关掉后智能体不注册代码执行工具 |
 | `APP_AGENT_ENGINE` | `deepagents` | `deepagents`（计划/子智能体/压缩）/ `react`（旧单循环回滚用） |
 | `APP_DEBUG` | `false` | 生产务必保持 false（否则异常会吐堆栈） |
