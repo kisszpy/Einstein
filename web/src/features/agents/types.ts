@@ -78,12 +78,6 @@ export interface ProjectInfo {
   updated_at: string;
 }
 
-export interface TreeNode {
-  path: string;
-  type: "file" | "dir";
-  size?: string;
-}
-
 export interface AgentRunItem {
   id: string;
   task: string;

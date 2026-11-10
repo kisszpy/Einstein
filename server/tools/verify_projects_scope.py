@@ -23,8 +23,8 @@ import secrets
 import sys
 import urllib.error
 import urllib.request
-from urllib.parse import quote
 from pathlib import Path
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

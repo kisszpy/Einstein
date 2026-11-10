@@ -1,0 +1,17 @@
+# Fork-only Simplified Chinese faces, embedded on **every** target including wasm32.
+# Same 8-field format as fonts/manifest.txt:
+#   family | style | file (relative to the repo root) | scripts (ISO 15924, comma-separated) | licence | licence file | sha256 | source
+#
+# Upstream keeps Chinese native-only, so the web build ships no Han face and every Chinese
+# character is drawn as .notdef. These two faces fix that at a bounded size cost.
+#
+# Source: Noto Sans CJK SC Regular/Bold, commit f8d157532fbfaeda587e826d4cd5b21a49186f7c
+# (the same pin fonts/manifest.txt uses), subset with fontTools pyftsubset to the GBK set
+# (21,003 ideographs — everything a Chinese IME can type, so personal-name characters such as
+# 龘/珺/玥 are included) plus Latin-1, General Punctuation, arrows, circled numbers, geometric
+# shapes, CJK punctuation and full-width forms — 24,671 code points, 8.9 MB per weight.
+# Renamed to "DeckCraft Han Sans" because this is a Modified Version under OFL-1.1 and because
+# the fork's asset policy excludes the Noto CJK name; the outlines, metrics and kerning are
+# Noto's. Rebuild with tools/deckcraft/tools/build-han-subset.py.
+DeckCraft Han Sans | Regular | fonts/han-sans-sc/DeckCraftHanSans-Regular.otf | Hani,Hans | OFL-1.1 | fonts/han-sans-sc/OFL.txt | c3339af2fd2f51427bbad72d89b073ce6668be8d0cde658f9163fed5483bc3a5 | https://github.com/notofonts/noto-cjk/tree/f8d157532fbfaeda587e826d4cd5b21a49186f7c
+DeckCraft Han Sans | Bold | fonts/han-sans-sc/DeckCraftHanSans-Bold.otf | Hani,Hans | OFL-1.1 | fonts/han-sans-sc/OFL.txt | 748e456660e3cb164e4ea496db96ddc621ba19880f40d8b75a4461366e121fb8 | https://github.com/notofonts/noto-cjk/tree/f8d157532fbfaeda587e826d4cd5b21a49186f7c

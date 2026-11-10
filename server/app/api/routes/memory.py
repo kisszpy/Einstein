@@ -1,11 +1,10 @@
 """反馈与长期记忆 API。"""
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.api.deps import current_user, current_workspace
-from app.services import memory as memory_service
-from app.services import users
+from app.services import memory as memory_service, users
 
 router = APIRouter(tags=["memory"])
 
@@ -19,7 +18,7 @@ class FeedbackIn(BaseModel):
 
 
 @router.post("/feedback")
-async def add_feedback(
+def add_feedback(
     req: FeedbackIn, ws: str = Depends(current_workspace),
     user: users.User = Depends(current_user),
 ) -> dict:
@@ -34,7 +33,7 @@ async def add_feedback(
 
 
 @router.get("/feedback")
-async def list_feedback(
+def list_feedback(
     rating: str | None = None, limit: int = 100,
     ws: str = Depends(current_workspace),
 ) -> dict:
@@ -51,14 +50,14 @@ class MemoryIn(BaseModel):
 
 
 @router.get("/memory")
-async def list_memory(
+def list_memory(
     q: str | None = None, limit: int = 100, ws: str = Depends(current_workspace),
 ) -> list[dict]:
     return memory_service.list_memory(ws, q=q, limit=limit)
 
 
 @router.post("/memory")
-async def add_memory(
+def add_memory(
     req: MemoryIn, ws: str = Depends(current_workspace),
 ) -> dict:
     try:
@@ -68,7 +67,7 @@ async def add_memory(
 
 
 @router.delete("/memory/{memory_id}")
-async def remove_memory(memory_id: str, ws: str = Depends(current_workspace)) -> dict:
+def remove_memory(memory_id: str, ws: str = Depends(current_workspace)) -> dict:
     ok = memory_service.remove_memory(ws, memory_id)
     if not ok:
         raise HTTPException(404, "记忆不存在")

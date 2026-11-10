@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.api.routes.agent import AgentRunRequest, _resolve_mounts  # noqa: E402
 from app.services import experts as experts_mod  # noqa: E402
-from app.services.store import get_store  # noqa: E402
 
 
 class FakeStore:

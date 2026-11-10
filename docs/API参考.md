@@ -3,7 +3,7 @@
 > 本文由 `server/tools/gen_api_doc.py` 从应用自身的 OpenAPI schema 生成，**请勿手工编辑**。
 > 改完路由后运行 `python tools/gen_api_doc.py` 重新生成；CI 用 `--check` 校验是否漂移。
 >
-> 接口数：161 个操作 / 128 个路径 · 应用版本 1.0.0
+> 接口数：163 个操作 / 130 个路径 · 应用版本 1.0.0
 
 ## 1. 通用约定
 
@@ -138,8 +138,10 @@ nginx 需 `proxy_buffering off;`，并放宽 `proxy_read_timeout`。
 | `POST` | `/api/projects` | 新建项目 | 会话 |
 | `DELETE` | `/api/projects/{project}` | 删除项目 | 会话 |
 | `GET` | `/api/projects/{project}/archive` | 打包下载整个项目 | 会话 |
+| `GET` | `/api/projects/{project}/artifacts` | 浏览页「产物」清单：只返回白名单后缀的成品文件，源码与依赖目录不出现。 | 会话 |
 | `GET` | `/api/projects/{project}/deck` | 读取 PPT 结构化数据 | 会话 |
 | `PUT` | `/api/projects/{project}/deck` | 保存 PPT 结构化数据 | 会话 |
+| `PUT` | `/api/projects/{project}/deck/dsl` | slidep 产物的编辑链路：lint 校验 → 通过则重编译替换该页并刷新预览。 | 会话 |
 | `GET` | `/api/projects/{project}/download` | 下载单个文件 | 会话 |
 | `GET` | `/api/projects/{project}/file` | 读取单个文件 | 会话 |
 | `PUT` | `/api/projects/{project}/file` | 写入单个文件 | 会话 |
@@ -1224,6 +1226,24 @@ Remove Grant
 
 **响应**：`200`
 
+#### `GET /api/projects/{project}/artifacts`
+
+浏览页「产物」清单：只返回白名单后缀的成品文件，源码与依赖目录不出现。
+
+与 /tree 的区别：tree 是项目全部文件（智能体工作区用），这里只给
+浏览页要预览的产物。返回形状与 tree 相同。
+
+**鉴权**：会话
+
+**参数**
+
+| 名称 | 位置 | 类型 | 必填 | 说明 |
+| --- | --- | --- | :---: | --- |
+| `project` | path | string | 是 | — |
+| `x-workspace` | header | string? | 否 | — |
+
+**响应**：`200`
+
 #### `GET /api/projects/{project}/deck`
 
 读取 PPT 结构化数据
@@ -1259,6 +1279,30 @@ Remove Grant
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | :---: | --- |
 | `deck` | object | 是 | — |
+
+**响应**：`200`
+
+#### `PUT /api/projects/{project}/deck/dsl`
+
+slidep 产物的编辑链路：lint 校验 → 通过则重编译替换该页并刷新预览。
+
+**鉴权**：会话
+
+**参数**
+
+| 名称 | 位置 | 类型 | 必填 | 说明 |
+| --- | --- | --- | :---: | --- |
+| `project` | path | string | 是 | — |
+| `path` | query | string | 是 | — |
+| `x-workspace` | header | string? | 否 | — |
+
+**请求体**（`application/json`）
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | :---: | --- |
+| `page_index` | integer | 是 | — |
+| `dsl` | string | 是 | — |
+| `apply` | boolean | 否 | 默认 `True` |
 
 **响应**：`200`
 

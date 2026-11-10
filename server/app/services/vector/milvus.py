@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import threading
 
+from app.core.logging import get_logger
 from app.db.models import Chunk
 from app.services.vector.base import VectorIndexError
+
+logger = get_logger(__name__)
 
 # 与 memory 实现一致：COSINE 下 distance 就是余弦相似度，越大越近
 SEARCH_EF = 64
@@ -112,7 +115,7 @@ class MilvusIndex:
                 rows = self._bootstrap()
                 if rows:
                     self._write(rows)
-                    print(f"[vector] 集合 {self.collection} 为空，已从存储回灌 {len(rows)} 条", flush=True)
+                    logger.info("集合 %s 为空，已从存储回灌 %d 条", self.collection, len(rows))
 
     # ------------------------------------------------------------ 读
     def search(

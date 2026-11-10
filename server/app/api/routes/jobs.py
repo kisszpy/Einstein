@@ -13,12 +13,12 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
 @router.get("/stats")
-async def job_stats(ws: str = Depends(current_workspace)) -> dict:
+def job_stats(ws: str = Depends(current_workspace)) -> dict:
     return get_queue().stats(ws)
 
 
 @router.get("")
-async def list_jobs(
+def list_jobs(
     status: str | None = None, limit: int = 50, ws: str = Depends(current_workspace),
 ) -> list[dict]:
     return [job.to_dict() for job in get_queue().list(status=status, workspace_id=ws, limit=limit)]
@@ -32,12 +32,12 @@ def _require_own(job_id: str, ws: str):  # noqa: ANN202
 
 
 @router.get("/{job_id}")
-async def get_job(job_id: str, ws: str = Depends(current_workspace)) -> dict:
+def get_job(job_id: str, ws: str = Depends(current_workspace)) -> dict:
     return _require_own(job_id, ws).to_dict()
 
 
 @router.post("/{job_id}/retry")
-async def retry_job(job_id: str, ws: str = Depends(current_workspace)) -> dict:
+def retry_job(job_id: str, ws: str = Depends(current_workspace)) -> dict:
     _require_own(job_id, ws)
     job = get_queue().retry(job_id)
     if job is None:

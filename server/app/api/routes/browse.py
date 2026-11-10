@@ -21,7 +21,7 @@ router = APIRouter(prefix="/browse", tags=["browse"])
 
 
 @router.get("/ticket")
-async def issue_ticket(
+def issue_ticket(
     user: User = Depends(current_user),
     ws: str = Depends(current_workspace),
 ) -> dict:
@@ -30,7 +30,7 @@ async def issue_ticket(
 
 
 @router.get("/web")
-async def proxy(url: str = Query(min_length=3), ticket: str = Query(default="")) -> Response:
+def proxy(url: str = Query(min_length=3), ticket: str = Query(default="")) -> Response:
     try:
         body, ctype, final_url = browser.frame_payload(url, ticket)
     except web.WebError as exc:
@@ -48,7 +48,7 @@ async def proxy(url: str = Query(min_length=3), ticket: str = Query(default=""))
 
 
 @router.get("/asset")
-async def asset(url: str = Query(min_length=3), ticket: str = Query(default="")) -> Response:
+def asset(url: str = Query(min_length=3), ticket: str = Query(default="")) -> Response:
     """单资源代理：CSS/图片/脚本经服务端取回，绕开防盗链与混合内容。
 
     票据由全站中间件统一校验（/api/browse/ 在预览前缀里，仅放行 GET）。
@@ -65,7 +65,7 @@ async def asset(url: str = Query(min_length=3), ticket: str = Query(default=""))
 
 
 @router.get("/read")
-async def read(url: str = Query(min_length=3)) -> dict:
+def read(url: str = Query(min_length=3)) -> dict:
     try:
         return web.read_page(url)
     except web.WebError as exc:
@@ -73,6 +73,6 @@ async def read(url: str = Query(min_length=3)) -> dict:
 
 
 @router.get("/themes")
-async def deck_themes() -> list[dict]:
+def deck_themes() -> list[dict]:
     """PPT 编辑器的主题色板。放在 /browse 下是为了避开 /projects/{project} 的路径吞并。"""
     return deck.list_themes()

@@ -19,6 +19,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.services import models
 from app.services.agent_runtime import (
     LlmTimer,
@@ -30,6 +31,8 @@ from app.services.agent_runtime import (
 )
 from app.services.capabilities import AgentContext
 from app.services.tools import build_lc_tools, kb_directive
+
+logger = get_logger(__name__)
 
 RECURSION_LIMIT = 48  # 工作型任务的步数预算（一轮工具调用 ≈ 2 步）
 
@@ -249,7 +252,7 @@ async def _run_react_agent(
                 ) from exc
             raise
 
-    print(f"[agent] run finished status={timer.status} calls={tool_call_count}", flush=True)
+    logger.info("运行结束 status=%s calls=%d", timer.status, tool_call_count)
     yield final_frame(ctx, final_text, with_artifacts=ctx is not None)
 
 

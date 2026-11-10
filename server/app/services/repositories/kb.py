@@ -73,42 +73,9 @@ class KbRepository(Protocol):
     def add_version(
         self, *, document_id: str, kb_id: str, version: int, content: str,
         content_hash: str, chunk_count: int, source: str = "text", note: str = "",
-    ) -> dict:
-        row = {
-            "id": f"{document_id}-v{version}", "document_id": document_id, "kb_id": kb_id,
-            "version": version, "content": content, "content_hash": content_hash,
-            "chunk_count": chunk_count, "source": source, "note": note, "created_at": _now(),
-        }
-        with self._lock:
-            self.versions = [v for v in self.versions if v.get("id") != row["id"]]
-            self.versions.append(row)
-        return row
-
-    def list_versions(self, document_id: str) -> list[dict]:
-        rows = [v for v in self.versions if v.get("document_id") == document_id]
-        return sorted(rows, key=lambda v: v.get("version", 0), reverse=True)
-
-    def get_version(self, document_id: str, version: int) -> dict | None:
-        for v in self.versions:
-            if v.get("document_id") == document_id and v.get("version") == version:
-                return v
-        return None
-
-    def update_chunk(
-        self, chunk_id: str, *, text: str, vector: list[float], embedding_kind: str = "mock",
-        embedding_model: str = "", embedding_dim: int = 0,
-    ) -> bool:
-        with self._lock:
-            for c in self.chunks:
-                if c.id == chunk_id:
-                    c.text = text
-                    c.vector = vector
-                    c.embedding_kind = embedding_kind
-                    c.embedding_model = embedding_model
-                    c.embedding_dim = int(embedding_dim or len(vector))
-                    return True
-        return False
-
+    ) -> dict: ...
+    def list_versions(self, document_id: str) -> list[dict]: ...
+    def get_version(self, document_id: str, version: int) -> dict | None: ...
     def delete_chunks_by_document(self, doc_id: str) -> int: ...
     def update_chunk(
         self, chunk_id: str, *, text: str, vector: list[float], embedding_kind: str = "mock",
@@ -118,12 +85,6 @@ class KbRepository(Protocol):
     def chunk_signature(self, kb_ids: list[str]) -> tuple[int, str]:
         """(切片数, 最新创建时间)：给 BM25 倒排表做失效判定用的廉价指纹。"""
         ...
-    def add_version(
-        self, *, document_id: str, kb_id: str, version: int, content: str,
-        content_hash: str, chunk_count: int, source: str = "text", note: str = "",
-    ) -> dict: ...
-    def list_versions(self, document_id: str) -> list[dict]: ...
-    def get_version(self, document_id: str, version: int) -> dict | None: ...
     def save(self) -> None: ...
 
 

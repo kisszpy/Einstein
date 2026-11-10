@@ -19,16 +19,19 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-
-from app.core.config import get_settings
-from app.services import audit
-from app.services.state import blob
 from typing import Literal
 
 import mcp.client.stdio as _stdio
 import mcp.client.streamable_http as _http
 from mcp import ClientSession, StdioServerParameters
 from pydantic import BaseModel, Field
+
+from app.core.config import get_settings
+from app.core.logging import get_logger
+from app.services import audit
+from app.services.state import blob
+
+logger = get_logger(__name__)
 
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 _STORE_PATH = _DATA_DIR / "mcp_servers.json"
@@ -135,7 +138,7 @@ def decrypt_value(value: str) -> str:
         expect = hmac.new(mac_key, iv + ct, hashlib.sha256).digest()[:_MAC_LEN]
         if not hmac.compare_digest(mac, expect):
             # 密钥换了或被篡改：拒绝解密，而不是把乱码当凭证去连 MCP。
-            print("[mcp] 凭证完整性校验失败（密钥变更或密文被改）", flush=True)
+            logger.warning("凭证完整性校验失败（密钥变更或密文被改）")
             return ""
         return _keystream_xor(enc_key, iv, ct).decode("utf-8")
     except Exception:  # noqa: BLE001

@@ -15,7 +15,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
 import app.services.mcp as mcp_service
-from app.services.capabilities import CAPABILITIES, CAPABILITY_TOOL_IDS, AgentContext, make_tools
+from app.services.capabilities import CAPABILITIES, AgentContext, make_tools
 
 MCP_TOOL_PREFIX = "mcp:"
 

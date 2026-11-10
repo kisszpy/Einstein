@@ -51,7 +51,7 @@ def _require_editable(server: McpServer | None, ws: str, uid: str, is_admin: boo
 
 
 @router.get("/servers")
-async def list_servers(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
+def list_servers(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
     return [mcp_service.server_payload(s) for s in mcp_service.list_servers(ws, uid)]
 
 
@@ -81,7 +81,7 @@ async def add_server(
 
 
 @router.patch("/servers/{server_id}")
-async def patch_server(
+def patch_server(
     server_id: str, req: McpServerPatch, ws: str = Depends(current_workspace),
     uid: str = Depends(current_uid), user=Depends(current_user),
 ) -> dict:
@@ -93,7 +93,7 @@ async def patch_server(
 
 
 @router.delete("/servers/{server_id}")
-async def delete_server(
+def delete_server(
     server_id: str, ws: str = Depends(current_workspace),
     uid: str = Depends(current_uid), user=Depends(current_user),
 ) -> dict:
@@ -116,7 +116,7 @@ async def refresh(
 
 
 @router.post("/servers/{server_id}/tools/approve")
-async def approve_tool(
+def approve_tool(
     server_id: str, req: ToolApproval, ws: str = Depends(current_workspace),
     uid: str = Depends(current_uid), user=Depends(current_user),
 ) -> dict:

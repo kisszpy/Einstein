@@ -175,7 +175,6 @@ async def rerank_hits(
     hits: list[RetrievedChunk]。返回 (重排后的 hits, 观测信息)。
     失败/关闭时原序返回——调用方无感知。
     """
-    settings = get_settings()
     provider = get_reranker()
     info: dict = {"rerank": provider.name}
     if provider.name == "none" or len(hits) <= 1:

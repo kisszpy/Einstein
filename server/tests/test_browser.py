@@ -75,6 +75,7 @@ def test_screenshot_reuses_browser(monkeypatch, tmp_path):
     second = browser_pro.screenshot("https://example.com/b", tmp_path / "b.png")
 
     assert first["engine"] == "python"
+    assert second["engine"] == "python"
     assert counter["launch"] == 1, "两次截图应复用同一个浏览器进程"
     assert counter["pages"] == 2
     assert (tmp_path / "a.png").exists() and (tmp_path / "b.png").exists()

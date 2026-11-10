@@ -16,19 +16,21 @@ from __future__ import annotations
 
 import json
 import re
-import time
 import shutil
+import time
 from pathlib import Path
 
 from pptx import Presentation
 
-from app.services.capabilities import ppt, sandbox
+from app.services.capabilities import ppt, sandbox, slidep
 
 DECK_DIR = ".deck"
 MAX_SLIDES = 80
 MAX_BULLETS = 40
 MAX_CELLS_COLS = 8
 MAX_CELLS_ROWS = 30
+# 单页 DSL 上限：防误传超大 payload，正常一页几 KB 足够
+DSL_MAX_CHARS = 120_000
 
 LAYOUTS = (
     "title", "section", "bullets", "two_col", "quote", "table",
@@ -68,6 +70,121 @@ def _read_sidecar(root: Path, rel: str, deck_mtime: float) -> dict | None:
     if not isinstance(data, dict) or not data.get("slides"):
         return None
     return data
+
+
+# ---------- slidep DSL 清单（第二类 sidecar） ----------
+
+def _read_dsl_manifest(root: Path, rel: str, deck_mtime: float) -> dict | None:
+    """读 slidep 逐页 DSL 清单；pptx 比 manifest 新视为外部改过，作废。"""
+    path = sidecar_path(root, rel)
+    if not path.is_file():
+        return None
+    if path.stat().st_mtime + 0.5 < deck_mtime:
+        return None
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("_engine") not in ("slidep", "svgdeck"):
+        return None
+    return data
+
+
+def set_dsl_manifest(
+    root: Path, rel: str, engine: str, page_files: list[str], source_hash: str = "",
+) -> None:
+    """整体重写 DSL 清单（svgdeck 全量重建后登记每页来源）。
+
+    结构化 sidecar（ppt_create 产物）优先，被占用时不覆盖。
+    `source_hash` 是引擎侧的内容指纹，用来判断「这份 deck 是否需要重编译」；
+    引擎不提供时留空（等于缓存永不命中，走完整编译，安全兜底）。
+    """
+    target = sandbox.resolve_in(root, rel)
+    path = sidecar_path(root, rel)
+    if path.is_file():
+        try:
+            existing = json.loads(path.read_text("utf-8"))
+        except (OSError, ValueError):
+            existing = None
+        if isinstance(existing, dict) and existing.get("slides"):
+            return
+    manifest = {
+        "_engine": engine,
+        "_path": rel,
+        "title": target.stem,
+        "pages": [
+            {"page_index": i, "dsl_file": f, "dsl": ""}
+            for i, f in enumerate(page_files)
+        ],
+    }
+    if source_hash:
+        manifest["_source_hash"] = source_hash
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+
+def remember_dsl_page(root: Path, rel: str, page_index: int, dsl_file: str, dsl: str) -> bool:
+    """登记/更新 slidep 某页的 DSL 来源，之后编辑器可按页无损改写。
+
+    同一个 sidecar 文件名被结构化清单（ppt_create 产物）占用时不覆盖——
+    混合生成的文件以结构化语义为准，返回 False。page_index<0 表示追加，
+    页号按 manifest 追加序号递增（要求每次 upsert 后紧跟着登记一次）。
+    """
+    target = sandbox.resolve_in(root, rel)
+    path = sidecar_path(root, rel)
+    existing: dict | None = None
+    if path.is_file():
+        try:
+            existing = json.loads(path.read_text("utf-8"))
+        except (OSError, ValueError):
+            existing = None
+    if isinstance(existing, dict) and existing.get("slides"):
+        return False  # 结构化 sidecar 优先
+    manifest = (
+        existing
+        if isinstance(existing, dict) and existing.get("_engine") == "slidep"
+        else {"_engine": "slidep", "_path": rel, "title": target.stem, "pages": []}
+    )
+    pages: list = manifest.setdefault("pages", [])
+    if int(page_index) < 0:
+        # 追加：slidep 从空 pptx 逐页 upsert 的流程里，manifest 追加序号就是真实页序。
+        # 不按 pptx 页数反推——remember 与 upsert 若有先后错位（批量补登记）会算重。
+        idx = len(pages)
+    else:
+        idx = int(page_index)
+    entry = {
+        "page_index": idx,
+        "dsl_file": (dsl_file or "").strip(),
+        "dsl": "" if (dsl_file or "").strip() else (dsl or "")[:DSL_MAX_CHARS],
+    }
+    if 0 <= idx < len(pages):
+        pages[idx] = entry
+    else:
+        pages.extend([None] * (idx - len(pages)))
+        pages.append(entry)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    return True
+
+
+def _manifest_pages(root: Path, manifest: dict) -> list[dict]:
+    """把清单展开成带 DSL 内容的页列表（dsl_file 优先读文件，拿不到用内联）。"""
+    out: list[dict] = []
+    for i, entry in enumerate(manifest.get("pages") or []):
+        if not isinstance(entry, dict):
+            continue  # 占位 None：该页无 DSL 记录，编辑器标为只读页
+        dsl = entry.get("dsl") or ""
+        rel_file = entry.get("dsl_file") or ""
+        if rel_file:
+            try:
+                fp = sandbox.resolve_in(root, rel_file)
+                dsl = fp.read_text("utf-8")[:DSL_MAX_CHARS] if fp.is_file() else ""
+            except sandbox.SandboxError:
+                dsl = ""
+            except OSError:
+                dsl = ""
+        out.append({"index": i, "dsl_file": rel_file, "dsl": dsl})
+    return out
 
 
 # ---------- 解析 ----------
@@ -458,26 +575,73 @@ def _slide_images(root: Path, target: Path) -> list[str]:
         import win32com.client
     except ImportError:
         return []
-    cache_dir = root / ".deckpreview" / f"{target.stem}-{int(target.stat().st_mtime)}"
-    # 每个文件只保留最新一份渲染缓存：命中旧 mtime 缓存说明文件已重生成，先清掉历史目录
     preview_root = root / ".deckpreview"
+    mtime_int = int(target.stat().st_mtime)
+    cache_dir = preview_root / f"{target.stem}-{mtime_int}"
+    # 导出失败标记（WPS 兼容注册的机器上 COM SaveAs 可能永远被拒呼）：
+    # 同一 mtime 失败过就不再重试，避免每次 load 都白耗几秒
+    marker = preview_root / f"{target.stem}.failed-{mtime_int}"
+    # 每个文件只保留最新一份渲染缓存：命中旧 mtime 缓存说明文件已重生成，先清掉历史目录
     if preview_root.is_dir():
         for stale in preview_root.glob(f"{target.stem}-*"):
-            if stale != cache_dir:
+            if stale != cache_dir and stale.is_dir():
                 shutil.rmtree(stale, ignore_errors=True)
+        for old_marker in preview_root.glob(f"{target.stem}.failed-*"):
+            if old_marker != marker:
+                try:
+                    old_marker.unlink()
+                except OSError:
+                    pass  # 清理失败不影响主流程（Windows 上文件常被占用）
+    if marker.exists():
+        return []
     if not cache_dir.is_dir() or not any(cache_dir.glob("*.JPG")):
         cache_dir.mkdir(parents=True, exist_ok=True)
         try:
+            import pywintypes
+        except ImportError:
+            return []
+        try:
             pythoncom.CoInitialize()
             try:
-                app = win32com.client.Dispatch("PowerPoint.Application")
-                pres = app.Presentations.Open(str(target), True, False, False)
-                pres.SaveAs(str(cache_dir), 17)  # ppSaveAsJPG：整份导出为逐页 JPG
-                pres.Close()
+                # EnsureDispatch 生成类型缓存：PowerPoint 2007 上纯动态派发的
+                # Presentations.Open 会解析失败（AttributeError: Open.SaveAs）
+                try:
+                    app = win32com.client.gencache.EnsureDispatch("PowerPoint.Application")
+                except Exception:  # noqa: BLE001 — gen_py 缓存损坏时退回动态派发
+                    app = win32com.client.Dispatch("PowerPoint.Application")
+                pres = None
+                for attempt in range(3):
+                    try:
+                        pres = app.Presentations.Open(str(target), True, False, False)
+                        pres.SaveAs(str(cache_dir), 17)  # ppSaveAsJPG：整份导出为逐页 JPG
+                        break
+                    except pywintypes.com_error:
+                        # PowerPoint 启动中会拒呼（RPC_E_CALL_REJECTED），退避重试
+                        if attempt == 2:
+                            raise
+                        time.sleep(1.0)
+                if pres is not None:
+                    pres.Close()
             finally:
+                try:
+                    # 只在没别的演示文稿打开时退出，避免误杀用户自己的 PowerPoint 窗口
+                    if app.Presentations.Count == 0:
+                        app.Quit()
+                except Exception:  # noqa: BLE001 — 退出失败不影响导出结果
+                    pass
                 pythoncom.CoUninitialize()
         except Exception:  # noqa: BLE001 — 预览是增强能力，失败不阻塞大纲
+            try:
+                preview_root.mkdir(parents=True, exist_ok=True)
+                marker.write_text("export failed", encoding="utf-8")
+            except OSError:
+                pass  # 清理失败不影响主流程（Windows 上文件常被占用）
             return []
+    if marker.exists():
+        try:
+            marker.unlink()
+        except OSError:
+            pass  # 清理失败不影响主流程（Windows 上文件常被占用）
     jpgs = sorted(
         cache_dir.glob("*.JPG"),
         key=lambda p: (len(p.stem), p.stem),  # 幻灯片1 < 幻灯片10（位数优先）
@@ -487,13 +651,42 @@ def _slide_images(root: Path, target: Path) -> list[str]:
     return [p.relative_to(root).as_posix() for p in jpgs]
 
 
+def _describe_dsl(root: Path, rel: str, manifest: dict, pages: list[dict], target: Path) -> dict:
+    stat = target.stat()
+    return {
+        "path": rel,
+        "title": manifest.get("title") or target.stem,
+        "subtitle": "",
+        "author": "",
+        "theme": "",
+        "theme_inferred": False,
+        "source": "sidecar",
+        # DSL 即真相源：改 DSL → lint → 重编译，全链路无损（slidep / svgdeck 同机制）
+        "editable": "full",
+        "engine": manifest.get("_engine", "slidep"),
+        "slides": [
+            {"layout": "section", "title": f"第 {p['index'] + 1} 页"} for p in pages
+        ],
+        "pages": pages,
+        "preview_images": manifest.get("preview_images") or [],
+        "bytes": stat.st_size,
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
+    }
+
+
 def load_deck(root: Path, rel: str) -> dict:
     target = sandbox.resolve_in(root, rel)
     if not target.is_file():
         raise sandbox.SandboxError(f"文件不存在：{rel}")
     if target.suffix.lower() != ".pptx":
         raise sandbox.SandboxError("只支持 .pptx 演示文稿")
-    payload = _read_sidecar(root, rel, target.stat().st_mtime)
+    mtime = target.stat().st_mtime
+    manifest = _read_dsl_manifest(root, rel, mtime)
+    if manifest is not None:
+        pages = _manifest_pages(root, manifest)
+        manifest["preview_images"] = _slide_images(root, target)
+        return _describe_dsl(root, rel, manifest, pages, target)
+    payload = _read_sidecar(root, rel, mtime)
     if payload is not None:
         # sidecar 可能缺 layout（生成时靠推断渲染），读取时补齐，编辑器才能正确预览
         slides = payload.get("slides") or []
@@ -519,6 +712,74 @@ def save_deck(root: Path, rel: str, payload: dict) -> dict:
     ppt.write_pptx(clean, out)
     remember(root, rel, clean)
     return load_deck(root, rel)
+
+
+def apply_dsl_page(root: Path, rel: str, page_index: int, dsl: str, apply: bool = True) -> dict:
+    """浏览页 DSL 模式的保存链路：lint → 有 error 拒绝编译 → 重编译替换该页。
+
+    apply=False 只校验不落盘。返回 {ok, diagnostics, deck?}，diagnostics
+    透传 slidep 的 ruleId/severity/message，前端按 severity 分色展示。
+    """
+    target = sandbox.resolve_in(root, rel)
+    if not target.is_file() or target.suffix.lower() != ".pptx":
+        raise sandbox.SandboxError(f"文件不存在或不是 pptx：{rel}")
+    dsl = (dsl or "").strip()
+    if not dsl:
+        raise sandbox.SandboxError("DSL 内容为空")
+    if len(dsl) > DSL_MAX_CHARS:
+        raise sandbox.SandboxError(f"单页 DSL 超过 {DSL_MAX_CHARS} 字符上限")
+    manifest = _read_dsl_manifest(root, rel, target.stat().st_mtime)
+    engine = (manifest or {}).get("_engine", "slidep")
+    if engine == "svgdeck":
+        return _apply_svg_page(root, rel, int(page_index), dsl, apply, manifest)
+    lint = slidep.lint(target, dsl, max(int(page_index), 0))
+    diagnostics = lint.get("diagnostics") or []
+    has_error = (lint.get("ok") is False and not diagnostics) or any(
+        isinstance(d, dict) and str(d.get("severity", "")).lower() in {"error", "fatal"}
+        for d in diagnostics
+    )
+    if not apply or has_error:
+        return {"ok": not has_error, "diagnostics": diagnostics}
+    up = slidep.upsert(target, dsl, int(page_index))
+    if not up.get("ok"):
+        return {
+            "ok": False,
+            "diagnostics": [{"ruleId": "compile", "severity": "error",
+                             "message": up.get("error") or "编译失败"}],
+        }
+    remember_dsl_page(root, rel, int(page_index), "", dsl)
+    return {"ok": True, "diagnostics": diagnostics, "deck": load_deck(root, rel)}
+
+
+def _apply_svg_page(
+    root: Path, rel: str, page_index: int, svg: str, apply: bool, manifest: dict | None
+) -> dict:
+    """svgdeck 产物的编辑链路：轻校验 → 落盘该页 SVG → 整体重编译。"""
+    from app.services.capabilities import svgdeck  # 局部导入避免环
+
+    lint = svgdeck.lint_svg(svg)
+    diagnostics = lint.get("diagnostics") or []
+    if not apply or not lint.get("ok"):
+        return {"ok": lint.get("ok", False), "diagnostics": diagnostics}
+    pages = [p for p in (manifest or {}).get("pages") or [] if isinstance(p, dict)]
+    files = [p.get("dsl_file") or "" for p in pages]
+    idx = page_index if 0 <= page_index < len(files) else len(files)
+    # dsl_file 形如 slides/NN.svg；编辑器提交的内容直接覆盖该文件
+    if idx < len(files) and files[idx]:
+        page_path = sandbox.resolve_in(root, files[idx])
+        page_path.parent.mkdir(parents=True, exist_ok=True)
+        page_path.write_text(svg, encoding="utf-8")
+    else:
+        svgdeck.write_page(root, idx + 1, svg)
+    try:
+        svgdeck.compile_deck(root, rel)
+    except sandbox.SandboxError as exc:
+        return {
+            "ok": False,
+            "diagnostics": [{"ruleId": "compile", "severity": "error",
+                             "message": str(exc)}],
+        }
+    return {"ok": True, "diagnostics": diagnostics, "deck": load_deck(root, rel)}
 
 
 def list_themes() -> list[dict]:

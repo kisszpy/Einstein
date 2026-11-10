@@ -20,11 +20,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.db.engine import get_db
 from app.db.rows import TableState
 from app.db.schema import migrate
 from app.db.tables import SHARES
 from app.services.state import JsonState
+
+logger = get_logger(__name__)
 
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 _JSON = JsonState(_DATA_DIR / "shares.json")
@@ -158,7 +161,7 @@ def touch_view(token: str) -> None:
             entry["last_viewed_at"] = _now()
             _save_all(rows)
     except Exception as exc:  # noqa: BLE001
-        print(f"[shares] 访问计数失败（忽略）：{exc}", flush=True)
+        logger.debug("访问计数失败（忽略）：%s", exc)
 
 
 def payload(share: dict) -> dict:

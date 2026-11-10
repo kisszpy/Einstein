@@ -125,4 +125,4 @@ def run_code(
             try:
                 script.unlink(missing_ok=True)
             except OSError:
-                pass
+                pass  # 清理失败不影响主流程（Windows 上文件常被占用）

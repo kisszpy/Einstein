@@ -259,7 +259,7 @@ export function WebView({ url, ticket, onNavigate }: Props) {
           <iframe
             key={`${entry}-${reloadKey}`}
             src={api.proxyUrl(entry, ticket)}
-            title="内置浏览器"
+            title="网页预览"
             className="h-full w-full border-0 bg-white"
             sandbox="allow-scripts allow-forms allow-popups"
           />
@@ -284,7 +284,7 @@ function StartPage({ onPick }: { onPick: (url: string) => void }) {
         <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-soft text-brand-deep dark:text-brand">
           <Globe size={19} strokeWidth={1.7} />
         </span>
-        <h2 className="mt-4 text-[17px] font-medium">内置浏览器</h2>
+        <h2 className="mt-4 text-[17px] font-medium">网页浏览</h2>
         <p className="mt-1.5 text-[12.5px] leading-relaxed text-tertiary">
           页面经服务端代理取回，所以那些禁止被嵌入的站点也能在这里打开。站内点击会留在窗口内，
           被拦得厉害时切「阅读」只取正文。

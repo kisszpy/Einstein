@@ -18,14 +18,15 @@ from pydantic import BaseModel
 
 from app.api.deps import current_uid, current_user, current_workspace, workspace_role
 from app.core.config import get_settings
-from app.services import batch as batch_io, members
-from app.services import kb_access, sources
-from app.services import ocr as ocr_service
+from app.core.logging import get_logger
+from app.services import batch as batch_io, kb_access, members, ocr as ocr_service, sources
 from app.services.parsers import MAX_BYTES, ParseError, fetch_url, parse_document
 from app.services.queue import get_queue
 from app.services.rag import ingest_document, reembed_chunk, reindex_document, search
 from app.services.store import KBStore, get_store
 from app.services.vector import VectorIndexError, get_vector_index
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/kb", tags=["kb"])
 
@@ -188,7 +189,7 @@ def _cleanup_dir(path: Path) -> None:
 
 
 @router.get("/ocr")
-async def ocr_capability(uid: str = Depends(current_uid)) -> dict:
+def ocr_capability(uid: str = Depends(current_uid)) -> dict:
     """当前环境能不能把图片变成文字，走哪条路。
 
     前端据此在选文件时提示：没有 OCR 时传图片会直接 400，不如提前说清。
@@ -198,7 +199,7 @@ async def ocr_capability(uid: str = Depends(current_uid)) -> dict:
 
 
 @router.get("")
-async def list_knowledge_bases(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
+def list_knowledge_bases(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
     store = get_store()
     listed = {kb.id for kb in store.list_kbs(ws, uid)}
     rows = list(store.list_kbs(ws, uid))
@@ -225,7 +226,7 @@ async def list_knowledge_bases(ws: str = Depends(current_workspace), uid: str = 
 
 
 @router.post("")
-async def create_kb(req: KBCreate, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+def create_kb(req: KBCreate, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     if req.visibility not in VISIBILITIES:
         raise HTTPException(400, f"visibility 只能是 {' / '.join(VISIBILITIES)}")
     name = req.name.strip()
@@ -240,7 +241,7 @@ async def create_kb(req: KBCreate, ws: str = Depends(current_workspace), uid: st
 
 
 @router.patch("/{kb_id}")
-async def update_kb(
+def update_kb(
     kb_id: str, req: KBPatch,
     ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
     user=Depends(current_user),
@@ -276,7 +277,7 @@ class GrantRequest(BaseModel):
 
 
 @router.get("/{kb_id}/grants")
-async def list_grants(
+def list_grants(
     kb_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> list[dict]:
     """该库的授权名单。只有能写的人（创建者/管理员）才看得到。"""
@@ -286,7 +287,7 @@ async def list_grants(
 
 
 @router.get("/{kb_id}/grants/candidates")
-async def grant_candidates(
+def grant_candidates(
     kb_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> list[dict]:
     """可授权的人：本空间的成员（不是全站用户）。
@@ -320,7 +321,7 @@ async def grant_candidates(
 
 
 @router.post("/{kb_id}/grants")
-async def add_grant(
+def add_grant(
     kb_id: str, req: GrantRequest,
     ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
@@ -340,7 +341,7 @@ async def add_grant(
 
 
 @router.delete("/{kb_id}/grants/{user_id}")
-async def remove_grant(
+def remove_grant(
     kb_id: str, user_id: str,
     ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
@@ -350,7 +351,7 @@ async def remove_grant(
 
 
 @router.get("/{kb_id}/documents")
-async def list_documents(kb_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
+def list_documents(kb_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
     store = get_store()
     _require_kb(store, kb_id, ws, uid)
     return [
@@ -563,7 +564,7 @@ async def upload_documents_batch(
 
 
 @router.post("/{kb_id}/documents/dir")
-async def import_directory(
+def import_directory(
     kb_id: str, req: DirImport, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     """导入服务端目录（本地部署用）：不复制文件，直接按相对路径入库。
@@ -679,7 +680,7 @@ async def refresh_documents(
 
 
 @router.get("/{kb_id}/documents/stale")
-async def stale_documents(
+def stale_documents(
     kb_id: str, days: int | None = None,
     ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
@@ -700,7 +701,7 @@ async def stale_documents(
 
 
 @router.get("/{kb_id}/documents/{doc_id}/chunks")
-async def list_document_chunks(
+def list_document_chunks(
     kb_id: str, doc_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> list[dict]:
     """切片预览：前端切片编辑器与引用定位都靠它。"""
@@ -743,7 +744,7 @@ async def update_chunk(
 
 
 @router.delete("/{kb_id}/documents/{doc_id}")
-async def delete_document(
+def delete_document(
     kb_id: str, doc_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     """删文档并级联清理切片与向量。"""
@@ -753,8 +754,10 @@ async def delete_document(
     removed = store.delete_document(doc_id)
     try:
         get_vector_index().delete_document(doc_id)
-    except VectorIndexError:
-        pass
+    except VectorIndexError as exc:
+        # 数据库是真相源、索引只是加速结构，删索引失败不该让删文档报错；
+        # 残留切片在检索时由「回表兜底」过滤。记 debug 是为了 rebuild 前排查残留。
+        logger.debug("删除文档 %s 的向量失败：%s", doc_id, exc)
     return {"ok": True, "removed_chunks": removed}
 
 
@@ -774,7 +777,7 @@ async def reindex_one(
 
 
 @router.get("/{kb_id}/documents/{doc_id}/versions")
-async def list_versions(
+def list_versions(
     kb_id: str, doc_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> list[dict]:
     store = get_store()
@@ -881,7 +884,7 @@ async def search_compare(req: CompareRequest, ws: str = Depends(current_workspac
 
 
 @router.get("/citations/{chunk_id}")
-async def citation_locator(chunk_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+def citation_locator(chunk_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     """引用定位：切片 → 原文段落（前后各带 200 字上下文，便于前端高亮）。"""
     store = get_store()
     chunk = store.get_chunks([chunk_id])
@@ -910,7 +913,7 @@ async def citation_locator(chunk_id: str, ws: str = Depends(current_workspace), 
 
 
 @router.delete("/{kb_id}")
-async def delete_kb(kb_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+def delete_kb(kb_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     """删除知识库，连同其文档、切片与向量一并清理。"""
     store = get_store()
     _require_kb(store, kb_id, ws, uid, write=True)
@@ -919,6 +922,7 @@ async def delete_kb(kb_id: str, ws: str = Depends(current_workspace), uid: str =
     index = get_vector_index()
     try:
         index.delete_kb(kb_id)
-    except VectorIndexError:
-        pass
+    except VectorIndexError as exc:
+        # 同上：库已删，索引残留由回表兜底；这里只留排查线索
+        logger.debug("删除知识库 %s 的向量失败：%s", kb_id, exc)
     return {"ok": True, "removed_documents": removed, "removed_documents_indexed": len(doc_ids)}

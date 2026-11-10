@@ -7,15 +7,12 @@
 from __future__ import annotations
 
 import os
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.config import get_settings
-from app.services.capabilities import AgentContext, browser_pro, sandbox
+from app.services.capabilities import AgentContext, browser_pro
 from app.services.capabilities.sandbox import slugify, workspace_root
 
 WS = "ws-pro-verify"

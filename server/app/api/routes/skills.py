@@ -101,7 +101,7 @@ def _raise_install_error(exc: Exception) -> None:
 
 
 @router.get("/market")
-async def market(
+def market(
     q: str = "",
     source: str = "github",
     limit: int = Query(default=20, ge=1, le=50),
@@ -135,7 +135,7 @@ async def market(
 
 
 @router.post("/install/preview")
-async def preview_install(req: PreviewRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+def preview_install(req: PreviewRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     try:
         return skill_installer.preview(req.url, req.ref, req.path)
     except skill_installer.SkillInstallError as exc:
@@ -145,7 +145,7 @@ async def preview_install(req: PreviewRequest, ws: str = Depends(current_workspa
 
 
 @router.post("/install")
-async def install_skill(req: InstallRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+def install_skill(req: InstallRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     store = get_skill_store()
     try:
         skill, created = skill_installer.install(store, ws, req.url, req.ref, req.path, uid)
@@ -160,12 +160,12 @@ async def install_skill(req: InstallRequest, ws: str = Depends(current_workspace
 
 
 @router.get("")
-async def list_skills(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
+def list_skills(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
     return [_dump(s) for s in get_skill_store().list_skills(ws, uid)]
 
 
 @router.post("")
-async def create_skill(req: SkillCreate, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+def create_skill(req: SkillCreate, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     if not req.name.strip():
         raise HTTPException(400, "技能名称不能为空")
     if req.visibility not in VISIBILITIES:
@@ -180,7 +180,7 @@ async def create_skill(req: SkillCreate, ws: str = Depends(current_workspace), u
 
 
 @router.put("/{skill_id}")
-async def update_skill(
+def update_skill(
     skill_id: str, req: SkillUpdate, ws: str = Depends(current_workspace),
     uid: str = Depends(current_uid), user=Depends(current_user),
 ) -> dict:
@@ -210,7 +210,7 @@ async def update_skill(
 
 
 @router.get("/{skill_id}/versions")
-async def list_versions(skill_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+def list_versions(skill_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     skill = _require_read(get_skill_store().get(skill_id), ws, uid)
     return {"version": skill.version, "versions": skill.versions}
 
@@ -220,7 +220,7 @@ class RollbackRequest(BaseModel):
 
 
 @router.post("/{skill_id}/rollback")
-async def rollback_skill(
+def rollback_skill(
     skill_id: str, req: RollbackRequest, ws: str = Depends(current_workspace),
     uid: str = Depends(current_uid), user=Depends(current_user),
 ) -> dict:
@@ -234,7 +234,7 @@ async def rollback_skill(
 
 
 @router.get("/{skill_id}/export")
-async def export_skill(skill_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> Response:
+def export_skill(skill_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> Response:
     skill = _require_read(get_skill_store().get(skill_id), ws, uid)
     data = skill_installer.export_zip(skill)
     # HTTP header 只允许 latin-1：文件名剥离非 ASCII，中文名走 RFC 5987 filename*
@@ -306,7 +306,7 @@ async def try_skill(skill_id: str, req: TryRequest, ws: str = Depends(current_wo
 
 
 @router.post("/{skill_id}/update")
-async def update_from_source(
+def update_from_source(
     skill_id: str, ws: str = Depends(current_workspace),
     uid: str = Depends(current_uid), user=Depends(current_user),
 ) -> dict:
@@ -330,13 +330,13 @@ async def update_from_source(
 
 
 @router.get("/{skill_id}/files")
-async def list_files(skill_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+def list_files(skill_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     skill = _require_read(get_skill_store().get(skill_id), ws, uid)
     return {"files": skill.files, "source_url": skill.source_url}
 
 
 @router.get("/{skill_id}/file")
-async def read_file(
+def read_file(
     skill_id: str, path: str = Query(...), ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     _require_read(get_skill_store().get(skill_id), ws, uid)
@@ -348,7 +348,7 @@ async def read_file(
 
 
 @router.delete("/{skill_id}")
-async def delete_skill(
+def delete_skill(
     skill_id: str, ws: str = Depends(current_workspace),
     uid: str = Depends(current_uid), user=Depends(current_user),
 ) -> dict:

@@ -41,7 +41,7 @@ class RulePatch(BaseModel):
 
 
 @router.get("/kinds")
-async def list_kinds() -> list[dict]:
+def list_kinds() -> list[dict]:
     """可选的告警类型与默认阈值建议，前端下拉直接用。"""
     return [
         {"kind": "error_rate", "label": "错误率", "unit": "比例", "suggest": 0.2},
@@ -52,14 +52,14 @@ async def list_kinds() -> list[dict]:
 
 
 @router.get("/rules")
-async def list_rules(
+def list_rules(
     ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> list[dict]:
     return [alerts.rule_payload(r) for r in alerts.list_rules(ws, uid)]
 
 
 @router.post("/rules")
-async def create_rule(
+def create_rule(
     req: RuleCreate, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     try:
@@ -85,7 +85,7 @@ def _require_edit(rule_id: str, ws: str, uid: str, is_admin: bool) -> dict:
 
 
 @router.patch("/rules/{rule_id}")
-async def update_rule(
+def update_rule(
     rule_id: str, req: RulePatch,
     ws: str = Depends(current_workspace), user: users.User = Depends(current_user),
 ) -> dict:
@@ -103,7 +103,7 @@ async def update_rule(
 
 
 @router.delete("/rules/{rule_id}")
-async def delete_rule(
+def delete_rule(
     rule_id: str, ws: str = Depends(current_workspace),
     user: users.User = Depends(current_user),
 ) -> dict:
@@ -127,7 +127,7 @@ async def test_rule(
 
 
 @router.get("/events")
-async def list_events(
+def list_events(
     limit: int = Query(50, le=500), ws: str = Depends(current_workspace)
 ) -> list[dict]:
     return alerts.list_events(ws, limit)

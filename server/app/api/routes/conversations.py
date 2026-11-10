@@ -17,7 +17,7 @@ def _require_own(conv_id: str, ws: str, uid: str):
 
 
 @router.get("")
-async def list_conversations(
+def list_conversations(
     q: str | None = None, archived: bool = False,
     ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> list[dict]:
@@ -49,7 +49,7 @@ class ConversationPatch(BaseModel):
 
 
 @router.patch("/{conversation_id}")
-async def patch_conversation(
+def patch_conversation(
     conversation_id: str, req: ConversationPatch, ws: str = Depends(current_workspace),
     uid: str = Depends(current_uid),
 ) -> dict:
@@ -71,7 +71,7 @@ async def patch_conversation(
 
 
 @router.get("/{conversation_id}")
-async def get_conversation(
+def get_conversation(
     conversation_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
     conv = _require_own(conversation_id, ws, uid)
@@ -86,7 +86,7 @@ async def get_conversation(
 
 
 @router.get("/{conversation_id}/export")
-async def export_conversation(
+def export_conversation(
     conversation_id: str, format: str = "md", inline: bool = False,
     ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> Response:
@@ -108,7 +108,7 @@ async def export_conversation(
 
 
 @router.delete("/{conversation_id}")
-async def delete_conversation(
+def delete_conversation(
     conversation_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
     _require_own(conversation_id, ws, uid)

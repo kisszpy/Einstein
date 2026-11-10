@@ -14,18 +14,21 @@
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 import threading
 import time
-import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from app.core.logging import get_logger, setup_logging  # noqa: E402
 from app.services.queue import Job, get_queue  # noqa: E402
 from app.services.queue.base import PermanentJobError  # noqa: E402
 from app.services.queue.handlers import HANDLERS  # noqa: E402
+
+logger = get_logger("app.worker")
 
 
 class LeaseKeeper:
@@ -50,32 +53,36 @@ class LeaseKeeper:
             try:
                 self.queue.renew(self.job_id)
             except Exception:  # noqa: BLE001 — 续租失败不致命，交给租约回收
-                pass
+                # 掉到 debug：长任务每 60s 续一次，队列抖动时这条会刷屏
+                logger.debug("续租失败 job=%s（等租约自然回收）", self.job_id, exc_info=True)
 
 
 def execute(queue, job: Job) -> bool:  # noqa: ANN001
     handler = HANDLERS.get(job.kind)
     if handler is None:
         queue.fail(job.id, f"未知任务类型：{job.kind}")
-        print(f"[worker] {job.id} 未知 kind={job.kind}，标记 failed", flush=True)
+        logger.error("任务 %s 的 kind=%s 没有对应 handler，已标记 failed", job.id, job.kind)
         return False
 
     t0 = time.perf_counter()
-    print(f"[worker] {job.id} 开始 kind={job.kind} attempt={job.attempts}/{job.max_attempts}", flush=True)
+    logger.info(
+        "任务开始 %s kind=%s attempt=%d/%d",
+        job.id, job.kind, job.attempts, job.max_attempts,
+    )
     try:
         with LeaseKeeper(queue, job.id):
             result = handler(job) or {}
         queue.complete(job.id, result)
         ms = (time.perf_counter() - t0) * 1000
-        print(f"[worker] {job.id} 完成 {ms:.0f}ms · {result}", flush=True)
+        logger.info("任务完成 %s %.0fms · %s", job.id, ms, result)
         return True
     except Exception as exc:  # noqa: BLE001 — 任何异常都转成任务失败，worker 不退出
         detail = f"{type(exc).__name__}: {exc}"
         # 格式不支持/文件损坏这类问题重试多少次都一样，直接判死
         updated = queue.fail(job.id, detail, permanent=isinstance(exc, PermanentJobError))
         status = updated.status if updated else "?"
-        print(f"[worker] {job.id} 失败 → {status}：{detail}", flush=True)
-        traceback.print_exc()
+        # 带 traceback：失败任务是排查的主要入口，只留一行 summary 没法定位
+        logger.exception("任务失败 %s → %s：%s", job.id, status, detail)
         return False
 
 
@@ -93,7 +100,7 @@ def run_forever(queue, *, concurrency: int, poll: float, block: bool, max_jobs: 
     lock = threading.Lock()
 
     def _handle_signal(signum, _frame) -> None:  # noqa: ANN001
-        print(f"[worker] 收到信号 {signum}，等待当前任务结束…", flush=True)
+        logger.info("收到信号 %s，等待当前任务结束…", signum)
         stop.set()
 
     try:
@@ -111,10 +118,9 @@ def run_forever(queue, *, concurrency: int, poll: float, block: bool, max_jobs: 
             try:
                 job = queue.claim(block_seconds=block_seconds)
             except Exception as exc:  # noqa: BLE001 — 队列抖动（网络/空闲超时）不该杀掉 worker
-                print(
-                    f"[worker] 槽 {idx} 领取任务失败（{type(exc).__name__}: {exc}），"
-                    f"{backoff:.0f}s 后重试",
-                    flush=True,
+                logger.warning(
+                    "槽 %d 领取任务失败（%s: %s），%.0fs 后重试",
+                    idx, type(exc).__name__, exc, backoff,
                 )
                 stop.wait(backoff)
                 backoff = min(backoff * 2, 30.0)
@@ -134,13 +140,10 @@ def run_forever(queue, *, concurrency: int, poll: float, block: bool, max_jobs: 
             try:
                 execute(queue, job)
             except SystemExit as exc:
-                print(f"[worker] 槽 {idx} 被中断（{exc}），继续后续任务", flush=True)
+                logger.warning("槽 %d 被中断（%s），继续后续任务", idx, exc)
                 continue
             except BaseException as exc:  # noqa: BLE001 — 兜底，保证槽存活
-                print(
-                    f"[worker] 槽 {idx} 执行异常（{type(exc).__name__}: {exc}），继续",
-                    flush=True,
-                )
+                logger.error("槽 %d 执行异常（%s: %s），继续", idx, type(exc).__name__, exc)
                 continue
             with lock:
                 counter["done"] += 1
@@ -154,7 +157,7 @@ def run_forever(queue, *, concurrency: int, poll: float, block: bool, max_jobs: 
         t.join()
     if not stop.is_set():
         # 走到这里说明所有槽都意外结束了但没人要求停：如实报出来，别静默退出
-        print("[worker] 全部槽已退出，但未收到停止信号，可能是环境拦截了文件操作", flush=True)
+        logger.error("全部槽已退出，但未收到停止信号，可能是环境拦截了文件操作")
     return counter["done"]
 
 
@@ -169,10 +172,11 @@ def main() -> int:
     parser.add_argument("--max-jobs", type=int, default=0)
     args = parser.parse_args()
 
+    # worker 是独立进程，日志要自己初始化一遍（不经过 create_app）
+    setup_logging()
+
     if args.backend:
         # 让 --backend 覆盖配置，便于本地临时切 Redis 验证
-        import os
-
         os.environ["APP_QUEUE_BACKEND"] = args.backend
         from app.core.config import get_settings
 
@@ -182,18 +186,21 @@ def main() -> int:
         reset_queue()
 
     queue = get_queue(args.queue)
-    print(f"[worker] queue={args.queue} backend={queue.backend} pid={__import__('os').getpid()}", flush=True)
+    logger.info(
+        "worker 启动 queue=%s backend=%s pid=%d concurrency=%d",
+        args.queue, queue.backend, os.getpid(), args.concurrency,
+    )
 
     if args.once:
         handled = run_once(queue)
-        print("[worker] 无待执行任务" if not handled else "[worker] 已处理 1 条")
+        logger.info("已处理 1 条" if handled else "无待执行任务")
         return 0
 
     done = run_forever(
         queue, concurrency=args.concurrency, poll=args.poll,
         block=args.block, max_jobs=args.max_jobs,
     )
-    print(f"[worker] 退出，共处理 {done} 条", flush=True)
+    logger.info("worker 退出，共处理 %d 条", done)
     return 0
 
 

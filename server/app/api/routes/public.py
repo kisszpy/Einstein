@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
@@ -49,7 +49,7 @@ def _live_share(token: str) -> dict:
 
 
 @router.get("/shares/{token}")
-async def read_share(token: str, request: Request) -> dict:
+def read_share(token: str, request: Request) -> dict:
     """免登录读取：会话正文，或知识库的问答页元信息。"""
     if not ratelimit.allow(f"share-read:{_ip(request)}", 120, 60)[0]:
         raise HTTPException(429, "访问太频繁，请稍后再试")

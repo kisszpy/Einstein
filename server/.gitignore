@@ -5,3 +5,5 @@ __pycache__/
 data/
 backups/
 *.log
+# 智能体产物的临时工作区（svg 中间文件等），等价于 .agent
+.agent_tmp/

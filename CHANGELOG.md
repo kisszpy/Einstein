@@ -2,6 +2,219 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.2.0] - 2026-11-11
+
+### 新增
+
+- **产物浏览里 pptx 默认用放映级编辑器呈现**。`BrowserWorkbench` 的「演示」标签
+  选中 pptx 时不再直接进结构化编辑器，而是 `DeckCraftStage`（DeckCraft wasm）：
+  真母版/版式、动画、放映模式；顶部「放映级 / 结构化」可切回原来的服务端重排版。
+  保存链路闭环：编辑器内 Ctrl+S → `deckcraft:save` 字节回传 → base64 → 新端点
+  `PUT /api/projects/{id}/file-bytes` 写回项目里的同一份 pptx（32MB 上限、只放行
+  成品后缀、路径穿越与坏 base64 拒绝，`tests/test_file_bytes.py` 6 项）；
+  写回失败自动降级为本地下载，不丢用户改动。后端 uvicorn 顺带加了 `--reload`
+
+- **PPT 美化专家（砚白 / Vellum）**：`expertType: agent`，分类 06-ContentCreative，
+  已注册到【专家中心-我的专家】。核心资产是 Skill `deck-polish`：12 种版式的栅格
+  与常见错误（`layout-patterns.md`）、配色结构与 WCAG 对比度算法 + 中文字体栈
+  （`color-and-type.md`）、22 项交付前检查清单与百分制评分（`review-checklist.md`）、
+  诊断报告模板。头像由 ImageGen 生成（512×512，376KB）
+
+- **DeckCraft fork 自编译：wasm 版中文渲染修复**（`tools/deckcraft`，源码入库）。
+  上游 web 构建只嵌 Inter/日文字体，汉字全部画成方框；fork 改三处让它带上中文：
+  ① `crates/fonts/build.rs` 新增 `fonts/cjk-manifest.txt`（全目标读取）并放行该家族
+  过 wasm 体积过滤器；② `crates/fonts/src/fontdb.rs` 新增 `is_cjk_family()`——
+  未安装的中文家族（微软雅黑/宋体/思源黑体等 20+ 写法）改走内置汉字面，不再落到
+  Latin-only 的 Calibri；③ 字体资产：Noto Sans CJK SC（OFL-1.1，上游已 pin 的
+  commit）子集化（码位范围见下方「变更」里的字符集扩展）、改名 `DeckCraft Han Sans`
+  （避开上游排除规则及其测试，合并零冲突），单字重 16.4MB→8.94MB。实测：14 页中文
+  演示在无头 Chrome 中完整渲染（标题/数据/缩略图全部正常），宿主桥 ready→open→dirty
+  全通。体积：wasm 32→52MB（gzip 11→28MB）。构建入口 `tools/deckcraft/build-web.sh`，
+  说明见 `tools/deckcraft/FORK.md`。产品内新增 `/deckcraft` 路由（`DeckCraftPage`
+  + `DeckCraftFrame`，官方宿主桥协议，Ctrl+S 保存字节自动回传下载）
+
+- **统一日志与请求追踪**：全站 `print` 换成 `logging`，新增 `X-Request-Id` 中间件把
+  请求 ID 塞进 `ContextVar`，日志行统一为 `时间 级别 [request_id] 模块: 消息`，
+  uvicorn 自身日志也并入同一格式——排查一个慢请求时能凭一行 ID 串起 DB / 检索 /
+  LLM 的全部输出。SSE 场景**刻意不 reset** contextvar：流式响应体是在 `call_next`
+  返回之后才迭代的，一 reset 就把这段日志的 ID 弄丢了；启动钩子里再 `force` 重挂一次
+  handler——嵌入式起服务时 uvicorn 的 `configure_logging()` 晚于应用导入执行，
+  会把自带 handler 装回去，不重挂就是两套格式混在一个 stdout 里
+
+- **svgdeck 编译缓存 + 启动预热**：以前改一页就把整个 deck 重编译（实测 10 页
+  0.32s，但每次进程首次编译有 ~1.5s 的 skia/字体冷启动）。现在按「页内容
+  SHA-256 + 画布 + 母板」算指纹写入 sidecar，指纹一致直接命中缓存（不再看 mtime，
+  重新检出/拷贝不会误判失效）；应用启动时用临时目录预热一次转换器，把冷启动成本
+  挪到启动阶段。**没有**做单页增量替换：实测只省 0.25s，却要手工改 `slideN.xml`
+  与 `rels`，坏一次就是 pptx 打不开，不划算
+
+- **前端测试基建**：vitest + @testing-library/react + jsdom，`pool: threads` +
+  `singleThread`（多 worker 会往系统临时目录写 IPC，受限环境下直接 EPERM，
+  现象是「只跑了一个测试文件还静默成功」）。已覆盖 SSE 解析（含 UTF-8 跨字节切分）、
+  错误边界、DSL 面板、幻灯片单位换算与就地编辑
+
+- **lint 闸门**：ruff（窄规则集 E4/E7/E9/F/I/W，忽略 E501，避免一次性大改）+ pre-commit
+  + CI；`tests/test_route_sync.py` 用 AST 断言「`async def` 路由函数体内必须有
+  `await`/`yield`」，防止有人再把同步 IO 写回异步路由
+
+- **前端错误边界**：此前没有任何 `ErrorBoundary`，任意页面组件抛一次错就把整棵
+  React 树卸载成白屏，连「回聊天页」都点不了。现在每个懒加载页独立兜底
+  （`key=pathname`，换页自动重置，侧栏仍可用）；chunk 加载失败（发布后旧页面
+  拿旧 hash）单独提示刷新；错误详情可一键复制，`console.error` 保留组件栈供上报
+
+- **SVG 原生 PPT 管线（svgdeck，基于 ppt-master）**：接入开源 ppt-master
+  （75k★，MIT，vendored 于 `tools/ppt-master`，依赖 `skia-pathops`/`uharfbuzz`）
+  的 SVG→DrawingML 转换器，新增智能体工具 `svg_compile`：逐页写
+  `slides/NN.svg`（1280×720，纯 SVG 1.1）后一次编译成**原生形状** PPTX——
+  文本框/矢量形状/渐变/圆角全部保留，PowerPoint/WPS 完全可继续编辑（非位图）。
+  **母板页支持**：可选 `slides/master.svg` 合成到每页底层统一视觉规范，
+  整页母板背景被转换器提升为原生 slide master 背景（全 deck 共享）。
+  编辑链路与 slidep 共用：DSL 清单泛化为多引擎（`set_dsl_manifest`），
+  编辑器「DSL 源码」模式对 `engine: "svgdeck"` 同样开放（改 SVG → 轻校验
+  → 整体重编译）。deep 引擎提示词新增 SVG 路线指引（文字不自动换行需
+  手动拆行等）。转换器缺失时（换机部署）抛 SandboxError，智能体降级
+  slidep/ppt_create 路线
+
+- **slidep 产物可编辑（DSL 闭环）**：智能体 `slide_upsert` 生成的 PPT 此前没有
+  结构化记录，浏览页编辑器只能启发式解析（editable=partial），第一次保存就会把
+  渐变/玻璃卡洗成模板风。现在 upsert 成功后逐页登记 DSL 清单（`.deck/*.json`
+  sidecar，`_engine: "slidep"`），DSL 即真相源；浏览页编辑器新增「DSL 源码」模式：
+  逐页改源码 → lint 校验（溢出/重叠诊断按 severity 分色）→ 通过后重编译替换该页，
+  全链路无损。新端点 `PUT /api/projects/{id}/deck/dsl`（apply=false 只校验）。
+  结构化 sidecar（ppt_create 产物）优先，混合生成不覆盖；pptx 被外部改动后清单
+  自动作废回退解析。
+
+### 变更
+
+- **「浏览器」页更名为「资产」**（用户：这页装的是产物/文件/演示，叫浏览器不准确）。
+  路由 `/browser` → `/assets`，旧路径带查询参数（tab/project/path/url）重定向过去，
+  老书签与对话来源深链不失效；侧栏入口同步改名，图标 Globe → Archive。
+  连带更新可见文案：预览面板「在浏览器页打开」→「在资产页打开」、对话来源
+  「在内置浏览器中打开」→「在资产页打开」、网页视图空状态「内置浏览器」→「网页浏览」。
+  端到端脚本（browser-browser / agent-panel / ui-sweep）同步更新，并新增一条
+  「旧路径重定向且保留参数」的检查（无头实测 4 项全过）
+
+- **DeckCraft 中文字符集 GB2312 → GBK 全集**（用户反馈生僻人名用字仍是方框）。
+  子集码位 8,209 → 24,671（GBK 21,003 汉字 = 中文输入法能打出来的边界，龘/珺/玥
+  全部覆盖；通用规范汉字表 8,105 字是其子集），单字重 2.87 → 8.94 MB，wasm
+  39 → 52 MB（gzip 18 → 28 MB）。实测：含「龘珺玥犇喆珉翀晟龑頔」的两页演示
+  无头渲染全部正常，无方框。CJK 扩展 A/B（𬭚 等）仍不在 GBK，需要时改
+  `build-han-subset.py` 的 `code_points()` 重跑（约 0.35 KB/字/字重）
+
+- **知识库页拆分**：`KbPage` 1127 → 212 行，只留布局。状态与请求进
+  `use-kb-workspace`（7 类操作的 busy/error/确认框各归各位），视图拆成
+  `KbSidebar` / `DocList`（含切片与版本面板）/ `SearchBench` / `CreateKbDialog`，
+  领域类型独立成 `kb-types`。拆分以「出错时能不能单独定位」为判据：切片保存失败、
+  批量重抓部分失败、检索模式对比不准，三条排查路径本来是混在一起的
+
+- **幻灯片编辑器拆分**：`SlideCanvas` 1349 → 1285、`DeckEditor` 1207 → 1048 行，
+  抽出 `slide-primitives`（单位换算 `pct/pt/hex` 与就地编辑 `Editable`）与
+  `DeckDslPane`，前者从「必须挂整个画布才能测」变成可单测的纯函数
+
+### 修复
+
+- **产物浏览里打开 pptx 极卡（自激循环）**。根因在 `DeckCraftFrame` 的依赖链：
+  调用方 `DeckCraftStage` 传的是内联箭头回调（`onLog={(l) => setLog(...)}`），
+  每次父渲染都是新身份 → `useCallback` 出来的 `log`/`open` 跟着变 → `deckUrl`
+  的 `useEffect` 每次渲染都重跑 → 重新 `fetch` 并重投这份 pptx；而 `open` 内部
+  自身要写一条日志（`log` → `setState`）→ 又触发渲染 → **自激循环**，CPU 打满、
+  编辑区卡死。/deckcraft 独立页因为用 `useCallback` 传稳定回调，所以一直是流畅的，
+  这正是「同一个引擎、两种表现」的原因。修法：回调统一收进 ref（`log`/`open`
+  身份恒定，消息监听只订阅一次）、`deckUrl` 的 effect 只在换文件时投喂、
+  加 `openedRef` 去重与请求序号丢弃过期 fetch；`DeckCraftStage` 侧同时把回调
+  `useCallback` 化。新增 `DeckCraftFrame.test.tsx` 两项回归（父组件连点重渲染
+  不得增加 fetch 次数；同一 `deckUrl` 不重开、换文件才重开）
+
+- **界面里到处露出的 `download?path=…&ticket=…`**。三处一起收掉：状态栏日志原本
+  打印整条下载地址（`fetch /api/projects/x/download?path=…&ticket=eyJ…`），改为
+  「读取 deck.pptx」；整页编辑器顶部把地址输入框换成**文件名按钮**（点一下才展开
+  地址输入框，Esc 收起），不再把 API 地址当标题显示；「整页打开」原来是
+  `<a href="/deckcraft?deck=<整条地址>">`，悬停提示与新窗地址栏都挂着这串东西，
+  且票据写进地址栏会进历史、刷新即失效——改为 `sessionStorage` 一次性交接
+  （`handoff.ts`，60 秒有效），地址栏只留 `/deckcraft`，`?deck=` 仅保留为手工入口。
+  连带修一个真 bug：`DeckCraftFrame` 用 `url.split("/").pop()` 当文档名，对下载地址
+  得到的是 `download?path=deck.pptx&ticket=…`，会污染编辑器标题与另存文件名——
+  新增 `deck-url.ts` 的 `deckFileName()` 统一从 `path` 参数取名。
+  新增 `deck-url.test.ts`（4 项）与 `handoff.test.ts`（4 项）
+
+- **`/deckcraft` 页面显示 React Router 的「404 Not Found / Hey developer 👋」**：不是路由
+  写错，是**开发服务器的模块缓存陈旧**——Vite 进程在 `router.tsx` 加入 `deckcraft`
+  之前就已启动，且没有感知到后续改动，浏览器拿到的还是旧路由表，于是路径匹配失败、
+  落到框架自带的开发者提示页。重启 dev server 后 `path: "deckcraft"` 正常生效。
+  同时补上顶层 catch-all：新增 `NotFoundPage`（回显当前路径 + 返回对话），
+  以后路径打错看到的是产品化 404，而不是框架文案
+
+- **知识库「回滚到此版」是个死按钮**：`rollbackDoc` 在确认框之后多了一行无条件
+  `return;`，后面的请求永远不会发出——用户点了确认、界面毫无反应、也没有报错
+
+- **KbRepository 协议里混进了实现**：`Protocol` 类里被粘进一整套 JSON 实现
+  （4 个方法体，与外部实现重复定义），ruff F811 抓出来后还原成 `...` 桩
+
+- **事件循环不再被同步 IO 占死（135 个路由）**：全站数据库走同步 psycopg、文件与
+  subprocess 也是同步调用，但 172 个路由全是 `async def`——单个慢查询/慢打包就会
+  卡住整个事件循环，正在流式输出的对话一起停摆。按 AST 判定把「函数体内无
+  `await`/`yield`」的 135 个路由改为同步 `def`，交给 FastAPI 自动调度到线程池
+  （含 40 线程，可承受并发同步 DB 查询）；流式端点（chat、agent run 等）保持
+  `async def` 不动
+
+- **整包下载不再拖垮全站**：`/archive` 原来把整棵项目树 DEFLATE 进 `BytesIO`
+  再同步打包——几百 MB 的项目会同时吃满内存和事件循环（下载期间全站 SSE
+  对话一起卡住）。改为落临时文件 + `asyncio.to_thread` 打包 + `FileResponse`
+  流式返回（`BackgroundTask` 清理），并按后缀对 png/pptx/zip 等已压缩格式用
+  STORED 跳过无效压缩；打包途中单个文件消失只跳过不整包失败
+
+- **产物预览改流式**：非 HTML 产物原来 `read_bytes()` 全量进内存再 `Response`
+  返回，预览大视频直接顶爆进程并阻塞事件循环；改用 `FileResponse`（顺带支持
+  Range，视频可拖进度条）。HTML 的 sandbox CSP 隔离保持不动
+
+- **PPT 预览导出**：`_slide_images` 的动态派发在 PowerPoint 2007 上解析失败
+  （`AttributeError: Open.SaveAs`），改用 `gencache.EnsureDispatch` + 拒呼退避重试；
+  导出失败的文件写 mtime 标记缓存，避免每次 load 都白耗几秒重试；只在无其他
+  演示文稿打开时 Quit，不误杀用户自己的 PowerPoint 窗口。WPS 兼容注册
+  （`PowerPoint.Application` 实为 wpp.exe）的机器上 COM SaveAs 可能始终被拒，
+  此时预览不可用，前端自动落到 DSL 模式
+
+- **浏览页只展示产物**：/browser 产物 tab 此前直接拉全量文件树（上限 400 条），
+  项目里混进源码、依赖与解包残留时产物被淹没（nocturne-cinema 解包 libatomic.deb
+  后 1121 个文件，真正的产物只有 index.html 和 README.md）。新增
+  `GET /api/projects/{id}/artifacts`：按 `ARTIFACT_SUFFIXES` 白名单（html/md/pptx/
+  pdf/docx/xlsx/png/svg）过滤，且排除 SKIP_DIRS 依赖目录与点/下划线开头的运行时
+  目录（.cache/.local/_scratch…）；`project_summary` 与其共用同一套判定。前端
+  BrowserWorkbench 改走新端点，侧栏标题/空态文案同步改为「产物」。智能体页左侧
+  「工作区」文件树保留全量 /tree（那是智能体工作文件视图，不是浏览页）
+
+- **浏览页计数口径统一**：`/api/projects` 补 `artifacts` 字段（白名单过滤后的
+  产物数，与产物清单条数同源），选择器括号、项目卡片、顶栏概览全部改用该字段，
+  不再和清单条数打架（nocturne-cinema 此前括号 1121、清单 2 条）；`files` 保留
+  全量口径给智能体页工作区视图
+
+- **项目列表 500（网站挂了的根因）**：智能体解包 .deb 在 `nocturne-cinema/libx/` 里留下
+  Linux 悬空软链（`libatomic1 -> gcc-14-base`），Windows 对这类条目 stat 抛
+  `OSError(WinError 1920)`，`Path.is_file()` 不吞这个错误码直接炸——`/api/projects`
+  全量 500，文件页打不开。修复：`sandbox.iter_files()` 统一安全遍历（`os.walk +
+  onerror` + 逐条 `_stat_safe`，坏条目跳过），替换 `list_projects`、`dir_size`、
+  `write_file` 计数、`project_summary`、`list_files` 树、整包下载、技能打包/发布
+  共 7 处裸 `rglob`。回归测试 `tests/test_sandbox_iter_files.py`（模拟 WinError 1920
+  + 真实悬空链接双路径，4 用例）。
+
+### 移除
+
+- **任务侧栏底部的「工作区」整块**（项目下拉 + 文件树 + 预览/刷新/新建/下载 zip/
+  删除 五个图标按钮）。它是同一件事的第三份入口：项目绑定在输入框「+」能力弹层的
+  「项目」分组里已有（含「由智能体创建」与「新建项目」），文件浏览/预览在「浏览器」页
+  与同页顶栏的「预览」按钮已有。删掉后任务列表多出约 200–260px 可滚动高度。
+  连带清理：`AgentsPage` 的 `tree` state、`loadTree()`、`deleteProject()`、
+  `TreeNode` 类型，以及 SSE `done` 分支里那次多余的树刷新。
+  **代价**：删除项目的入口随之消失（浏览器页目前只能新建/浏览，不能删）。这是破坏性
+  操作，没有随手补在顶栏；需要时在浏览器页项目下拉旁加带二次确认的删除。
+
+- **移除 vendored PPTist 编辑器**（`tools/pptist`，337 MB）。DeckCraft 在母版/版式/
+  动画/放映/中文渲染上都已超过它，双编辑器只会让保存链路分叉（一个回结构化 JSON、
+  一个回 pptx 字节），因此整条 PPTist 线退场：删 `tools/pptist` 源码与
+  `src/embed/{bridge,font-map}.ts` 改造、删前端 `deck-editor/{DeckEditorPage,
+  PptEditorFrame,bridge}.tsx`、删 `/deck` 路由与侧栏「幻灯片」入口、清 `.gitignore`
+  对应规则。连带影响：**不再有 AGPL-3.0 与 1999/年起商业授权的义务**。
+  产物浏览里「演示」标签的「结构化」视图保留（走服务端 DSL 重排版，与 PPTist 无关）。
 ## [1.1.0] - 2026-11-10
 
 一轮 UI/UX 大修 + 沙箱与专家体系补全。触发点是用户与设计团队两份评审报告

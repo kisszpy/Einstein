@@ -99,8 +99,8 @@ function WebPanel({ web }: { web: WebState }) {
               </a>
               {hostOf(s.url) && <span className="text-tertiary">{hostOf(s.url)}</span>}
               <Link
-                to={`/browser?tab=web&url=${encodeURIComponent(s.final_url || s.url)}`}
-                title="在内置浏览器中打开"
+                to={`/assets?tab=web&url=${encodeURIComponent(s.final_url || s.url)}`}
+                title="在资产页打开"
                 className="shrink-0 text-tertiary transition-colors hover:text-brand"
               >
                 <AppWindow size={12} />

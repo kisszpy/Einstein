@@ -12,7 +12,6 @@ from app.api.deps import (
     current_admin,
     current_user,
     current_workspace,
-    require_ws_role,
     workspace_role,
 )
 from app.services import apikeys, audit, members, users, workspaces
@@ -60,7 +59,7 @@ def _usage_of(ws_id: str, uid: str | None = None) -> dict:
 
 
 @router.get("/workspaces")
-async def list_workspaces(user: users.User = Depends(current_user)) -> list[dict]:
+def list_workspaces(user: users.User = Depends(current_user)) -> list[dict]:
     """工作区列表按成员关系过滤，并带上「我在这个空间的角色」与个人空间标记。"""
     visible = set(allowed_workspaces(user))
     personal = members.get_member_store().personal_of(user.id)
@@ -82,7 +81,7 @@ async def list_workspaces(user: users.User = Depends(current_user)) -> list[dict
 
 
 @router.post("/workspaces")
-async def create_workspace(
+def create_workspace(
     req: WorkspaceCreate,
     admin: users.User = Depends(current_admin),
     ws_ctx: str = Depends(current_workspace),
@@ -118,7 +117,7 @@ def _guard_ws(ws_id: str, user: users.User, minimum: str = "admin") -> str:
 
 
 @router.post("/workspaces/{ws_id}/invites")
-async def create_invite(
+def create_invite(
     ws_id: str, req: InviteCreate, user: users.User = Depends(current_user)
 ) -> dict:
     """生成邀请码：新用户或存量用户凭码加入工作区（角色即码上的角色）。"""
@@ -132,7 +131,7 @@ async def create_invite(
 
 
 @router.get("/workspaces/{ws_id}/invites")
-async def list_invites(
+def list_invites(
     ws_id: str, user: users.User = Depends(current_user)
 ) -> list[dict]:
     _guard_ws(ws_id, user, "admin")
@@ -144,7 +143,7 @@ class MemberPatch(BaseModel):
 
 
 @router.get("/workspaces/{ws_id}/members")
-async def list_ws_members(
+def list_ws_members(
     ws_id: str, user: users.User = Depends(current_user)
 ) -> list[dict]:
     """空间成员清单（成员即可见，便于知道同事是谁）；角色变更需 admin。"""
@@ -171,7 +170,7 @@ async def list_ws_members(
 
 
 @router.patch("/workspaces/{ws_id}/members/{user_id}")
-async def set_ws_member_role(
+def set_ws_member_role(
     ws_id: str, user_id: str, req: MemberPatch, user: users.User = Depends(current_user)
 ) -> dict:
     actor = _guard_ws(ws_id, user, "admin")
@@ -201,7 +200,7 @@ async def set_ws_member_role(
 
 
 @router.delete("/workspaces/{ws_id}/members/{user_id}")
-async def remove_ws_member(
+def remove_ws_member(
     ws_id: str, user_id: str, user: users.User = Depends(current_user)
 ) -> dict:
     actor = _guard_ws(ws_id, user, "admin")
@@ -226,7 +225,7 @@ async def remove_ws_member(
 
 
 @router.patch("/workspaces/{ws_id}")
-async def patch_workspace(
+def patch_workspace(
     ws_id: str, req: WorkspacePatch, user: users.User = Depends(current_user)
 ) -> dict:
     _guard_ws(ws_id, user, "admin")
@@ -239,7 +238,7 @@ async def patch_workspace(
 
 
 @router.delete("/workspaces/{ws_id}")
-async def delete_workspace(
+def delete_workspace(
     ws_id: str, user: users.User = Depends(current_user)
 ) -> dict:
     """只允许删除空工作区；个人空间不可删，避免把账号的落脚点删掉。"""
@@ -262,12 +261,12 @@ async def delete_workspace(
 
 
 @router.get("/apikeys")
-async def list_api_keys(ws: str = Depends(current_workspace)) -> list[dict]:
+def list_api_keys(ws: str = Depends(current_workspace)) -> list[dict]:
     return [k.to_public() for k in apikeys.get_api_key_store().list_keys(ws)]
 
 
 @router.post("/apikeys")
-async def issue_api_key(
+def issue_api_key(
     req: ApiKeyCreate,
     ws: str = Depends(current_workspace),
     user: users.User = Depends(current_user),
@@ -285,7 +284,7 @@ async def issue_api_key(
 
 
 @router.delete("/apikeys/{key_id}")
-async def revoke_api_key(key_id: str, ws: str = Depends(current_workspace)) -> dict:
+def revoke_api_key(key_id: str, ws: str = Depends(current_workspace)) -> dict:
     store = apikeys.get_api_key_store()
     key = store.get(key_id)
     if key is None or key.workspace_id != ws:
@@ -299,7 +298,7 @@ async def revoke_api_key(key_id: str, ws: str = Depends(current_workspace)) -> d
 
 
 @router.get("/audit")
-async def list_audit(
+def list_audit(
     limit: int = 100,
     action: str | None = None,
     user_id: str | None = None,
@@ -329,7 +328,7 @@ async def list_audit(
 
 
 @router.get("/audit/export.csv")
-async def export_audit(
+def export_audit(
     action: str | None = None,
     since: str | None = None,
     until: str | None = None,

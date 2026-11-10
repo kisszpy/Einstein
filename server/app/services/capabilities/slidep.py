@@ -110,4 +110,4 @@ def _run_dsl(exe: Path, subcommand: str, pptx: Path, dsl: str, page_index: int) 
         try:
             os.unlink(dsl_file)
         except OSError:
-            pass
+            pass  # 清理失败不影响主流程（Windows 上文件常被占用）

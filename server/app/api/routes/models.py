@@ -61,7 +61,7 @@ def _require(model_id: str, ws: str, uid: str) -> dict:
 
 
 @router.get("")
-async def list_models(
+def list_models(
     ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     items = [models_service.model_payload(m) for m in models_service.list_models(ws, uid)]
@@ -74,7 +74,7 @@ async def list_models(
 
 
 @router.post("")
-async def create_model(
+def create_model(
     req: ModelCreate,
     ws: str = Depends(current_workspace),
     user: users.User = Depends(current_user),
@@ -103,7 +103,7 @@ async def create_model(
 
 
 @router.patch("/{model_id}")
-async def update_model(
+def update_model(
     model_id: str,
     req: ModelPatch,
     ws: str = Depends(current_workspace),
@@ -123,7 +123,7 @@ async def update_model(
 
 
 @router.delete("/{model_id}")
-async def delete_model(
+def delete_model(
     model_id: str,
     ws: str = Depends(current_workspace),
     user: users.User = Depends(current_user),

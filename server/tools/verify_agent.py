@@ -6,7 +6,6 @@
 
 import json
 import os
-import time
 import sys
 import urllib.parse
 import urllib.request
@@ -90,7 +89,7 @@ def main() -> None:
 
     # ---- 代码执行（直接驱动服务层） ----
     sys.path.insert(0, ".")
-    from app.services.capabilities import code_exec, sandbox, web  # noqa: E402
+    from app.services.capabilities import code_exec, web  # noqa: E402
     from app.services.capabilities.ppt import build_deck  # noqa: E402
 
     r = code_exec.run_code("default", pid, code="print(sum(range(10)))")

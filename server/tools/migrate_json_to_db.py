@@ -164,9 +164,8 @@ def migrate_state(db, now: str, *, force: bool = False) -> int:
     `--force` 才覆盖。
     """
     from app.db.legacy import import_json_file
-    from app.db.tables import DOMAIN_TABLES
     from app.db.rows import TableState
-    from app.db.tables import TABLES
+    from app.db.tables import DOMAIN_TABLES, TABLES
 
     moved = 0
     for domain, filename in STATE_DOMAINS.items():

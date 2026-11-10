@@ -9,12 +9,12 @@ router = APIRouter(prefix="/obs", tags=["observability"])
 
 
 @router.get("/summary")
-async def get_summary() -> dict:
+def get_summary() -> dict:
     return metrics.summary()
 
 
 @router.get("/checkpoints")
-async def get_checkpoints() -> dict:
+def get_checkpoints() -> dict:
     """短期记忆的落点：档位、目标、TTL、是否已连上。
 
     排查「批准后没有续跑而是重跑了」时先看这里——`connected=false` 说明
@@ -24,17 +24,17 @@ async def get_checkpoints() -> dict:
 
 
 @router.get("/requests")
-async def get_requests(limit: int = Query(50, le=500)) -> list[dict]:
+def get_requests(limit: int = Query(50, le=500)) -> list[dict]:
     return metrics.recent_requests(limit)
 
 
 @router.get("/llm")
-async def get_llm(limit: int = Query(50, le=500)) -> list[dict]:
+def get_llm(limit: int = Query(50, le=500)) -> list[dict]:
     return metrics.recent_llm(limit)
 
 
 @router.get("/cost")
-async def get_cost(
+def get_cost(
     days: int = Query(7, ge=1, le=90),
     ws: str = Depends(current_workspace),
 ) -> dict:
@@ -48,7 +48,7 @@ async def get_cost(
 
 
 @router.get("/traces")
-async def list_traces(
+def list_traces(
     limit: int = Query(50, le=500),
     kind: str | None = None,
     status: str | None = None,
@@ -59,13 +59,13 @@ async def list_traces(
 
 
 @router.get("/traces/summary")
-async def traces_summary(ws: str = Depends(current_workspace)) -> dict:
+def traces_summary(ws: str = Depends(current_workspace)) -> dict:
     """近 1000 条运行的健康度：错误率、检索未命中率、平均耗时、token 合计。"""
     return traces.summary(workspace_id=ws)
 
 
 @router.get("/traces/{run_id}")
-async def get_trace(run_id: str, ws: str = Depends(current_workspace)) -> dict:
+def get_trace(run_id: str, ws: str = Depends(current_workspace)) -> dict:
     row = traces.get_run(run_id)
     if row is None or row.get("workspace_id") != ws:
         raise HTTPException(404, "运行记录不存在")
@@ -73,6 +73,6 @@ async def get_trace(run_id: str, ws: str = Depends(current_workspace)) -> dict:
 
 
 @router.delete("/")
-async def clear_metrics() -> dict:
+def clear_metrics() -> dict:
     metrics.clear()
     return {"ok": True}

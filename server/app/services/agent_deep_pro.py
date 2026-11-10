@@ -37,6 +37,7 @@ from deepagents.backends.protocol import ExecuteResponse, SandboxBackendProtocol
 from langchain_core.tools import tool
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.services.agent_deep import (
     WorkspaceBackend,
     _approval_plan,
@@ -46,6 +47,8 @@ from app.services.agent_deep import (
 from app.services.capabilities import AgentContext, _artifact_kind, browser_pro, sandbox
 from app.services.capabilities.code_exec import _clean_env
 from app.services.capabilities.sandbox import slugify, workspace_root
+
+logger = get_logger(__name__)
 
 MAX_SHELL_TIMEOUT = 300
 MAX_OUTPUT_BYTES = 100_000   # 与框架 LocalShellBackend 的默认上限一致
@@ -243,11 +246,11 @@ class ProBackend(WorkspaceBackend, SandboxBackendProtocol):
         if res.exit_code in (126, 1) and self._is_permission_denied(res.output):
             # Linux 上 bind mount 的属主是宿主 uid；uid 不匹配时工作目录不可写。
             # 这里降级为 root 重试一次：宁可少一层隔离，也不让任务直接失败。
-            print(
-                f"[pro] 非 root（{self.run_as}）无法写工作目录，已降级为 root 重试。"
+            logger.warning(
+                "非 root（%s）无法写工作目录，已降级为 root 重试。"
                 "要长期使用非 root，请让宿主目录属主与容器 uid 一致"
                 "（APP_AGENT_PRO_RUN_AS）。",
-                flush=True,
+                self.run_as,
             )
             res = self._run_container(cmd, workdir, secs, as_root=True)
         return res
@@ -328,7 +331,7 @@ class ProBackend(WorkspaceBackend, SandboxBackendProtocol):
                     (tmpdir / "run.sh").unlink(missing_ok=True)
                     tmpdir.rmdir()
                 except OSError:
-                    pass
+                    pass  # 清理失败不影响主流程（Windows 上文件常被占用）
 
         header = (
             f"[宿主 shell · 无隔离] cwd={self._shadow()} —— 这不是容器，"
@@ -359,7 +362,7 @@ class ProBackend(WorkspaceBackend, SandboxBackendProtocol):
                 capture_output=True, timeout=15,
             )
         except (OSError, subprocess.TimeoutExpired):
-            pass
+            pass  # 清理失败不影响主流程（Windows 上文件常被占用）
 
 
 # ---------------------------------------------------------------- 浏览器工具

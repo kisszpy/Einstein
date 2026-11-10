@@ -8,8 +8,12 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import re
+import stat as _stat
+from collections.abc import Iterator
 from pathlib import Path
 
 from app.services.store import DATA_DIR
@@ -81,16 +85,34 @@ def resolve_in(root: Path, rel: str) -> Path:
     return target
 
 
+def _stat_safe(p: Path) -> os.stat_result | None:
+    """stat 失败返回 None：Windows 对悬空符号链接（如 .deb 里解出的 Linux 软链）
+    抛 OSError(WinError 1920)，pathlib 的 is_file()/is_dir() 会直接炸。"""
+    try:
+        return p.stat()
+    except OSError:
+        return None
+
+
+def iter_files(root: Path) -> Iterator[tuple[Path, os.stat_result]]:
+    """递归枚举普通文件及其 stat；不可访问的条目跳过而不是抛错。
+
+    背景：智能体解包 .deb / tar 会在项目里留下 Linux 软链，Windows 对这类
+    条目 stat 抛 OSError(WinError 1920)，`Path.is_file()` 直接炸——
+    /api/projects 曾因此全量 500（nocturne-cinema 里的 libatomic1）。
+    所有递归统计/打包/列树一律走这里，不要在项目目录上裸 rglob。
+    """
+    for dirpath, _dirnames, filenames in os.walk(root, onerror=lambda e: None):
+        for name in filenames:
+            path = Path(dirpath) / name
+            st = _stat_safe(path)
+            if st is not None and _stat.S_ISREG(st.st_mode):
+                yield path, st
+
+
 def dir_size(root: Path) -> int:
     """目录内所有文件字节数（配额与列表展示共用）。"""
-    total = 0
-    for p in root.rglob("*"):
-        if p.is_file():
-            try:
-                total += p.stat().st_size
-            except OSError:
-                continue
-    return total
+    return sum(st.st_size for _p, st in iter_files(root))
 
 
 def human_size(n: int) -> str:
@@ -190,6 +212,12 @@ SKIP_DIRS = {
     ".agent", ".agent_tmp", ".deck", ".deckpreview", ".slidep",
 }
 
+# 浏览页「产物」的白名单：可预览/可编辑的成品文件。
+# 源码（.js/.css/.py…）、依赖与运行时目录（libx、node_modules…）不属于产物——
+# 之前前端直接拉全量 /tree，项目里混进解包依赖时产物被淹没（nocturne-cinema
+# 的 libx 是整套 Linux sysroot，1121 个文件里产物不到 10 个）。
+ARTIFACT_SUFFIXES = {".html", ".htm", ".md", ".pptx", ".pdf", ".docx", ".xlsx", ".png", ".svg"}
+
 
 def write_file(workspace_id: str, project: str, rel: str, content: str) -> dict:
     root = project_dir(workspace_id, project)
@@ -208,7 +236,53 @@ def write_file(workspace_id: str, project: str, rel: str, content: str) -> dict:
         "path": rel,
         "bytes": len(data),
         "created": not existed,
-        "total_files": sum(1 for f in root.rglob("*") if f.is_file()),
+        "total_files": sum(1 for _f, _st in iter_files(root)),
+    }
+
+
+# 成品二进制（pptx/docx/图片）单独设上限：2MB 的文本上限装不下真实演示，
+# 但也不能照搬项目的 64MB——一次 PUT 就把内存吃掉不值当。
+MAX_BINARY_BYTES = 32 * 1024 * 1024
+BINARY_SUFFIXES = {
+    ".pptx", ".docx", ".xlsx", ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".svg",
+}
+
+
+def write_bytes(workspace_id: str, project: str, rel: str, content_base64: str) -> dict:
+    """写入二进制成品，内容以 base64 传入（pptx 是 zip，不能走 UTF-8 文本那条路）。
+
+    只认 `BINARY_SUFFIXES`：这是「浏览器里编辑演示后保存回来」的通道，
+    不该变成任意文件上传口。base64 解码放在这里而不是路由层，是为了
+    让体积校验与路径校验在同一处失败、报同一个 `SandboxError`。
+    """
+    root = project_dir(workspace_id, project)
+    suffix = Path(rel).suffix.lower()
+    if suffix not in BINARY_SUFFIXES:
+        raise SandboxError(f"不支持写入该类型：{suffix or '无后缀'}")
+    try:
+        raw = base64.b64decode(content_base64, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise SandboxError("内容不是合法的 base64") from exc
+    if not raw:
+        raise SandboxError("内容为空")
+    if len(raw) > MAX_BINARY_BYTES:
+        raise SandboxError(f"单文件超过 {human_size(MAX_BINARY_BYTES)} 上限")
+    target = resolve_in(root, rel)
+    if target.is_dir():
+        raise SandboxError("目标路径是目录")
+    existed = target.exists()
+    previous = target.stat().st_size if existed else 0
+    # 覆盖写不该因为旧文件占位而超限：先把旧体积从总量里扣掉
+    if dir_size(root) - previous + len(raw) > MAX_PROJECT_BYTES:
+        raise SandboxError(f"项目总体积超过 {human_size(MAX_PROJECT_BYTES)} 上限")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(raw)
+    return {
+        "path": rel,
+        "bytes": len(raw),
+        "previous_bytes": previous,
+        "created": not existed,
+        "total_files": sum(1 for _f, _st in iter_files(root)),
     }
 
 
@@ -245,22 +319,36 @@ def list_files(workspace_id: str, project: str, rel: str = "") -> dict:
     def walk(node: Path, prefix: str) -> None:
         if len(entries) >= MAX_TREE_ENTRIES:
             return
-        children = sorted(node.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+        try:
+            children = list(node.iterdir())
+        except OSError:
+            return  # 目录本身不可读：这层留空，不让整棵树 500
+        # 先分类再排序：dirs 在前、files 在后（保持原顺序语义）；
+        # 不可访问条目（悬空软链等）直接跳过，不进树
+        dirs: list[Path] = []
+        files: list[tuple[Path, os.stat_result]] = []
         for child in children:
-            if len(entries) >= MAX_TREE_ENTRIES:
-                return
             if child.name in SKIP_DIRS:
                 continue
-            relpath = f"{prefix}{child.name}"
-            if child.is_dir():
-                entries.append({"path": relpath, "type": "dir"})
-                walk(child, relpath + "/")
+            st = _stat_safe(child)
+            if st is None:
+                continue
+            if _stat.S_ISDIR(st.st_mode):
+                dirs.append(child)
             else:
-                try:
-                    size = child.stat().st_size
-                except OSError:
-                    size = 0
-                entries.append({"path": relpath, "type": "file", "size": human_size(size)})
+                files.append((child, st))
+        dirs.sort(key=lambda p: p.name.lower())
+        files.sort(key=lambda item: item[0].name.lower())
+        for child in dirs:
+            if len(entries) >= MAX_TREE_ENTRIES:
+                return
+            relpath = f"{prefix}{child.name}"
+            entries.append({"path": relpath, "type": "dir"})
+            walk(child, relpath + "/")
+        for child, st in files:
+            if len(entries) >= MAX_TREE_ENTRIES:
+                return
+            entries.append({"path": f"{prefix}{child.name}", "type": "file", "size": human_size(st.st_size)})
 
     if base.is_file():
         entries.append({"path": rel, "type": "file", "size": human_size(base.stat().st_size)})
@@ -269,21 +357,74 @@ def list_files(workspace_id: str, project: str, rel: str = "") -> dict:
     return {"project": project, "root": rel or ".", "entries": entries, "count": len(entries)}
 
 
-def project_summary(workspace_id: str, project: str) -> dict:
+def _iter_artifacts(root: Path) -> Iterator[tuple[Path, str, os.stat_result]]:
+    """枚举产物文件（路径, 项目内相对路径, stat），浏览页与 project_summary 共用。
+
+    排除三类非产物：非白名单后缀、SKIP_DIRS 依赖目录（node_modules 等）、
+    点/下划线开头的运行时目录（.cache、.local、_scratch…——智能体 pip
+    install/解包留下的东西，里面即使有 html/png 也不是用户的产物）。
+    """
+    for p, st in iter_files(root):
+        if p.suffix.lower() not in ARTIFACT_SUFFIXES:
+            continue
+        rel = p.relative_to(root).as_posix()
+        parts = rel.split("/")
+        if set(parts) & SKIP_DIRS:
+            continue
+        if any(part.startswith((".", "_")) for part in parts):
+            continue
+        yield p, rel, st
+
+
+def count_artifacts(root: Path) -> int:
+    """产物文件数（项目列表展示用），判定与 list_artifacts 完全一致。
+
+    /api/projects 的 files 是全量文件数，浏览页产物清单是白名单过滤后的
+    数量——两处数字曾经对不上（nocturne-cinema 1121 vs 2），这个字段让
+    选择器括号里的数字和清单条数同源。
+    """
+    return sum(1 for _p, _rel, _st in _iter_artifacts(root))
+
+
+def list_artifacts(workspace_id: str, project: str) -> dict:
+    """浏览页的产物清单：只列 ARTIFACT_SUFFIXES 白名单内的成品文件。
+
+    判定与 project_summary 用同一套规则，两处永远一致。返回形状与
+    list_files 相同（entries 平铺、带 size），前端 FileTree 无需适配。
+    """
     root = project_dir(workspace_id, project)
-    files = [p for p in root.rglob("*") if p.is_file()]
-    artifacts = [p for p in files if p.suffix.lower() in {".pptx", ".pdf", ".docx", ".xlsx", ".png", ".svg", ".html", ".md"}]
+    entries = [
+        {"path": rel, "type": "file", "size": human_size(st.st_size)}
+        for _p, rel, st in _iter_artifacts(root)
+    ]
+    entries.sort(key=lambda item: item["path"])
+    truncated = len(entries) > MAX_TREE_ENTRIES
+    if truncated:
+        entries = entries[:MAX_TREE_ENTRIES]
     return {
         "project": project,
-        "files": len(files),
-        "size": human_size(dir_size(root)),
+        "root": ".",
+        "entries": entries,
+        "count": len(entries),
+        "truncated": truncated,
+    }
+
+
+def project_summary(workspace_id: str, project: str) -> dict:
+    root = project_dir(workspace_id, project)
+    listing = list(iter_files(root))
+    artifacts = [(p, st) for p, _rel, st in _iter_artifacts(root)]
+    return {
+        "project": project,
+        "files": len(listing),
+        "size": human_size(sum(st.st_size for _p, st in listing)),
         "artifacts": [
             {
                 "path": str(p.relative_to(root)).replace("\\", "/"),
-                "size": human_size(p.stat().st_size),
+                "size": human_size(st.st_size),
                 "name": p.name,
             }
-            for p in sorted(artifacts, key=lambda x: x.stat().st_mtime, reverse=True)[:20]
+            for p, st in sorted(artifacts, key=lambda x: x[1].st_mtime, reverse=True)[:20]
         ],
     }
 

@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import shutil
 import sys
 from pathlib import Path

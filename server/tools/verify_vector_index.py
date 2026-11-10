@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db.models import Chunk  # noqa: E402
-from app.services.vector import MilvusIndex, get_vector_index, reset_vector_index  # noqa: E402
+from app.services.vector import MilvusIndex, reset_vector_index  # noqa: E402
 from app.services.vector.memory import MemoryIndex  # noqa: E402
 
 RESULTS: list[tuple[str, str, bool, str]] = []

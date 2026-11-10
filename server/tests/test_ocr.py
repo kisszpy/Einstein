@@ -12,8 +12,7 @@ import io
 import pytest
 
 from app.core.config import get_settings
-from app.services import ocr
-from app.services import parsers
+from app.services import ocr, parsers
 from app.services.parsers import ParseError, parse_document
 
 

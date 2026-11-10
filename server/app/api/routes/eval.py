@@ -29,7 +29,7 @@ class EvalSetIn(BaseModel):
 
 
 @router.post("/sets/{set_id}/items")
-async def append_item(
+def append_item(
     set_id: str, req: EvalItemIn,
     ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
@@ -55,7 +55,7 @@ def _require_visible(set_id: str, ws: str, uid: str) -> None:
 
 
 @router.get("/sets")
-async def list_sets(kb_id: str | None = None, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
+def list_sets(kb_id: str | None = None, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
     visible = _visible_ids(ws, uid)
     return [
         eval_service.set_payload(s)
@@ -65,7 +65,7 @@ async def list_sets(kb_id: str | None = None, ws: str = Depends(current_workspac
 
 
 @router.post("/sets")
-async def add_set(req: EvalSetIn, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+def add_set(req: EvalSetIn, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     if not req.items:
         raise HTTPException(400, "评测集至少需要一条用例")
     if not get_store().owns(req.kb_id, ws, uid):
@@ -79,7 +79,7 @@ async def add_set(req: EvalSetIn, ws: str = Depends(current_workspace), uid: str
 
 
 @router.delete("/sets/{set_id}")
-async def delete_set(set_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+def delete_set(set_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     _require_visible(set_id, ws, uid)
     if not eval_service.remove_set(set_id):
         raise HTTPException(404, "评测集不存在")
@@ -103,14 +103,14 @@ async def run(
 
 
 @router.get("/sets/{set_id}/runs")
-async def run_history(set_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
+def run_history(set_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
     """历史运行（新→旧，不含逐条明细），两次运行的指标对比在前端做。"""
     _require_visible(set_id, ws, uid)
     return eval_service.list_runs(set_id)
 
 
 @router.get("/sets/{set_id}/runs/{run_id}")
-async def run_detail(set_id: str, run_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
+def run_detail(set_id: str, run_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> dict:
     """单次运行全量报告（含逐条 items）。"""
     _require_visible(set_id, ws, uid)
     report = eval_service.get_run(set_id, run_id)

@@ -1,4 +1,4 @@
-// 内置浏览器的端到端验证：产物预览 / PPT 编辑保存 / 网页代理与阅读模式。
+// 资产页（原内置浏览器）的端到端验证：产物预览 / PPT 编辑保存 / 网页代理与阅读模式。
 const { chromium } = require("playwright-core");
 const fs = require("fs");
 
@@ -31,10 +31,10 @@ function check(name, pass, detail = "") {
   console.log("已登录");
 
   // 侧栏入口
-  await page.getByRole("link", { name: "浏览器" }).click();
-  await page.waitForURL(/\/browser/, { timeout: 10000 });
+  await page.getByRole("link", { name: "资产" }).click();
+  await page.waitForURL(/\/assets/, { timeout: 10000 });
   await page.waitForTimeout(600);
-  check("侧栏入口进入 /browser", page.url().includes("/browser"), page.url());
+  check("侧栏入口进入 /assets", page.url().includes("/assets"), page.url());
 
   const tabs = await page.locator("button", { hasText: /^网页$/ }).count();
   check("三个来源切换可见", tabs > 0);
@@ -122,7 +122,7 @@ function check(name, pass, detail = "") {
   await page.locator('input[placeholder="输入网址，回车打开"]').fill("https://example.com");
   await page.keyboard.press("Enter");
   await page.waitForTimeout(4000);
-  const webFrame = page.frameLocator('iframe[title="内置浏览器"]');
+  const webFrame = page.frameLocator('iframe[title="网页预览"]');
   const webBody = await webFrame.locator("body").textContent().catch(() => "");
   check("网页代理渲染出内容", /documentation examples/i.test(webBody || ""), (webBody || "").slice(0, 100));
   check("地址栏回填地址", (await page.locator('input[placeholder="输入网址，回车打开"]').inputValue()).includes("example.com"));
@@ -136,20 +136,25 @@ function check(name, pass, detail = "") {
   await page.screenshot({ path: `${SHOTS}/browser-read.png` });
 
 
-  // 深链：智能体产物与对话来源直接跳进内置浏览器
-  await page.goto(`${BASE}/browser?tab=deck&project=${PROJECT}&path=deck/browser.pptx`, { waitUntil: "networkidle" });
+  // 深链：智能体产物与对话来源直接跳进资产页
+  await page.goto(`${BASE}/assets?tab=deck&project=${PROJECT}&path=deck/browser.pptx`, { waitUntil: "networkidle" });
   await page.waitForTimeout(1800);
   const deepEditor = await page.locator("body").innerText();
   check("深链直达 PPT 编辑器", /第 1 \/ 7 页/.test(deepEditor), deepEditor.slice(0, 100));
 
-  await page.goto(`${BASE}/browser?tab=web&url=https://example.com`, { waitUntil: "networkidle" });
+  await page.goto(`${BASE}/assets?tab=web&url=https://example.com`, { waitUntil: "networkidle" });
   await page.waitForTimeout(3500);
   const deepWeb = await page
-    .frameLocator('iframe[title="内置浏览器"]')
+    .frameLocator('iframe[title="网页预览"]')
     .locator("body")
     .textContent()
     .catch(() => "");
   check("深链直达网页代理", /documentation examples/i.test(deepWeb || ""), (deepWeb || "").slice(0, 80));
+
+  // 旧入口 /browser 改名后仍要能用：带查询参数重定向到 /assets，老书签/老深链不失效
+  await page.goto(`${BASE}/browser?tab=web&url=https://example.com`, { waitUntil: "networkidle" });
+  await page.waitForTimeout(600);
+  check("旧路径 /browser 重定向到 /assets", page.url().includes("/assets?tab=web"), page.url());
 
   await browser.close();
   console.log(`\n${ok.length} passed, ${bad.length} failed`);

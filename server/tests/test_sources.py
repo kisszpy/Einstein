@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from app.db.models import Document
 from app.services import sources
 from app.services.rag import content_digest

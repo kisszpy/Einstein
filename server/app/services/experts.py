@@ -4,14 +4,16 @@
 检索与工具按挂载的资源自动启用。生产替换点：PostgreSQL。
 """
 
-import json
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.core.logging import get_logger
 from app.services.state import blob
+
+logger = get_logger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 STORE_PATH = DATA_DIR / "experts_store.json"
@@ -350,8 +352,8 @@ class ExpertStore:
             for key, v in payload.items():
                 if key in store.experts and "status" not in v:
                     store.experts[key].status = "live"
-        except Exception:  # noqa: BLE001 — 损坏则重建
-            pass
+        except Exception as exc:  # noqa: BLE001 — 损坏则重建
+            logger.warning("专家数据文件损坏，已重建：%s", exc)
         return store
 
 

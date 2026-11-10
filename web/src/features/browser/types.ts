@@ -30,7 +30,10 @@ export interface TreeEntry {
 export interface ProjectInfo {
   id: string;
   name: string;
+  /** 全量文件数（智能体工作区口径） */
   files: number;
+  /** 产物数（浏览页口径，白名单后缀过滤后）——选择器括号与清单条数必须同源 */
+  artifacts: number;
   size: string;
   updated_at: string;
 }
@@ -96,6 +99,12 @@ export interface DeckSlide {
   right?: DeckColumn;
 }
 
+export interface DeckDslPage {
+  index: number;
+  dsl_file: string;
+  dsl: string;
+}
+
 export interface Deck {
   path: string;
   title: string;
@@ -105,6 +114,9 @@ export interface Deck {
   theme_inferred?: boolean;
   source: "sidecar" | "parsed";
   editable: "full" | "partial";
+  /** slidep 产物：DSL 即真相源，编辑器提供逐页 DSL 模式（lint→重编译） */
+  engine?: "slidep";
+  pages?: DeckDslPage[];
   slides: DeckSlide[];
   /** 服务端用 PowerPoint 真实渲染的逐页 JPG（项目内相对路径），还原渐变/圆角等视觉 */
   preview_images?: string[];

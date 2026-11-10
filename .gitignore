@@ -15,3 +15,24 @@ server/.slidep/
 **/.deckpreview/
 ppt-preview.html
 server/tools/*_payload.json
+
+# 外部工具：ppt-master（MIT，SVG→DrawingML 转换器，svgdeck 的依赖）不入库。
+# 它在本地是一个完整的独立 git 仓库，直接 `git add` 只会得到一个 gitlink——
+# 别人 clone 本仓库后该目录是空的，反而更难察觉。整仓 153M（54M .git + 50M 模板
+# + 35M 文档示例）也不适合塞进本仓库。缺失时 svgdeck 抛 SandboxError，
+# 智能体自动降级到 slidep/ppt_create，不会静默出错。需要时重建：
+#   git clone --depth 1 https://github.com/ppt-master/ppt-master tools/ppt-master
+tools/ppt-master/
+
+# DeckCraft fork（storytold/deckcraft @ v0.16.0，MIT/Apache）：中文 wasm 构建产物。
+# 源码入库；构建缓存、产物与 craft-fonts 上游检出不入库，只保留我们自己的字体资产。
+tools/deckcraft/target/
+tools/deckcraft/dist/
+tools/craft-fonts/*
+!tools/craft-fonts/fonts
+tools/craft-fonts/fonts/*
+!tools/craft-fonts/fonts/cjk-manifest.txt
+!tools/craft-fonts/fonts/han-sans-sc/
+
+# DeckCraft 的 wasm 引擎 bundle 是构建产物（tools/deckcraft/build-web.sh 生成后复制进来）
+web/public/deckcraft/

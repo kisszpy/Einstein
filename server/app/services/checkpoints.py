@@ -33,6 +33,9 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
@@ -131,28 +134,24 @@ async def acquire() -> Any:
             else:
                 _SAVER, _CLOSERS = await _open_postgres()
             _MODE = mode
-            print(f"[checkpoint] 短期记忆落盘：{mode}（{_target(mode)}）", flush=True)
+            logger.info("短期记忆落盘：%s（%s）", mode, _target(mode))
         except Exception as exc:  # noqa: BLE001 — 降级，不让 agent 不可用
             _SAVER = None
             _MODE = ""
             _CLOSERS = []
-            print(
-                f"[checkpoint] {mode} 不可用（{type(exc).__name__}: {exc}），尝试 sqlite",
-                flush=True,
-            )
+            logger.warning("%s 不可用（%s: %s），尝试 sqlite", mode, type(exc).__name__, exc)
             # 降级优先 sqlite 而不是内存：内存等于「什么都没落」，用户看不到
             # 任何异常，直到某天批准之后发现任务重跑了一遍。
             if mode != "sqlite":
                 try:
                     _SAVER, _CLOSERS = await _open_sqlite()
                     _MODE = "sqlite"
-                    print(f"[checkpoint] 已降级为 sqlite（{_sqlite_path()}）", flush=True)
+                    logger.warning("检查点已降级为 sqlite（%s）", _sqlite_path())
                     return _SAVER
                 except Exception as exc2:  # noqa: BLE001
-                    print(
-                        f"[checkpoint] sqlite 也不可用（{type(exc2).__name__}: {exc2}），"
-                        "退回内存：服务重启后无法从断点续跑",
-                        flush=True,
+                    logger.error(
+                        "sqlite 也不可用（%s: %s），退回内存：服务重启后无法从断点续跑",
+                        type(exc2).__name__, exc2,
                     )
             _SAVER = None
             _MODE = ""
@@ -272,7 +271,7 @@ async def purge_expired() -> int:
             if when and when < cutoff:
                 doomed.append(tid)
     except Exception as exc:  # noqa: BLE001 — 清理失败不能挡住启动/定时任务
-        print(f"[checkpoint] 扫描过期线程失败：{type(exc).__name__}: {exc}", flush=True)
+        logger.warning("扫描过期线程失败：%s: %s", type(exc).__name__, exc)
         return 0
 
     removed = 0
@@ -281,9 +280,10 @@ async def purge_expired() -> int:
             await saver.adelete_thread(tid)
             removed += 1
         except Exception:  # noqa: BLE001 — 单条失败跳过，下次再清
+            logger.debug("删除过期线程 %s 失败，留到下一轮", tid, exc_info=True)
             continue
     if removed:
-        print(f"[checkpoint] 清理过期线程 {removed} 个（>{hours}h 未更新）", flush=True)
+        logger.info("清理过期线程 %d 个（>%sh 未更新）", removed, hours)
     return removed
 
 

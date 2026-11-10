@@ -7,20 +7,21 @@
 """
 
 import asyncio
-import io
 import mimetypes
+import os
+import tempfile
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from app.api.deps import current_uid, current_workspace
 from app.services import browser, projects
-from app.services.capabilities import deck as deck_service
-from app.services.capabilities import sandbox
+from app.services.capabilities import deck as deck_service, sandbox
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -76,6 +77,13 @@ class FileWriteRequest(BaseModel):
     content: str
 
 
+class FileBytesRequest(BaseModel):
+    """二进制成品写入：内容按 base64 传（pptx 是 zip，塞不进 JSON 字符串的 UTF-8 路径）。"""
+
+    path: str
+    content_base64: str
+
+
 def _guard(exc: sandbox.SandboxError, code: int = 400) -> HTTPException:
     return HTTPException(code, str(exc))
 
@@ -89,13 +97,13 @@ def _require(ws: str, project: str, uid: str) -> None:
 
 
 @router.get("")
-async def list_projects(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
+def list_projects(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
     """当前用户可见的项目。别人创建的项目、平台运行时目录都不会出现。"""
     return projects.list_projects(ws, uid)
 
 
 @router.post("")
-async def create_project(
+def create_project(
     req: ProjectCreateRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     try:
@@ -105,7 +113,7 @@ async def create_project(
 
 
 @router.delete("/{project}")
-async def delete_project(
+def delete_project(
     project: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     try:
@@ -118,7 +126,7 @@ async def delete_project(
 
 
 @router.get("/{project}/tree")
-async def project_tree(
+def project_tree(
     project: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     _require(ws, project, uid)
@@ -128,8 +136,24 @@ async def project_tree(
         raise _guard(exc, 404) from exc
 
 
+@router.get("/{project}/artifacts")
+def project_artifacts(
+    project: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
+) -> dict:
+    """浏览页「产物」清单：只返回白名单后缀的成品文件，源码与依赖目录不出现。
+
+    与 /tree 的区别：tree 是项目全部文件（智能体工作区用），这里只给
+    浏览页要预览的产物。返回形状与 tree 相同。
+    """
+    _require(ws, project, uid)
+    try:
+        return sandbox.list_artifacts(ws, project)
+    except sandbox.SandboxError as exc:
+        raise _guard(exc, 404) from exc
+
+
 @router.get("/{project}/file")
-async def read_file(
+def read_file(
     project: str, path: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     _require(ws, project, uid)
@@ -140,7 +164,7 @@ async def read_file(
 
 
 @router.put("/{project}/file")
-async def write_file(
+def write_file(
     project: str, req: FileWriteRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     _require(ws, project, uid)
@@ -150,8 +174,24 @@ async def write_file(
         raise _guard(exc) from exc
 
 
+@router.put("/{project}/file-bytes")
+def write_file_bytes(
+    project: str, req: FileBytesRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
+) -> dict:
+    """写入二进制成品（演示文稿编辑器保存回传的 pptx 字节）。
+
+    和 `/file` 分开是因为两者约束不同：文本走 UTF-8、限 2MB；
+    成品可能是几十 MB 的 zip，走 base64 + 32MB 上限，且只放行成品后缀。
+    """
+    _require(ws, project, uid)
+    try:
+        return sandbox.write_bytes(ws, project, req.path, req.content_base64)
+    except sandbox.SandboxError as exc:
+        raise _guard(exc, 400) from exc
+
+
 @router.get("/{project}/download")
-async def download_file(
+def download_file(
     project: str, path: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> FileResponse:
     try:
@@ -167,32 +207,71 @@ async def download_file(
     )
 
 
+# 已压缩格式再 DEFLATE 一遍只是白烧 CPU（常常还更大），直接 STORED
+_STORE_SUFFIXES = {
+    ".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar",
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif",
+    ".mp4", ".mp3", ".woff", ".woff2",
+    ".docx", ".xlsx", ".pptx", ".pdf",
+}
+
+
+def _write_archive(root: Path, dest: Path) -> int:
+    """把项目树打成 zip 写到 dest，返回写入的文件数。
+
+    纯磁盘/CPU 活，由调用方丢进线程执行：整包几百 MB 时同步跑会把
+    事件循环（含 SSE 流式对话）一起卡住。
+    """
+    count = 0
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+        # iter_files 跳过不可访问条目（悬空软链等），打包不再因单个坏文件 500
+        for file, _st in sorted(sandbox.iter_files(root), key=lambda item: item[0]):
+            if set(file.parts) & sandbox.SKIP_DIRS:
+                continue
+            method = (
+                zipfile.ZIP_STORED if file.suffix.lower() in _STORE_SUFFIXES
+                else zipfile.ZIP_DEFLATED
+            )
+            try:
+                zf.write(file, file.relative_to(root), compress_type=method)
+                count += 1
+            except OSError:
+                # 打包途中文件被删/占用：跳过，不整包失败
+                continue
+    return count
+
+
 @router.get("/{project}/archive")
 async def download_archive(
     project: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
-) -> StreamingResponse:
+) -> FileResponse:
     _require(ws, project, uid)
     try:
         root = sandbox.project_dir(ws, project)
     except sandbox.SandboxError as exc:
         raise _guard(exc, 404) from exc
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file in sorted(root.rglob("*")):
-            if file.is_file() and not (set(file.parts) & sandbox.SKIP_DIRS):
-                zf.write(file, file.relative_to(root))
-    buf.seek(0)
+    # 落临时文件而不是全量进内存：几百 MB 的项目包进 BytesIO 会直接顶爆进程
+    fd, tmp_name = tempfile.mkstemp(prefix="proj-archive-", suffix=".zip")
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        await asyncio.to_thread(_write_archive, root, tmp)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
     # RFC 5987：中文项目名放进 filename*，ASCII 名做 fallback
     ascii_name = project.encode("ascii", "ignore").decode() or "project"
     disposition = (
         f"attachment; filename=\"{ascii_name}.zip\"; "
         f"filename*=UTF-8''{quote(project)}.zip"
     )
-    return StreamingResponse(
-        buf,
+    return FileResponse(
+        tmp,
         media_type="application/zip",
         headers={"Content-Disposition": disposition},
+        background=BackgroundTask(tmp.unlink, missing_ok=True),
     )
 
 
@@ -205,15 +284,20 @@ _PREVIEW_HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosn
 
 
 def _inline_response(target: Path) -> Response:
+    # 流式回源，不把文件读进内存：`Response(content=target.read_bytes())` 在预览
+    # 几百 MB 的 mp4 时会先吃满内存再开始响应，整段读取还卡在事件循环里。
+    # FileResponse 顺带支持 Range，视频可以拖进度条。
     headers = dict(_PREVIEW_HEADERS)
     media = _mime_of(target)
     if media.startswith("text/html"):
+        # serve_asset 也会走到这里吐 HTML：不套 CSP 的话，产物页面在同源下
+        # 就能读 localStorage 里的登录令牌。这层隔离不能省。
         headers["Content-Security-Policy"] = _SANDBOX_CSP
-    return Response(content=target.read_bytes(), media_type=media, headers=headers)
+    return FileResponse(target, media_type=media, headers=headers)
 
 
 @router.get("/{project}/preview")
-async def preview_file(
+def preview_file(
     project: str,
     path: str,
     ticket: str = "",
@@ -245,7 +329,7 @@ async def preview_file(
 
 
 @router.get("/{project}/file/{ticket}/{file_path:path}")
-async def serve_asset(
+def serve_asset(
     project: str,
     ticket: str,
     file_path: str,
@@ -268,6 +352,31 @@ class DeckSaveRequest(BaseModel):
     deck: dict
 
 
+class DeckDslRequest(BaseModel):
+    page_index: int
+    dsl: str
+    apply: bool = True
+
+
+@router.put("/{project}/deck/dsl")
+async def apply_deck_dsl(
+    project: str,
+    path: str,
+    req: DeckDslRequest,
+    ws: str = Depends(current_workspace),
+    uid: str = Depends(current_uid),
+) -> dict:
+    """slidep 产物的编辑链路：lint 校验 → 通过则重编译替换该页并刷新预览。"""
+    try:
+        root = projects.require(ws, project, uid)
+        # apply 成功会触发 load_deck → COM 导出预览图（秒级），放线程避免阻塞事件循环
+        return await asyncio.to_thread(
+            deck_service.apply_dsl_page, root, path, req.page_index, req.dsl, req.apply
+        )
+    except sandbox.SandboxError as exc:
+        raise _guard(exc, 400) from exc
+
+
 @router.get("/{project}/deck")
 async def read_deck(
     project: str, path: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
@@ -281,7 +390,7 @@ async def read_deck(
 
 
 @router.put("/{project}/deck")
-async def write_deck(
+def write_deck(
     project: str,
     path: str,
     req: DeckSaveRequest,

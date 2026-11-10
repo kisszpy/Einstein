@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import re
 import shutil
 import threading
 from datetime import datetime, timezone
@@ -89,10 +88,14 @@ def owns(workspace_id: str, slug: str, owner_id: str | None) -> bool:
 
 
 def list_projects(workspace_id: str, owner_id: str | None = None) -> list[dict]:
-    """当前用户可见的项目（含文件数/体积，按最后改动排序）。
+    """当前用户可见的项目（含文件数/产物数/体积，按最后改动排序）。
 
     只认登记过的行：磁盘上多出来的目录（运行时目录、历史残留、别人手工
     建的目录）不会因为「存在」就变成项目。
+
+    files 是全量文件数（智能体工作区口径）；artifacts 是白名单过滤后的
+    产物数（浏览页口径），两者必须分开——项目里混进依赖时 1121 个文件
+    可能只有 2 个产物，混用会让浏览页选择器的数字和清单条数对不上。
     """
     root = sandbox.workspace_root(workspace_id)
     out: list[dict] = []
@@ -112,7 +115,8 @@ def list_projects(workspace_id: str, owner_id: str | None = None) -> list[dict]:
                 "description": row.get("description", ""),
                 "template": row.get("template", "blank"),
                 "owner_id": row.get("owner_id", ""),
-                "files": sum(1 for f in path.rglob("*") if f.is_file()),
+                "files": sum(1 for _f, _st in sandbox.iter_files(path)),
+                "artifacts": sandbox.count_artifacts(path),
                 "size": sandbox.human_size(sandbox.dir_size(path)),
                 "created_at": row.get("created_at", ""),
                 "updated_at": _local_time(stat.st_mtime),

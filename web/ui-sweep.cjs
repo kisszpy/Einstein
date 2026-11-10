@@ -17,7 +17,7 @@ function check(section, name, ok, detail = "") {
 
 const ROUTES = [
   { path: "/chat", name: "对话", expect: "有什么可以帮你" },
-  { path: "/browser", name: "浏览器", expect: "" },
+  { path: "/assets", name: "资产", expect: "" },
   { path: "/kb", name: "知识库", expect: "" },
   { path: "/experts", name: "专家", expect: "" },
   { path: "/skills", name: "技能", expect: "" },

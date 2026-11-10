@@ -246,7 +246,7 @@ def test_reconnect_replays_from_db_when_not_in_memory(auth_header):
     assert run_registry._RUNS.get("ghost-run") is None
 
     with _client() as client:
-        res = client.get(f"/api/agent/runs/ghost-run/stream", headers=headers)
+        res = client.get("/api/agent/runs/ghost-run/stream", headers=headers)
 
     assert res.status_code == 200
     body = res.text

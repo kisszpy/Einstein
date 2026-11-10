@@ -1,0 +1,23 @@
+# 提交前自查。安装：pip install pre-commit && pre-commit install
+#
+# 只跑 ruff check，不跑 ruff-format——本仓库大量中文注释是按语义断行的，
+# 自动换行会把注释拆得比代码还碎。格式统一靠人写、靠 review 提。
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.4
+    hooks:
+      - id: ruff
+        name: ruff（后端静态检查）
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^server/(app|tests|tools)/.*\.py$
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: end-of-file-fixer
+        files: ^(server|web)/.*\.(py|ts|tsx|css|json|md)$
+      - id: trailing-whitespace
+        files: ^(server|web)/.*\.(py|ts|tsx|css)$
+      - id: check-merge-conflict
+      - id: check-yaml
+        files: ^(deploy|\.github)/.*\.ya?ml$

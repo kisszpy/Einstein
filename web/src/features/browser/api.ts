@@ -1,4 +1,4 @@
-/** 内置浏览器的后端访问层。路径都走 vite 代理，鉴权与工作区由全局 fetch 拦截器注入。 */
+/** 资产页（浏览器工作台）的后端访问层。路径都走 vite 代理，鉴权与工作区由全局 fetch 拦截器注入。 */
 
 import type { Deck, ProjectInfo, ReadPayload, ThemePreset, TreeEntry } from "./types";
 
@@ -22,6 +22,16 @@ export function projectTree(project: string): Promise<{ entries: TreeEntry[] }> 
   return request<{ entries: TreeEntry[] }>(`/api/projects/${encodeURIComponent(project)}/tree`);
 }
 
+/** 浏览页用：只拉产物清单（后端按白名单后缀过滤），不再拉全量文件树。
+ *  项目里混进依赖/解包残留时（如整套 Linux sysroot），产物不会被淹没。 */
+export function projectArtifacts(
+  project: string,
+): Promise<{ entries: TreeEntry[]; count: number; truncated?: boolean }> {
+  return request<{ entries: TreeEntry[]; count: number; truncated?: boolean }>(
+    `/api/projects/${encodeURIComponent(project)}/artifacts`,
+  );
+}
+
 export function readFile(project: string, path: string) {
   // 后端返回 { path, binary, bytes, truncated, text }，这里归一成 content 供编辑器使用
   return request<{ path: string; binary: boolean; bytes: number; truncated: boolean; text: string }>(
@@ -41,6 +51,29 @@ export function writeFile(project: string, path: string, content: string) {
   });
 }
 
+/** ArrayBuffer → base64。分块拼字符串：一次性 spread 几 MB 的 Uint8Array 会爆调用栈。 */
+function toBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunk = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/** 写回二进制成品（放映级编辑器保存回传的 pptx）。走 /file-bytes，不是文本 /file。 */
+export function saveFileBytes(
+  project: string,
+  path: string,
+  bytes: ArrayBuffer,
+): Promise<{ path: string; bytes: number; previous_bytes: number; created: boolean }> {
+  return request(`/api/projects/${encodeURIComponent(project)}/file-bytes`, {
+    method: "PUT",
+    body: JSON.stringify({ path, content_base64: toBase64(bytes) }),
+  });
+}
+
 export function readDeck(project: string, path: string): Promise<Deck> {
   return request<Deck>(
     `/api/projects/${encodeURIComponent(project)}/deck?path=${encodeURIComponent(path)}`,
@@ -57,6 +90,27 @@ export function saveDeck(project: string, path: string, deck: Deck): Promise<Dec
   return request<Deck>(
     `/api/projects/${encodeURIComponent(project)}/deck?path=${encodeURIComponent(path)}`,
     { method: "PUT", body: JSON.stringify({ deck: rest }) },
+  );
+}
+
+export interface DslDiagnostic {
+  ruleId?: string;
+  severity?: string;
+  message?: string;
+  [key: string]: unknown;
+}
+
+/** slidep 产物的 DSL 编辑链路：apply=false 只校验，true 通过后重编译替换该页。 */
+export function applyDeckDsl(
+  project: string,
+  path: string,
+  pageIndex: number,
+  dsl: string,
+  apply: boolean,
+): Promise<{ ok: boolean; diagnostics: DslDiagnostic[]; deck?: Deck }> {
+  return request<{ ok: boolean; diagnostics: DslDiagnostic[]; deck?: Deck }>(
+    `/api/projects/${encodeURIComponent(project)}/deck/dsl?path=${encodeURIComponent(path)}`,
+    { method: "PUT", body: JSON.stringify({ page_index: pageIndex, dsl, apply }) },
   );
 }
 

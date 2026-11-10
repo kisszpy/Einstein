@@ -19,7 +19,6 @@ from app.core.config import get_settings
 from app.db.engine import get_db
 from app.db.rows import TableState
 from app.db.schema import migrate
-from app.db.tables import MESSAGE_FEEDBACK, WORKSPACE_MEMORY
 from app.services.state import JsonState
 
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data"

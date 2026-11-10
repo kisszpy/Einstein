@@ -46,6 +46,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.types import Command
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.services import checkpoints, skill_publisher
 from app.services.agent_runtime import (
     LlmTimer,
@@ -58,9 +59,11 @@ from app.services.agent_runtime import (
     thread_config,
 )
 from app.services.approvals import args_fingerprint
-from app.services.capabilities import ApprovalRequired, AgentContext, _artifact_kind
+from app.services.capabilities import AgentContext, ApprovalRequired, _artifact_kind
 from app.services.capabilities.sandbox import slugify, workspace_root
 from app.services.tools import build_lc_tools, kb_directive
+
+logger = get_logger(__name__)
 
 RECURSION_LIMIT = 64   # 单份预算：有了计划工具后每步更"值钱"，比 ReAct 略宽
 MAX_BUDGETS = 3        # 触顶自动续跑：把已有进展带回引擎继续执行，最多续 2 次
@@ -318,6 +321,7 @@ DEEP_SYSTEM_PROMPT = """你是 Einstein 的工作型智能体。你能调用工�
 【确需文件交付时】
 1. 边查边写：查到一批数据立刻 write_file 落盘，不要把全部原文攒在对话里。
 2. PPT 标准路线是 slidep DSL 逐页闭环（视觉效果远好于其他方式）：① 每页用 fs_write 写一个 slides/NN.slide 文件，内容是 JSX 风格 DSL——`<Slide width={1280} height={720} background="…">` 里用 `<Box style={{...}}>` 做布局容器（支持 Flexbox：display:"flex"、flexDirection、gap、padding、borderRadius、background，background 支持 linear-gradient 渐变与 rgba 玻璃卡）和 `<Text style={{fontSize,color,fontWeight,marginTop}}>` 写文字；② 调 slide_upsert(pptx_path="deck/xxx.pptx", dsl_file="slides/NN.slide") 编译插入；③ 每页 upsert 后必须 slide_lint，diagnostics 有 error 就改 DSL 后以相同 page_index 重新 upsert，直到无 error 再下一页。slidep 连续失败 3 次才降级用 ppt_create。
+2b. SVG 原生管线（svg_compile）：用户强调「母板/模板统一」「跨平台部署」或 slidep 不可用时优先用这条。① 每页 fs_write 一个 slides/NN.svg（01.svg 起，画布固定 1280×720，纯 SVG 1.1：rect/text/circle/path/linearGradient，文字用 <text> 元素并显式指定 font-family/font-size/fill）；② 可选母板 slides/master.svg——把背景、页眉装饰、页码规则画在母板里，每页 SVG 只画内容层（不要整页铺底色，否则盖住母板）；③ 调 svg_compile(pptx_path="deck/xxx.pptx") 一次编译整份。产物是原生形状 PPTX，完全可编辑。SVG 里文字不会自动换行——长句手动拆成多个 <text> 或 <tspan>，每行一个。
 3. slidep 设计规范：画布 1280×720、四周安全区 ≥60px；页面主标题 ≥32px、卡片小标题 ≥22px、正文 18-20px、图表标签 ≥16px、脚注 ≥14px；同页样式组合 ≤4 种；块间距只用 24/32 两档；卡片高度贴合内容不空撑；一页分区 ≤4 块且有唯一视觉主角；禁止等宽均分构图、禁止空容器、禁止 emoji 和感叹号；标题不用「卓越表现/行业领先」这类空话，用具体数字与动词；页数按用户要求来，没有硬性上限。
 4. 设计系统纪律：动笔前先选定一个设计家族（深色编辑风/浅色商务风/渐变科技风/暖调杂志风，详见 slidep 技能），全篇统一。用户要求重画、重新生成、换风格时，必须换一个与上一版不同的设计家族（新配色+新母题），严禁沿用旧观感微调。封面与章节页用渐变背景和玻璃卡片提升质感，内容页用纯色底。
 5. ppt_create 仅作降级备选；Word/Excel 优先用对应内置工具，不要手写 python-docx/openpyxl 脚本替代。
@@ -775,7 +779,7 @@ async def _pending_interrupt_count(agent: Any, thread_id: str) -> int:
     try:
         snapshot = await agent.aget_state(thread_config(thread_id, RECURSION_LIMIT))
     except Exception as exc:  # noqa: BLE001 — 检查点不可用按重跑处理，不能让任务失败
-        print(f"[agent-deep] 读取检查点失败（按重跑处理）：{type(exc).__name__}: {exc}", flush=True)
+        logger.warning("读取检查点失败（按重跑处理）：%s: %s", type(exc).__name__, exc)
         return 0
     for task in getattr(snapshot, "tasks", None) or ():
         interrupts = getattr(task, "interrupts", None)

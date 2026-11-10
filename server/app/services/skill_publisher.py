@@ -69,8 +69,9 @@ def _publish_one(skill: Skill, target: Path) -> None:
     # 不匹配，破坏 spec 校验与 pinned_skills 匹配）
     src_root = (SKILLS_DIR / skill.id).resolve()
     if src_root.is_dir():
-        for src in sorted(src_root.rglob("*")):
-            if src.is_file() and src.name.lower() != "skill.md":
+        from app.services.capabilities.sandbox import iter_files
+        for src, _st in sorted(iter_files(src_root), key=lambda item: item[0]):
+            if src.name.lower() != "skill.md":
                 rel = src.relative_to(src_root)
                 dest = target / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)

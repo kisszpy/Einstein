@@ -25,7 +25,6 @@ from __future__ import annotations
 import base64
 import io
 import mimetypes
-from pathlib import Path
 
 from app.core.config import get_settings
 

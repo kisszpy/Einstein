@@ -11,17 +11,24 @@ from pydantic import BaseModel
 
 from app.api.deps import current_uid, current_workspace
 from app.core.config import get_settings
-from app.services import models as model_registry
-from app.services import ratelimit, traces, web_augment
+from app.core.logging import get_logger
+from app.services import (
+    memory as memory_service,
+    models as model_registry,
+    ratelimit,
+    traces,
+    web_augment,
+)
 from app.services.experts import get_expert_store
 from app.services.history import get_history_store
-from app.services import memory as memory_service
 from app.services.llm import stream_chat
 from app.services.rag import build_context_block
 from app.services.retrieval import retrieve
 from app.services.skill_installer import inline_resources
 from app.services.skills import get_skill_store
 from app.services.store import get_store
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -285,7 +292,7 @@ async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[st
                     )
                     history_store.save()
                 except Exception as exc:  # noqa: BLE001 — 持久化失败不回滚回答
-                    print(f"[chat] save failed: {type(exc).__name__}: {exc}", flush=True)
+                    logger.warning("助手回复落库失败：%s: %s", type(exc).__name__, exc)
             await queue.put(("done", {"conversation_id": conversation_id}))
         except Exception as exc:  # noqa: BLE001 — 异常也走队列，保持事件顺序
             error_kind = type(exc).__name__
@@ -323,7 +330,7 @@ async def _event_stream(req: ChatRequest, ws: str, uid: str) -> AsyncIterator[st
 
 
 @router.post("")
-async def chat(
+def chat(
     req: ChatRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> StreamingResponse:
     """SSE 流式对话。

@@ -16,11 +16,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.db.engine import get_db
 from app.db.rows import TableState
 from app.db.schema import migrate
 from app.db.tables import AUDIT_LOGS
 from app.services.state import JsonState
+
+logger = get_logger(__name__)
 
 MAX_ENTRIES = 3000
 
@@ -61,8 +64,8 @@ def _ensure_loaded() -> None:
             payload = _json_state.read()
             if isinstance(payload, list):
                 _entries.extend(payload[-MAX_ENTRIES:])
-    except Exception:  # noqa: BLE001 — 损坏则丢弃
-        pass
+    except Exception as exc:  # noqa: BLE001 — 损坏则丢弃
+        logger.warning("审计日志文件损坏，已丢弃旧记录：%s", exc)
     _loaded = True
 
 

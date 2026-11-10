@@ -16,10 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from verify_auth import bearer, call  # noqa: E402
 
 from app.services.skill_publisher import (  # noqa: E402
-    export_manifest,
     pinned_slugs,
-    slug_of,
     skills_dir,
+    slug_of,
     sync_skills,
 )
 from app.services.skills import get_skill_store

@@ -624,9 +624,10 @@ def export_zip(skill: Skill) -> bytes:
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("skill.json", json.dumps(meta, ensure_ascii=False, indent=2))
         if root.exists():
-            for path in sorted(root.rglob("*")):
-                if path.is_file():
-                    zf.write(path, path.relative_to(root).as_posix())
+            # iter_files 跳过不可访问条目（悬空软链等），打包不再因单个坏文件抛错
+            from app.services.capabilities.sandbox import iter_files
+            for path, _st in sorted(iter_files(root), key=lambda item: item[0]):
+                zf.write(path, path.relative_to(root).as_posix())
     return buf.getvalue()
 
 

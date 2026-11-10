@@ -104,7 +104,7 @@ def _filter_mounts(skill_ids: list[str], kb_ids: list[str], ws: str, uid: str) -
 
 
 @router.get("")
-async def list_experts(
+def list_experts(
     published: bool = False, ws: str = Depends(current_workspace),
     uid: str = Depends(current_uid),
 ) -> list[dict]:
@@ -116,14 +116,14 @@ async def list_experts(
 
 
 @router.get("/{expert_id}")
-async def get_expert(
+def get_expert(
     expert_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
     return _dump(_require_visible(get_expert_store().get(expert_id), ws, uid))
 
 
 @router.post("")
-async def create_expert(
+def create_expert(
     req: ExpertCreate, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
     if not req.name.strip():
@@ -153,7 +153,7 @@ async def create_expert(
 
 
 @router.put("/{expert_id}")
-async def update_expert(
+def update_expert(
     expert_id: str, req: ExpertUpdate, ws: str = Depends(current_workspace),
     user=Depends(current_user), uid: str = Depends(current_uid),
 ) -> dict:
@@ -185,7 +185,7 @@ async def update_expert(
 
 
 @router.post("/{expert_id}/publish")
-async def publish_expert(
+def publish_expert(
     expert_id: str, req: PublishRequest, ws: str = Depends(current_workspace),
     user=Depends(current_user), uid: str = Depends(current_uid),
 ) -> dict:
@@ -200,7 +200,7 @@ async def publish_expert(
 
 
 @router.delete("/{expert_id}")
-async def delete_expert(
+def delete_expert(
     expert_id: str, ws: str = Depends(current_workspace),
     user=Depends(current_user), uid: str = Depends(current_uid),
 ) -> dict:

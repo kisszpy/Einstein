@@ -301,7 +301,6 @@ def _detach_experts(model_id: str) -> None:
     """清掉专家的 model_id 引用（失败不影响删除本身）。"""
     try:
         from app.db.engine import get_db as _db
-        from app.db.tables import EXPERTS
 
         _db().execute("UPDATE experts SET model_id = '' WHERE model_id = ?", (model_id,))
     except Exception:  # noqa: BLE001 — 表不存在（json 后端）时无需处理

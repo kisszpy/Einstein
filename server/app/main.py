@@ -1,7 +1,7 @@
 import asyncio
-import logging
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
 
 # 沙箱/系统代理会让 OpenAI SDK 以绝对路径请求（path 变成 URL 编码的完整地址），
@@ -13,18 +13,35 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api import deps
-from app.api.routes import agent, auth, browse, chat, conversations, experts, health, kb, mcp, skills
-from app.api.routes import eval as eval_routes
-from app.api.routes import memory as memory_routes
-from app.api.routes import alerts as alert_routes
-from app.api.routes import models as model_routes
-from app.api.routes import templates as template_routes
-from app.api.routes import shares as share_routes
-from app.api.routes import public as public_routes
-from app.api.routes import observability, openapi, platform, projects
-from app.api.routes import jobs
+from app.api.routes import (
+    agent,
+    alerts as alert_routes,
+    auth,
+    browse,
+    chat,
+    conversations,
+    eval as eval_routes,
+    experts,
+    health,
+    jobs,
+    kb,
+    mcp,
+    memory as memory_routes,
+    models as model_routes,
+    observability,
+    openapi,
+    platform,
+    projects,
+    public as public_routes,
+    shares as share_routes,
+    skills,
+    templates as template_routes,
+)
 from app.core.config import get_settings
+from app.core.logging import get_logger, request_id, setup_logging
 from app.services import audit, metrics, ratelimit, tickets
+
+logger = get_logger("app.main")
 
 # 控制台无需登录即可访问的端点：登录本身与健康探针
 PUBLIC_API_PATHS = {"/api/auth/login", "/api/health"}
@@ -45,6 +62,11 @@ async def lifespan(app: FastAPI):
     """
     from app.services import checkpoints
 
+    # uvicorn 的 configure_logging 可能在应用导入之后才跑（嵌入式启动、测试里
+    # 直接起 Server 都是这个顺序），会把 uvicorn.* 的 handler 再装回来。
+    # 启动时强制重挂一次，保证「谁先谁后都输出同一种格式」。
+    setup_logging(force=True)
+
     # 安全基线：prod 下不允许用默认密钥启动（默认值等于把 MCP 凭证明文放桌上）。
     _s = get_settings()
     if _s.secret_key == "einstein-local-secret-change-me":
@@ -53,16 +75,15 @@ async def lifespan(app: FastAPI):
                 "APP_ENV=prod 时必须设置 APP_SECRET_KEY（≥32 位随机串），"
                 "否则 MCP 凭证加密形同虚设"
             )
-        print(
-            "[security] APP_SECRET_KEY 仍是默认值，凭证加密不具备保护作用；"
-            "生产部署请设置 APP_ENV=prod 并配置密钥",
-            flush=True,
+        logger.warning(
+            "APP_SECRET_KEY 仍是默认值，凭证加密不具备保护作用；"
+            "生产部署请设置 APP_ENV=prod 并配置密钥"
         )
 
     try:
         await checkpoints.purge_expired()
     except Exception as exc:  # noqa: BLE001 — 清理失败不能挡住启动
-        print(f"[checkpoint] 启动清理失败：{type(exc).__name__}: {exc}", flush=True)
+        logger.warning("检查点启动清理失败：%s: %s", type(exc).__name__, exc)
 
     async def sweeper() -> None:
         while True:
@@ -72,7 +93,7 @@ async def lifespan(app: FastAPI):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — 单次失败不影响下一轮
-                print(f"[checkpoint] 定期清理失败：{type(exc).__name__}: {exc}", flush=True)
+                logger.warning("检查点定期清理失败：%s: %s", type(exc).__name__, exc)
 
     async def alert_loop(minutes: int) -> None:
         """定期评估告警规则。
@@ -87,30 +108,54 @@ async def lifespan(app: FastAPI):
             try:
                 result = await alert_service.evaluate_all()
                 if result.get("fired"):
-                    print(f"[alert] 触发 {len(result['fired'])} 条告警", flush=True)
+                    logger.info("告警评估触发 %d 条", len(result["fired"]))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — 单轮失败不影响下一轮
-                print(f"[alert] 评估失败：{type(exc).__name__}: {exc}", flush=True)
+                logger.warning("告警评估失败：%s: %s", type(exc).__name__, exc)
+
+    async def _warm_deck() -> None:
+        """预热 SVG→PPT 转换器。
+
+        首次编译 1.5s 全花在 skia / 字体库初始化上，与页数无关；热起来之后
+        同样一份 deck 只要 0.25s。不预热的话这笔钱由「第一个点开设计稿的人」
+        付。延迟几秒再跑，避开启动时的连接池/迁移高峰。
+        """
+        from app.services.capabilities import svgdeck
+
+        try:
+            await asyncio.sleep(3)
+            await asyncio.to_thread(svgdeck.warm_up)
+            logger.debug("svgdeck 转换器预热完成")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — 纯优化，失败不影响任何功能
+            logger.debug("svgdeck 预热跳过：%s", exc)
 
     task = asyncio.create_task(sweeper())
+    warm_task = asyncio.create_task(_warm_deck())
     interval = int(getattr(get_settings(), "alert_interval_minutes", 0) or 0)
     alert_task = asyncio.create_task(alert_loop(interval)) if interval > 0 else None
     try:
         yield
     finally:
         task.cancel()
+        warm_task.cancel()
         if alert_task is not None:
             alert_task.cancel()
         try:
             await task
         except asyncio.CancelledError:
-            pass
+            pass  # 预期路径：取消后 await 必然抛 CancelledError
         if alert_task is not None:
             try:
                 await alert_task
             except asyncio.CancelledError:
-                pass
+                pass  # 预期路径：取消后 await 必然抛 CancelledError
+        try:
+            await warm_task
+        except asyncio.CancelledError:
+            pass  # 预期路径：预热还没跑完就被要求停机
         await checkpoints.close()
 
 
@@ -181,6 +226,9 @@ def _rate_limit_v1(request: Request) -> JSONResponse | None:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    # 最先做：后面 create_app 里的启动自愈、异常处理器都要打日志，
+    # 晚一步的话这些日志会因为 root 没有 handler 而走 lastResort 丢格式。
+    setup_logging()
     # debug 固定为 False：Starlette 在 debug=True 时会把完整堆栈直接写进响应体，
     # 泄漏绝对路径与依赖版本。服务端仍会由 uvicorn 打印完整 traceback。
     app = FastAPI(
@@ -189,9 +237,8 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def _unhandled_error(request: Request, exc: Exception) -> JSONResponse:
-        logging.getLogger("app.errors").exception(
-            "unhandled error on %s %s", request.method, request.url.path
-        )
+        # 带上请求 id + 方法路径：日志里能直接对上前端拿到的 X-Request-Id
+        logger.exception("未处理异常 %s %s", request.method, request.url.path)
         return JSONResponse(
             status_code=500,
             content={"detail": "服务器内部错误，请稍后重试或联系管理员"},
@@ -313,6 +360,24 @@ def create_app() -> FastAPI:
             )
         return response
 
+    @app.middleware("http")
+    async def _request_id_middleware(request: Request, call_next):
+        """给每个请求一个追踪 id，贯穿日志与响应头。
+
+        必须最后注册——`@app.middleware` 是「后注册的在外层」，这里要包住鉴权和
+        metrics，它们打出来的 401、慢请求日志才会带同一个 id。客户端带了
+        x-request-id 就沿用，前端把浏览器侧报错贴过来时能直接对上台服日志。
+        """
+        rid = (request.headers.get("x-request-id") or uuid.uuid4().hex)[:32]
+        # 刻意不 reset：SSE 的响应体是在 call_next 返回**之后**才迭代的，
+        # reset 掉的话流式生成阶段（chat/agent 的 token 转发日志）里
+        # request_id 全变成 "-"，恰好是排障最需要它的场景。
+        # 每个请求跑在独立 asyncio task 里，contextvar 天然隔离，不 reset 不会串号。
+        request_id.set(rid)
+        response = await call_next(request)
+        response.headers["X-Request-Id"] = rid
+        return response
+
     app.include_router(health.router, prefix="/api")
     app.include_router(projects.router, prefix="/api")
     app.include_router(browse.router, prefix="/api")
@@ -347,9 +412,9 @@ def create_app() -> FastAPI:
             kb.UPLOAD_DIR, max_age_hours=settings.import_staging_ttl_hours
         )
         if removed:
-            print(f"[startup] 清理过期批次暂存目录 {removed} 个", flush=True)
+            logger.info("清理过期批次暂存目录 %d 个", removed)
     except Exception as exc:  # noqa: BLE001 — 清理失败不能挡住启动
-        print(f"[startup] 清理批次暂存目录失败：{exc}", flush=True)
+        logger.warning("清理批次暂存目录失败：%s: %s", type(exc).__name__, exc)
 
     # RBAC 成员关系自愈：存量 user.workspaces 迁成成员表，并给每个账号补个人空间。
     # 幂等且开销极小（几毫秒），放在每次启动跑，升级后不需要手工执行迁移。
@@ -357,12 +422,11 @@ def create_app() -> FastAPI:
         from app.services import members
 
         stats = members.migrate()
-        print(
-            f"[startup] RBAC 成员关系就绪：{stats['memberships']} 条（本次补 {stats['created']}）",
-            flush=True,
+        logger.info(
+            "RBAC 成员关系就绪：%d 条（本次补 %d）", stats["memberships"], stats["created"]
         )
     except Exception as exc:  # noqa: BLE001 — 迁移失败不阻塞启动，但要把原因打出来
-        print(f"[startup] RBAC 迁移失败：{exc}", flush=True)
+        logger.warning("RBAC 迁移失败：%s: %s", type(exc).__name__, exc)
 
     # 项目登记自愈：存量目录收养进 projects 表（归空间所有者），运行时目录
     # （.agent、_scratch 等）跳过——没有这一步，老项目会在升级后集体消失。
@@ -370,12 +434,12 @@ def create_app() -> FastAPI:
         from app.services import projects as project_registry
 
         stats = project_registry.adopt_orphans()
-        print(
-            f"[startup] 项目登记就绪：本次收养 {stats['adopted']} 个，跳过内部目录 {stats['skipped']} 个",
-            flush=True,
+        logger.info(
+            "项目登记就绪：本次收养 %d 个，跳过内部目录 %d 个",
+            stats["adopted"], stats["skipped"],
         )
     except Exception as exc:  # noqa: BLE001 — 同上，不让元数据问题挡住服务
-        print(f"[startup] 项目登记迁移失败：{exc}", flush=True)
+        logger.warning("项目登记迁移失败：%s: %s", type(exc).__name__, exc)
     return app
 
 

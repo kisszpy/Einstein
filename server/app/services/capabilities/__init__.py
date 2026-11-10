@@ -16,7 +16,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
-from app.services.capabilities import code_exec, deck, ppt, sandbox, slidep, web
+from app.services.capabilities import code_exec, deck, ppt, sandbox, slidep, svgdeck, web
 
 # 能力分组（前端展示 / 默认勾选用）
 CAPABILITIES = [
@@ -48,8 +48,8 @@ CAPABILITIES = [
         "id": "ppt",
         "name": "演示文稿",
         "icon": "presentation",
-        "description": "slidep DSL 逐页生成高质量 16:9 PPT（Flexbox 布局+自动校验），或 ppt_create 快速出稿",
-        "tools": ["slide_upsert", "slide_lint", "ppt_create"],
+        "description": "slidep DSL 逐页生成高质量 16:9 PPT（Flexbox 布局+自动校验），svg_compile 走 SVG 原生管线（支持母板页），或 ppt_create 快速出稿",
+        "tools": ["slide_upsert", "slide_lint", "ppt_create", "svg_compile"],
         "default": True,
     },
 ]
@@ -171,6 +171,10 @@ class SlideLintArgs(BaseModel):
     dsl_file: str = Field(default="", description="项目内 DSL 文件相对路径")
     dsl: str = Field(default="", description="内联 DSL 字符串（与 dsl_file 二选一）")
     page_index: int = Field(default=0, description="0-based 页码上下文")
+
+
+class SvgCompileArgs(BaseModel):
+    pptx_path: str = Field(description="项目内 PPTX 相对路径，如 deck/产品发布.pptx（编译输出，不存在自动创建）")
 
 
 class PptCreateArgs(BaseModel):
@@ -330,7 +334,7 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
                 args_schema=CodeRunArgs, coroutine=None))
 
     if "slide_upsert" in wanted:
-        def _slide_common(req: "SlideUpsertArgs | SlideLintArgs") -> tuple[Path, str]:
+        def _slide_common(req: "SlideUpsertArgs | SlideLintArgs") -> tuple[Path, Path, str]:
             project = need_project()
             root = sandbox.project_dir(ws, project)
             out = sandbox.resolve_in(root, req.pptx_path)
@@ -341,19 +345,21 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
                 dsl = req.dsl
             else:
                 raise sandbox.SandboxError("dsl_file 与 dsl 至少提供一个")
-            return out, dsl
+            return root, out, dsl
 
         def _slide_upsert(pptx_path: str, dsl_file: str = "", dsl: str = "", page_index: int = -1) -> str:
-            out, text = _slide_common(SlideUpsertArgs(
+            root, out, text = _slide_common(SlideUpsertArgs(
                 pptx_path=pptx_path, dsl_file=dsl_file, dsl=dsl, page_index=page_index))
             out.parent.mkdir(parents=True, exist_ok=True)
             result = slidep.upsert(out, text, page_index)
             if result.get("ok"):
                 ctx.note_artifact(pptx_path, "pptx")
+                # 登记逐页 DSL 来源：浏览页编辑器据此提供无损 DSL 编辑（改→lint→重编译）
+                deck.remember_dsl_page(root, pptx_path, page_index, dsl_file, text)
             return sandbox.dumps(result)
 
         def _slide_lint(pptx_path: str, dsl_file: str = "", dsl: str = "", page_index: int = 0) -> str:
-            out, text = _slide_common(SlideLintArgs(
+            _root, out, text = _slide_common(SlideLintArgs(
                 pptx_path=pptx_path, dsl_file=dsl_file, dsl=dsl, page_index=page_index))
             return sandbox.dumps(slidep.lint(out, text, page_index))
 
@@ -374,6 +380,30 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
                 "upsert 后必须 lint：diagnostics 有 error 时修 DSL 再 upsert 同一页，直到无 error"
             ),
             args_schema=SlideLintArgs, coroutine=None))
+
+    if "svg_compile" in wanted:
+        def _svg_compile(pptx_path: str) -> str:
+            project = need_project()
+            root = sandbox.project_dir(ws, project)
+            rel = pptx_path.strip().replace("\\", "/")
+            if not rel.lower().endswith(".pptx"):
+                raise sandbox.SandboxError("输出路径必须以 .pptx 结尾")
+            result = svgdeck.compile_deck(root, rel)
+            ctx.note_artifact(rel, "pptx")
+            return sandbox.dumps(result)
+
+        tools.append(StructuredTool.from_function(
+            _safe(_svg_compile), name="svg_compile",
+            description=(
+                "把项目 slides/ 目录里的逐页 SVG（01.svg、02.svg…，画布固定 1280×720，纯 SVG 1.1）"
+                "一次性编译成原生形状 PPTX——文字是文本框、图形是矢量形状、渐变/圆角全部保留，"
+                "在 PowerPoint/WPS 里完全可继续编辑（不是图片贴图）。"
+                "可选母板：slides/master.svg 会作为底层合成进每一页，统一背景/页眉/装饰，"
+                "让整份 PPT 有设计规范（母板里画好背景与装饰元素，页面 SVG 只画内容层）。"
+                "生成高质量 PPT 的推荐路径之一：fs_write 写好全部页面 SVG（及可选 master.svg）"
+                "→ svg_compile 一次编译。改页时改对应 NN.svg 后重新 compile 即可"
+            ),
+            args_schema=SvgCompileArgs, coroutine=None))
 
     if "ppt_create" in wanted:
         def _ppt_create(

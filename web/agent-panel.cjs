@@ -122,7 +122,7 @@ function check(name, pass, detail = "") {
   await addr.press("Enter");
   await page.waitForTimeout(3500);
   const webText = await page
-    .frameLocator('iframe[title="内置浏览器"]')
+    .frameLocator('iframe[title="网页预览"]')
     .locator("body")
     .textContent()
     .catch(() => "");
@@ -141,9 +141,9 @@ function check(name, pass, detail = "") {
   check("项目预览入口可用", /个文件/.test(overview), overview.slice(0, 120));
 
   // 展开到独立页
-  await page.getByLabel("在浏览器页打开").click();
+  await page.getByLabel("在资产页打开").click();
   await page.waitForTimeout(900);
-  check("可在浏览器页打开", /\/browser\?/.test(page.url()), page.url());
+  check("可在资产页打开", /\/assets\?/.test(page.url()), page.url());
   check("独立页带上了项目参数", page.url().includes(`project=${PROJECT}`), page.url());
 
   await page.screenshot({ path: `${SHOTS}/panel-expanded.png` });

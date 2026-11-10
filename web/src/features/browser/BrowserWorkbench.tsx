@@ -1,23 +1,26 @@
 /**
- * 内置浏览器的工作台本体：产物 / 网页 / 演示三源。
+ * 资产页的工作台本体：产物 / 网页 / 演示三源。
  *
  * 抽成受控组件是为了两个容器共用一份实现——
- * 独立页 /browser（状态放 URL）和智能体页右侧的预览面板（状态放组件内）。
+ * 独立页 /assets（状态放 URL）和智能体页右侧的预览面板（状态放组件内）。
  */
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   BookOpen,
+  Code2,
   FileCode2,
   FolderOpen,
   Globe2,
   Loader2,
   PanelLeft,
   Presentation,
+  Projector,
   RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ArtifactView } from "./components/ArtifactView";
+import { DeckCraftStage } from "./components/DeckCraftStage";
 import { DeckEditor } from "./components/DeckEditor";
 import { FileTree } from "./components/FileTree";
 import { WebView } from "./WebView";
@@ -58,6 +61,9 @@ export function BrowserWorkbench({
   const [loadingTree, setLoadingTree] = useState(false);
   const [railOpen, setRailOpen] = useState(!compact);
   const [treeTick, setTreeTick] = useState(0);
+  /** pptx 的两种呈现：放映级（DeckCraft，默认）与结构化（服务端按主题重排）。
+   *  默认给放映级——用户要的是「所见即所得的漂亮演示」。 */
+  const [deckMode, setDeckMode] = useState<"craft" | "dsl">("craft");
 
   useEffect(() => {
     let alive = true;
@@ -94,8 +100,9 @@ export function BrowserWorkbench({
     }
     let alive = true;
     setLoadingTree(true);
+    // 浏览页只展示产物：后端按白名单后缀过滤，源码/依赖/解包残留不出现
     api
-      .projectTree(project)
+      .projectArtifacts(project)
       .then((data) => alive && setEntries(data.entries ?? []))
       .catch(() => alive && setEntries([]))
       .finally(() => alive && setLoadingTree(false));
@@ -168,7 +175,7 @@ export function BrowserWorkbench({
           <option value="">选择项目…</option>
           {projects.map((item) => (
             <option key={item.id} value={item.id}>
-              {item.name}（{item.files}）
+              {item.name}（{item.artifacts}）
             </option>
           ))}
         </select>
@@ -177,7 +184,7 @@ export function BrowserWorkbench({
           <span className="ml-auto flex items-center gap-2 pr-1 text-[12px] text-tertiary">
             {activeProject && tab !== "web" && (
               <>
-                <span>{activeProject.files} 个文件</span>
+                <span>{activeProject.artifacts} 个产物</span>
                 <span className="h-3 w-px bg-line" />
                 <span>{activeProject.size}</span>
                 <span className="h-3 w-px bg-line" />
@@ -200,7 +207,7 @@ export function BrowserWorkbench({
           >
             <div className="flex items-center justify-between px-2.5 pb-1 pt-2 text-[12px] tracking-wide text-tertiary">
               <span className="flex items-center gap-1">
-                {tab === "deck" ? "演示文稿" : "项目文件"}
+                {tab === "deck" ? "演示文稿" : "产物"}
                 {loadingTree && <Loader2 size={10} className="animate-spin" />}
               </span>
               <button
@@ -231,7 +238,7 @@ export function BrowserWorkbench({
                   )
                 ) : (
                   <p className="px-2.5 py-6 text-[12px] leading-relaxed text-tertiary">
-                    {tab === "deck" ? "这个项目还没有 pptx" : "这个项目还没有文件"}
+                    {tab === "deck" ? "这个项目还没有 pptx" : "这个项目还没有产物"}
                   </p>
                 )
               ) : (
@@ -272,12 +279,63 @@ export function BrowserWorkbench({
 
           {tab === "deck" &&
             (project && path ? (
-              <DeckEditor
-                project={project}
-                path={path}
-                compact={compact}
-                onClose={() => onChange({ path: "" })}
-              />
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                {/* 呈现方式：pptx 默认放映级（真母版/版式/动画），要批量改文字再切结构化 */}
+                <div className="flex shrink-0 items-center gap-2 border-b border-line bg-surface-1 px-2.5 py-1">
+                  <div className="flex items-center gap-0.5 rounded-md bg-surface-3 p-0.5">
+                    {(
+                      [
+                        {
+                          id: "craft" as const,
+                          label: "放映级",
+                          icon: Projector,
+                          hint: "真母版与版式、动画、放映；编辑器内 Ctrl+S 保存回传 pptx",
+                        },
+                        {
+                          id: "dsl" as const,
+                          label: "结构化",
+                          icon: Code2,
+                          hint: "改文字与版式，保存时由服务端按主题重新排版",
+                        },
+                      ] satisfies { id: "craft" | "dsl"; label: string; icon: typeof Projector; hint: string }[]
+                    ).map(({ id, label, icon: Icon, hint }) => (
+                      <button
+                        key={id}
+                        onClick={() => setDeckMode(id)}
+                        title={hint}
+                        aria-pressed={deckMode === id}
+                        className={cn(
+                          "flex items-center gap-1 rounded px-1.5 py-0.5 text-[11.5px] transition-colors",
+                          deckMode === id
+                            ? "bg-surface-1 font-medium text-primary shadow-sm"
+                            : "text-tertiary hover:text-primary",
+                        )}
+                      >
+                        <Icon size={11} strokeWidth={2} />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-tertiary">{path}</span>
+                </div>
+                <div className="min-h-0 flex-1">
+                  {deckMode === "craft" ? (
+                    <DeckCraftStage
+                      project={project}
+                      path={path}
+                      ticket={ticket}
+                      onSaved={() => setTreeTick((n) => n + 1)}
+                    />
+                  ) : (
+                    <DeckEditor
+                      project={project}
+                      path={path}
+                      compact={compact}
+                      onClose={() => onChange({ path: "" })}
+                    />
+                  )}
+                </div>
+              </div>
             ) : (
               <EmptyDeck hasProject={Boolean(project)} hasDecks={decks.length > 0} />
             ))}
@@ -343,7 +401,7 @@ function ProjectGrid({
             </span>
             <span className="w-full truncate text-[13px] font-medium">{item.name}</span>
             <span className="text-[12px] text-tertiary">
-              {item.files} 个文件 · {item.size}
+              {item.artifacts} 个产物 · {item.size}
             </span>
             <span className="text-[12px] text-tertiary">更新于 {item.updated_at}</span>
           </button>
@@ -379,7 +437,7 @@ function ProjectOverview({
     <div className="h-full overflow-y-auto px-6 py-6">
       <h2 className="text-[15px] font-medium">{projectInfo?.name || project}</h2>
       <p className="mt-1 text-[12px] text-tertiary">
-        {files.length} 个文件 · {projectInfo?.size || "—"} · 从左侧或下面的列表打开
+        {files.length} 个产物 · {projectInfo?.size || "—"} · 从左侧或下面的列表打开
       </p>
       <div className="mt-5 space-y-4">
         {Object.entries(grouped).map(([dir, list]) => (
@@ -429,7 +487,7 @@ function EmptyDeck({ hasProject, hasDecks }: { hasProject: boolean; hasDecks: bo
       </p>
       <p className="max-w-[420px] text-[12px] leading-relaxed text-tertiary">
         {hasDecks
-          ? "编辑器里可以直接改文字、换版式与主题，保存时按当前主题重新排版生成 pptx。"
+          ? "选中后默认用放映级编辑器打开：真母版与版式、动画、放映模式，Ctrl+S 直接写回这份 pptx；要批量改文字可切「结构化」。"
           : "去「智能体」页让它做一页 PPT，回来这里就能改。"}
       </p>
     </div>

@@ -17,8 +17,7 @@
 from __future__ import annotations
 
 import threading
-import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -200,8 +199,7 @@ def migrate(users_store=None, registry=None) -> dict:
     只是从此有了自己的空间；角色沿用它当时的全局角色映射到空间角色
     （owner/admin → admin，viewer → viewer，其余 → member；个人空间恒 owner）。
     """
-    from app.services import users as users_mod
-    from app.services import workspaces
+    from app.services import users as users_mod, workspaces
 
     users_store = users_store or users_mod.get_user_store()
     registry = registry or workspaces.get_workspace_store()

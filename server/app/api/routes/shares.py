@@ -46,12 +46,12 @@ def _assert_target(kind: str, target_id: str, ws: str, uid: str) -> str:
 
 
 @router.get("")
-async def list_shares(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
+def list_shares(ws: str = Depends(current_workspace), uid: str = Depends(current_uid)) -> list[dict]:
     return [shares.payload(s) for s in shares.list_shares(ws, uid)]
 
 
 @router.post("")
-async def create_share(
+def create_share(
     req: ShareCreate, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
     title = _assert_target(req.kind, req.target_id, ws, uid)
@@ -67,7 +67,7 @@ async def create_share(
 
 
 @router.delete("/{token}")
-async def revoke_share(
+def revoke_share(
     token: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
     entry = shares.revoke(token, workspace_id=ws, owner_id=uid)

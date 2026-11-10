@@ -29,6 +29,9 @@ os.environ["APP_RATELIMIT_ENABLED"] = "false"
 os.environ["APP_AGENT_CHECKPOINT"] = "memory"
 # 审批默认关闭；需要它的用例自己改配置再清缓存
 os.environ["APP_AGENT_APPROVAL_TOOLS"] = ""
+# 测试只要结论，不要 INFO 噪音：正常路径每条请求都会打日志，全开会让
+# 失败用例的 traceback 被埋掉。需要看日志的用例自己临时调级别。
+os.environ["APP_LOG_LEVEL"] = "WARNING"
 
 import pytest  # noqa: E402
 
@@ -36,6 +39,21 @@ import pytest  # noqa: E402
 @pytest.fixture(scope="session")
 def data_dir() -> Path:
     return _TMP
+
+
+@pytest.fixture(autouse=True)
+def _no_office_com(monkeypatch):
+    """测试进程绝不去碰 PowerPoint/WPS 的 COM。
+
+    本机 `PowerPoint.Application` 实际注册的是 WPS 兼容层，调用会抛
+    RPC_E_DISCONNECTED（0x80010108）——那是 C 层抛的 Windows fatal exception，
+    try/except 兜不住，会直接把 pytest 进程打断在随机位置（已实际发生）。
+    PPT 预览图只是「设计稿」模式的增强，没有它编辑器退化成大纲/DSL 模式，
+    测试里一律按「本机没装 Office」处理。
+    """
+    from app.services.capabilities import deck
+
+    monkeypatch.setattr(deck, "_slide_images", lambda *a, **k: [])
 
 
 @pytest.fixture(scope="session", autouse=True)

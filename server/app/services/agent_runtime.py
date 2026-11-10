@@ -13,8 +13,11 @@ import time
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.services import metrics
 from app.services.tools import preflight_kb
+
+logger = get_logger(__name__)
 
 TOOL_PREVIEW = 300   # 步骤条里工具参数/结果的显示上限
 
@@ -136,7 +139,7 @@ def recall_memory(ctx: Any, task: str, top_k: int = 3) -> list[str]:
 
         rows = memory_service.relevant_memory(workspace_id, task, top_k=top_k)
     except Exception as exc:  # noqa: BLE001 — 记忆读失败不该让任务起不来
-        print(f"[agent] 长期记忆召回失败（忽略）：{type(exc).__name__}: {exc}", flush=True)
+        logger.warning("长期记忆召回失败（忽略）：%s: %s", type(exc).__name__, exc)
         return []
     items = [str(r.get("content") or "").strip() for r in rows]
     items = [t for t in items if t]

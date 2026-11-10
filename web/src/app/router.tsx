@@ -1,6 +1,8 @@
 import { lazy, Suspense } from "react";
-import { createBrowserRouter, Navigate } from "react-router-dom";
+import { createBrowserRouter, Navigate, useLocation } from "react-router-dom";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AppLayout } from "./layout/AppLayout";
+import { NotFoundPage } from "./NotFoundPage";
 import { BootScreen, RequireAuth } from "./RequireAuth";
 import { LoginPage } from "@/features/auth/LoginPage";
 
@@ -33,10 +35,26 @@ const ModelsPage = lazy(() =>
 const PublicPage = lazy(() =>
   import("@/features/share/PublicPage").then((m) => ({ default: m.PublicPage })),
 );
+const DeckCraftPage = lazy(() =>
+  import("@/features/deck-editor/DeckCraftPage").then((m) => ({ default: m.DeckCraftPage })),
+);
 
-/** 懒加载页共用 fallback：和首屏启动态同一套 spinner。 */
+/** 懒加载页共用 fallback：和首屏启动态同一套 spinner。
+ *  外面套一层错误边界：单页渲染崩了只废这一页，侧栏还在、能换页；
+ *  key=pathname 让换页时自动重置，不会一直卡在上一页的报错上。 */
 function LazyPage({ children }: { children: React.ReactNode }) {
-  return <Suspense fallback={<BootScreen />}>{children}</Suspense>;
+  const { pathname } = useLocation();
+  return (
+    <ErrorBoundary key={pathname}>
+      <Suspense fallback={<BootScreen />}>{children}</Suspense>
+    </ErrorBoundary>
+  );
+}
+
+/** 旧入口：/browser → /assets。查询参数（tab/project/path/url）是深链的载体，必须带过去。 */
+function LegacyAssetsRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={`/assets${search}`} replace />;
 }
 
 export const router = createBrowserRouter([
@@ -68,10 +86,22 @@ export const router = createBrowserRouter([
         ),
       },
       {
-        path: "browser",
+        path: "assets",
         element: (
           <LazyPage>
             <BrowserPage />
+          </LazyPage>
+        ),
+      },
+      // 旧入口兼容：/browser 已改名为「资产」，深链的 tab/project/path/url 要一并带过去
+      { path: "browser", element: <LegacyAssetsRedirect /> },
+      // 旧入口兼容：/deck 曾是 PPTist 编辑器，已整体下线，老书签/老链接落到 DeckCraft
+      { path: "deck", element: <Navigate to="/deckcraft" replace /> },
+      {
+        path: "deckcraft",
+        element: (
+          <LazyPage>
+            <DeckCraftPage />
           </LazyPage>
         ),
       },
@@ -157,4 +187,6 @@ export const router = createBrowserRouter([
       },
     ],
   },
+  // catch-all：没匹配上的路径给出产品化的 404，而不是 React Router 的开发者提示页
+  { path: "*", element: <NotFoundPage /> },
 ]);

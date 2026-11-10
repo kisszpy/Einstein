@@ -19,20 +19,18 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.services.state import blob
-
 from langchain_core.messages import HumanMessage, SystemMessage
-
-from app.services import metrics
-from app.services.llm import complete
-from app.services.rag import build_context_block, search
-from app.services.store import get_store
 
 from app.core.config import get_settings
 from app.db.engine import get_db
 from app.db.rows import TableState
 from app.db.schema import migrate
 from app.db.tables import EVAL_RUNS
+from app.services import metrics
+from app.services.llm import complete
+from app.services.rag import build_context_block, search
+from app.services.state import blob
+from app.services.store import get_store
 
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 _STORE_PATH = _DATA_DIR / "eval_sets.json"

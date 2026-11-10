@@ -22,6 +22,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from app.core.logging import get_logger
 from app.services.queue.base import (
     DEFAULT_LEASE_SECONDS,
     DONE,
@@ -32,6 +33,8 @@ from app.services.queue.base import (
     dumps,
     loads,
 )
+
+logger = get_logger(__name__)
 
 
 def _now() -> str:
@@ -170,9 +173,9 @@ class RedisQueue:
             # 崩溃会丢这一条——比整个队列不可用要好，但要让人看得见。
             if "unknown command" not in str(exc).lower():
                 raise
-            print(
-                "[queue] Redis 版本过低（无 LMOVE），领取降级为 BLPOP；"
-                "崩溃窗口内可能丢任务，建议升级到 6.2+", flush=True,
+            logger.warning(
+                "Redis 版本过低（无 LMOVE），领取降级为 BLPOP；"
+                "崩溃窗口内可能丢任务，建议升级到 6.2+"
             )
             if block_seconds > 0:
                 try:
@@ -263,7 +266,7 @@ class RedisQueue:
         if not self.r.exists(key):
             return None
         if not self._owned(job_id):
-            print(f"[queue] {job_id} 已被其它 worker 接手，忽略本次 complete", flush=True)
+            logger.info("任务 %s 已被其它 worker 接手，忽略本次 complete", job_id)
             return None
         self.r.hset(key, mapping={
             "status": DONE, "result": dumps(result), "error": "",
@@ -277,7 +280,7 @@ class RedisQueue:
         if not self.r.exists(key):
             return None
         if not self._owned(job_id):
-            print(f"[queue] {job_id} 已被其它 worker 接手，忽略本次 fail", flush=True)
+            logger.info("任务 %s 已被其它 worker 接手，忽略本次 fail", job_id)
             return None
         states = self.r.hgetall(key)
         attempts = int(states.get("attempts") or 0)

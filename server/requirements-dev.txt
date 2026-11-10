@@ -3,3 +3,6 @@
 
 pytest>=8.0
 pytest-asyncio>=0.24
+# 静态检查（规则集见 ruff.toml，刻意收窄；CI 与 pre-commit 共用）
+# 注意：清华镜像缺 ruff，装不上时加 `-i https://pypi.org/simple`
+ruff>=0.8

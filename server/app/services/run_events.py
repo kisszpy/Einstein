@@ -29,10 +29,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.db.engine import get_db
 from app.db.rows import TableState
 from app.db.schema import migrate
 from app.db.tables import RUN_EVENTS
+
+logger = get_logger(__name__)
 
 # 落库的事件名：有「重放价值」的离散瞬间。
 # 漏掉某个名字的后果是「重连后少一段」，不会报错——所以新增事件时记得回来加。
@@ -126,7 +129,7 @@ def append(
                 with path.open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
     except Exception as exc:  # noqa: BLE001 — 记日志失败不该影响正在跑的任务
-        print(f"[run-events] 写入失败 {run_id}#{seq} {event}: {type(exc).__name__}: {exc}", flush=True)
+        logger.warning("事件写入失败 %s#%s %s: %s: %s", run_id, seq, event, type(exc).__name__, exc)
         return False
     return True
 
@@ -182,7 +185,7 @@ def replay(
             rows.sort(key=lambda r: int(r.get("seq") or 0))
             rows = rows[:limit]
     except Exception as exc:  # noqa: BLE001 — 表还没建好等，当作没有
-        print(f"[run-events] 读取失败 {run_id}: {type(exc).__name__}: {exc}", flush=True)
+        logger.warning("事件读取失败 %s: %s: %s", run_id, type(exc).__name__, exc)
         return []
 
     out: list[tuple[int, str, dict]] = []
@@ -273,5 +276,5 @@ def prune(hours: int = 24) -> int:
                     except OSError:
                         continue
     except Exception as exc:  # noqa: BLE001
-        print(f"[run-events] 清理失败: {type(exc).__name__}: {exc}", flush=True)
+        logger.warning("事件清理失败: %s: %s", type(exc).__name__, exc)
     return removed

@@ -15,9 +15,12 @@ import time
 from dataclasses import dataclass, field
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.services import traces
 from app.services.rag import EmbeddingMismatch, RetrievedChunk, search
 from app.services.store import get_store
+
+logger = get_logger(__name__)
 
 DEFAULT_TOP_K = 4
 
@@ -77,7 +80,7 @@ async def retrieve(
             search_query = await rewrite_query(history, query) or query
             rewritten = search_query.strip() != query.strip()
         except Exception as exc:  # noqa: BLE001 — 改写是增益项，失败用原句
-            print(f"[retrieval] 查询改写失败：{type(exc).__name__}: {exc}", flush=True)
+            logger.warning("查询改写失败：%s: %s", type(exc).__name__, exc)
 
     try:
         t0 = time.perf_counter()
@@ -89,7 +92,7 @@ async def retrieve(
     except EmbeddingMismatch as exc:
         # 不抛给上层：调用方（对话/工具）拿到的是一句可操作的提示，
         # 而不是 500，也不是"知识库里没有相关内容"这种误导性结论。
-        print(f"[retrieval] 嵌入指纹不匹配：{exc}", flush=True)
+        logger.warning("嵌入指纹不匹配：%s", exc)
         traces.note_retrieval(
             query=query, rewritten=search_query if rewritten else "",
             mode=get_settings().retrieval_mode, missed=True,

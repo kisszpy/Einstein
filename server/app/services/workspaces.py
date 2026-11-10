@@ -11,7 +11,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.core.logging import get_logger
 from app.services.state import blob
+
+logger = get_logger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 STORE_PATH = DATA_DIR / "workspaces.json"
@@ -98,8 +101,8 @@ class WorkspaceStore:
         try:
             payload = _STATE.read() or {}
             store.items = {k: Workspace(**v) for k, v in payload.items()}
-        except Exception:  # noqa: BLE001 — 损坏则重建
-            pass
+        except Exception as exc:  # noqa: BLE001 — 损坏则重建
+            logger.warning("工作区数据文件损坏，已重建：%s", exc)
         store.ensure_default()
         return store
 

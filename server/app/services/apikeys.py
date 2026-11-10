@@ -5,7 +5,6 @@
 """
 
 import hashlib
-import json
 import secrets
 import threading
 import uuid
@@ -13,9 +12,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.core.logging import get_logger
 from app.services.state import blob
-
 from app.services.workspaces import DEFAULT_ID
+
+logger = get_logger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 STORE_PATH = DATA_DIR / "api_keys.json"
@@ -114,8 +115,8 @@ class ApiKeyStore:
         try:
             payload = _STATE.read() or {}
             store.items = {k: ApiKey(**v) for k, v in payload.items()}
-        except Exception:  # noqa: BLE001 — 损坏则重建
-            pass
+        except Exception as exc:  # noqa: BLE001 — 损坏则重建
+            logger.warning("API 密钥文件损坏，已重置为空（旧密钥全部失效）：%s", exc)
         return store
 
 

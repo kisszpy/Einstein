@@ -30,6 +30,10 @@ jobs:
         working-directory: server
         run: python -m compileall -q app tools
 
+      - name: 代码规范（ruff）
+        working-directory: server
+        run: python -m ruff check app tools tests
+
       - name: 单元测试（pytest）
         working-directory: server
         run: python -m pytest
@@ -88,6 +92,10 @@ jobs:
       - name: 类型检查
         working-directory: web
         run: npm run typecheck
+
+      - name: 单元测试（vitest）
+        working-directory: web
+        run: npm test
 
       - name: 构建
         working-directory: web

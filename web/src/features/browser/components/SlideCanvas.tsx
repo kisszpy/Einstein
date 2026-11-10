@@ -1,72 +1,8 @@
 /** 幻灯片画布：按服务端 ppt.py 的版式参数 1:1 换算成 CSS，做到编辑时所见即所得。 */
 
-import { useEffect, useRef } from "react";
 import type { DeckSlide, ThemePreset } from "../types";
 import { cn } from "@/lib/utils";
-
-const SLIDE_W = 13.333;
-const MARGIN = 0.9;
-
-/** 英寸 → 画布宽度百分比。 */
-const pct = (inch: number) => `${(inch / SLIDE_W) * 100}%`;
-/** 磅 → 容器查询宽度单位（幻灯片宽 960pt，正好是容器的 100cqw）。 */
-const pt = (size: number) => `${(size / 960) * 100}cqw`;
-
-const hex = (value: string, fallback: string) => (value ? `#${value}` : fallback);
-
-interface EditableProps {
-  value: string;
-  onCommit?: (next: string) => void;
-  style?: React.CSSProperties;
-  className?: string;
-  placeholder?: string;
-  editable: boolean;
-}
-
-/** contentEditable 只在失焦时回写，避免输入过程中被 React 重置光标。 */
-function Editable({ value, onCommit, style, className, placeholder, editable }: EditableProps) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const focused = useRef(false);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (el && !focused.current && el.innerText !== value) el.innerText = value;
-  }, [value]);
-
-  if (!editable) {
-    return (
-      <div style={style} className={className}>
-        {value}
-      </div>
-    );
-  }
-  return (
-    <div
-      ref={ref}
-      contentEditable
-      suppressContentEditableWarning
-      spellCheck={false}
-      data-placeholder={placeholder}
-      style={style}
-      className={cn(className, "outline-none focus:ring-1 focus:ring-brand/60 rounded-[2px]")}
-      onFocus={() => {
-        focused.current = true;
-      }}
-      onBlur={(event) => {
-        focused.current = false;
-        onCommit?.(event.currentTarget.innerText.replace(/\u00a0/g, " ").trim());
-      }}
-      onKeyDown={(event) => {
-        event.stopPropagation();
-        if (event.key === "Enter" && !event.shiftKey) {
-          event.preventDefault();
-          event.currentTarget.blur();
-        }
-        if (event.key === "Escape") event.currentTarget.blur();
-      }}
-    />
-  );
-}
+import { Editable, MARGIN, SLIDE_W, hex, pct, pt } from "./slide-primitives";
 
 interface SlideCanvasProps {
   slide: DeckSlide;

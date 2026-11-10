@@ -1,14 +1,15 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity,
+  Archive,
   Blocks,
   Bot,
   Cpu,
   Database,
   FlaskConical,
-  Globe,
   KeyRound,
   MessagesSquare,
+  Projector,
   Settings2,
   type LucideIcon,
 } from "lucide-react";
@@ -32,7 +33,8 @@ const NAV: { title: string; items: NavEntry[] }[] = [
     title: "工作台",
     items: [
       { to: "/chat", label: "对话", icon: MessagesSquare },
-      { to: "/browser", label: "浏览器", icon: Globe },
+      { to: "/assets", label: "资产", icon: Archive },
+      { to: "/deckcraft", label: "放映级编辑", icon: Projector },
       { to: "/kb", label: "知识库", icon: Database },
       {
         to: "/experts",

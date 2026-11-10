@@ -27,6 +27,10 @@ from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches, Pt
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 SLIDE_W = Inches(13.333)
 SLIDE_H = Inches(7.5)
 FONT = "Microsoft YaHei"
@@ -155,8 +159,10 @@ def _rect(slide, x, y, w, h, fill: str, shape=MSO_SHAPE.RECTANGLE,
     if radius is not None and shape == MSO_SHAPE.ROUNDED_RECTANGLE:
         try:
             box.adjustments[0] = radius
-        except (IndexError, ValueError):
-            pass
+        except (IndexError, ValueError) as exc:
+            # 该版式的圆角可调项数量不一致，改不动就用模板默认值——
+            # 视觉上退一档，但不该让整页生成失败
+            logger.debug("圆角调整失败，沿用默认：%s", exc)
     return box
 
 

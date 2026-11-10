@@ -11,9 +11,11 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from app.db.engine import Database
-from app.db.tables import AGENT_APPROVALS as _AGENT_APPROVALS_TABLE
-from app.db.tables import PROJECTS as _PROJECTS_TABLE
-from app.db.tables import ddl_all as _domain_tables_ddl
+from app.db.tables import (
+    AGENT_APPROVALS as _AGENT_APPROVALS_TABLE,
+    PROJECTS as _PROJECTS_TABLE,
+    ddl_all as _domain_tables_ddl,
+)
 
 _PROJECTS_DDL = _PROJECTS_TABLE.ddl()
 

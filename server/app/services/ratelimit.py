@@ -16,6 +16,9 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 # 当前请求的工作区（鉴权中间件里 set），llm 层用它记 Token 配额
 current_ws: ContextVar[str] = ContextVar("current_ws", default="")
@@ -25,6 +28,19 @@ _lock = threading.Lock()
 
 _redis = None
 _redis_tried = False
+# Redis 故障只吼一次：逐请求打日志会把真正的错误淹掉，而这条降级在
+# 多副本部署下意味着「每个副本各算各的额度」——必须让人看见一次。
+_redis_degraded = False
+
+
+def _note_redis_failure(exc: Exception) -> None:
+    global _redis_degraded
+    if _redis_degraded:
+        return
+    _redis_degraded = True
+    logger.warning(
+        "Redis 限流/配额不可用，已降级为进程内计数（多副本下额度不会共享）：%s", exc
+    )
 
 
 def _get_redis():
@@ -105,8 +121,8 @@ def quota_usage(workspace_id: str, kind: str) -> int:
     if client is not None:
         try:
             return int(client.get(quota_key(workspace_id, kind)) or 0)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001 — 回退内存计数
+            _note_redis_failure(exc)
     with _lock:
         count, _end = _memory.get(quota_key(workspace_id, kind), (0, 0))
         return count
@@ -122,8 +138,8 @@ def quota_incr(workspace_id: str, kind: str, amount: int = 1) -> None:
             pipe.expire(key, 90000)  # 25h，跨过自然日重置
             pipe.execute()
             return
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001 — 回退内存计数
+            _note_redis_failure(exc)
     with _lock:
         key = quota_key(workspace_id, kind)
         count, _end = _memory.get(key, (0, 0))

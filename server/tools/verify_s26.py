@@ -3,7 +3,6 @@
 用法（后端已启动）：.venv/Scripts/python.exe tools/verify_s26.py
 """
 
-import base64
 import io
 import json
 import sys

@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import numpy as np
 
+from app.core.logging import get_logger
 from app.db.models import Chunk
+
+logger = get_logger(__name__)
 
 # 一次参与矩阵运算的行数：4096 维 × 1024 行 ≈ 16MB，留出安全余量
 BATCH_ROWS = 1024
@@ -42,10 +45,10 @@ class MemoryIndex:
         if len(usable) != len(rows):
             # 早先这里是静默过滤：换过嵌入模型（4096 → 2560 维）后整库"消失"，
             # hybrid 只剩 BM25，而没人会发现。宁可吵，也要把根因说出来。
-            print(
-                f"[vector] 维度不匹配丢弃 {len(rows) - len(usable)} 条切片"
-                f"（查询 {dim} 维）：换过嵌入模型？请跑 tools/rebuild_vector_index.py 重建",
-                flush=True,
+            logger.warning(
+                "维度不匹配丢弃 %d 条切片（查询 %d 维）：换过嵌入模型？"
+                "请跑 tools/rebuild_vector_index.py 重建",
+                len(rows) - len(usable), dim,
             )
         if not usable:
             return []

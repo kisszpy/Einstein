@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app.api.deps import current_uid, current_workspace
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.services import (
     approvals,
     models,
@@ -22,6 +23,8 @@ from app.services.capabilities import AgentContext, sandbox
 from app.services.history import get_history_store
 from app.services.store import get_store
 from app.services.tools import list_tools
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -50,14 +53,14 @@ def _sse(event: str, data: dict) -> str:
 
 
 @router.get("/tools")
-async def get_tools(
+def get_tools(
     ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
     return list_tools(ws, uid)
 
 
 @router.get("/runs")
-async def list_runs(
+def list_runs(
     ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> list[dict]:
     history = get_history_store()
@@ -80,7 +83,7 @@ async def list_runs(
 
 
 @router.delete("/runs/{run_id}")
-async def delete_run(
+def delete_run(
     run_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> dict:
     """删除一个任务会话（含所有追问轮次）。参数可以是会话 id 或任一轮次的 run id。"""
@@ -102,7 +105,7 @@ class ApproveRequest(BaseModel):
 
 
 @router.post("/approve")
-async def approve_tool(
+def approve_tool(
     payload: ApproveRequest,
     ws: str = Depends(current_workspace),
     uid: str = Depends(current_uid),
@@ -216,7 +219,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
                 yield _sse("error", {"message": str(exc)})
                 return
     except Exception as exc:  # noqa: BLE001 — 建流阶段失败也要回 error 事件，不能静默断流
-        print(f"[agent-stream] setup-error: {type(exc).__name__}: {exc}", flush=True)
+        logger.error("agent 流启动失败：%s: %s", type(exc).__name__, exc)
         yield _sse("error", {"message": f"{type(exc).__name__}: {exc}"})
         return
 
@@ -241,7 +244,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
             resume_decision = {"type": "approve"}
         # 一次确认只用一次：续跑开始就消费，避免同一条记录被反复复用
         approvals.consume(record["id"])
-        print(f"[agent-stream] resume session={session_id} decision={record['decision']}", flush=True)
+        logger.info("恢复被中断的运行 session=%s decision=%s", session_id, record["decision"])
 
     if pinned_skills:
         from app.services import audit as audit_svc
@@ -251,15 +254,14 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
             method="AGENT_SKILLS", path="/agent/run", status=200,
             duration_ms=0.0, detail=",".join(pinned_skills),
         )
-        print(f"[agent-stream] skills={','.join(pinned_skills)}", flush=True)
+        logger.info("本轮固定技能：%s", ",".join(pinned_skills))
 
     # 执行与 SSE 解耦：任务跑在独立 task 里，事件先写登记簿，这里只做转发。
     # 客户端断开（切标签页/网络闪断）不再连带把任务掐掉，产物与运行记录都还在。
     run = run_registry.create(session_id=session_id, workspace_id=ws, owner_id=uid)
     yield _sse("meta", {"run_id": run.run_id, "session_id": session_id, "turn": turn})
-    print(
-        f"[agent-stream] {run.run_id} start session={session_id} turn={turn} task={req.task[:40]!r}",
-        flush=True,
+    logger.info(
+        "%s 开始 session=%s turn=%s task=%r", run.run_id, session_id, turn, req.task[:40]
     )
 
     async def _execute() -> None:
@@ -354,7 +356,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
                 "project": ctx.project,
                 "artifacts": artifacts,
             })
-            print(f"[agent-stream] {run.run_id} done steps={len(steps)}", flush=True)
+            logger.info("%s 完成 steps=%d", run.run_id, len(steps))
 
             # 持久化运行历史（同一会话的多轮）
             history.add_agent_run(
@@ -386,7 +388,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
         except Exception as exc:  # noqa: BLE001 — 统一转 SSE error 事件
             status = "failed"
             error_kind = type(exc).__name__
-            print(f"[agent-stream] {run.run_id} run-error: {type(exc).__name__}: {exc}", flush=True)
+            logger.exception("%s 运行失败：%s: %s", run.run_id, type(exc).__name__, exc)
             # 失败也落一条历史：产物可能已经写到磁盘上，不给记录等于"这次根本没跑过"
             try:
                 history.add_agent_run(
@@ -395,7 +397,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
                     artifacts=artifacts, session_id=session_id, turn=turn, owner_id=uid,
                 )
             except Exception as save_exc:  # noqa: BLE001 — 落库失败不能盖掉原始错误
-                print(f"[agent-stream] {run.run_id} 失败记录未能落库：{save_exc}", flush=True)
+                logger.warning("%s 失败记录未能落库：%s", run.run_id, save_exc)
             run.push("error", {"message": f"{type(exc).__name__}: {exc}"})
         finally:
             try:
@@ -405,7 +407,7 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
                     interrupt=interrupt_tool,
                 )
             except Exception as exc:  # noqa: BLE001 — 埋点失败不能影响运行结果
-                print(f"[trace] 写入失败：{type(exc).__name__}: {exc}", flush=True)
+                logger.warning("trace 写入失败：%s: %s", type(exc).__name__, exc)
             run.finish(failed=status != "ok")
 
     task = asyncio.create_task(_execute())
@@ -441,7 +443,7 @@ async def _forward(run: run_registry.RunRecord) -> AsyncIterator[str]:
 
 
 @router.get("/runs/active")
-async def list_active_runs(
+def list_active_runs(
     ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> list[dict]:
     """当前空间里还没结束的运行。前端刷新后靠它重新挂上 SSE 订阅。
@@ -454,7 +456,7 @@ async def list_active_runs(
 
 
 @router.get("/runs/{run_id}/stream")
-async def reconnect_run(
+def reconnect_run(
     run_id: str,
     ws: str = Depends(current_workspace),
     uid: str = Depends(current_uid),
@@ -497,7 +499,7 @@ async def _forward_persisted(run_id: str, *, ws: str, uid: str) -> AsyncIterator
 
 
 @router.post("/run")
-async def run(
+def run(
     req: AgentRunRequest, ws: str = Depends(current_workspace), uid: str = Depends(current_uid),
 ) -> StreamingResponse:
     """SSE 运行智能体。事件：meta -> (step|artifact)* -> [citations] -> answer_start -> delta* -> done | error。"""

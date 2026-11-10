@@ -8,6 +8,10 @@
 - 只搬认识的域（`tables.DOMAIN_TABLES`），不认识的留在 domain_state 里并告警；
 - 各域 payload 形状不同（字典/数组/按工作区分组/按评测集分组），由
   `_rows_of` 逐个展开成行。
+
+**这里的 print 是有意保留的**：本模块由 `tools/migrate_legacy.py` 这样的
+命令行入口调用，`verbose=True` 时逐域打印进度是给人看的交互输出，不是服务
+日志——改走 logger 反而会被级别过滤掉，运维敲完命令看不到任何反馈。
 """
 
 from __future__ import annotations

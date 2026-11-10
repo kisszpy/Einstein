@@ -19,11 +19,14 @@ from typing import Literal
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.core.config import get_settings
-from app.services.embeddings import embed_texts
+from app.core.logging import get_logger
 from app.services import lexical
+from app.services.embeddings import embed_texts
 from app.services.rerank import rerank_hits
-from app.services.store import Chunk, Document, KBStore, get_store
+from app.services.store import Chunk, Document, KBStore
 from app.services.vector import MemoryIndex, VectorIndexError, get_vector_index
+
+logger = get_logger(__name__)
 
 DEFAULT_CHUNK_SIZE = 500
 DEFAULT_CHUNK_OVERLAP = 50
@@ -83,7 +86,7 @@ def index_fingerprint(store: KBStore, kb_ids: list[str]) -> tuple[str, int] | No
                 found = (chunk.embedding_model, int(chunk.embedding_dim or 0))
                 break
     except Exception as exc:  # noqa: BLE001 — 指纹查不到不该让检索失败
-        print(f"[rag] 读取嵌入指纹失败（跳过校验）：{type(exc).__name__}: {exc}", flush=True)
+        logger.warning("读取嵌入指纹失败（跳过校验）：%s: %s", type(exc).__name__, exc)
         return None
 
     _FP_CACHE[key] = (now, *(found or ("", 0)))
@@ -328,8 +331,10 @@ async def reembed_chunk(store: KBStore, chunk_id: str, text: str) -> Chunk | Non
     )
     try:
         get_vector_index().upsert(store.get_chunks([chunk_id]))
-    except VectorIndexError:
-        pass
+    except VectorIndexError as exc:
+        # 切片已落库，向量索引只是加速层：写失败不影响正确性（检索会走回表），
+        # 但这条库在 rebuild 前一直缺索引，留个 debug 线索
+        logger.debug("切片 %s 写入向量索引失败：%s", chunk_id, exc)
     rows = store.get_chunks([chunk_id])
     return rows[0] if rows else None
 
@@ -390,7 +395,7 @@ async def search(
             candidates = store.get_chunks([cid for cid, _ in vec_hits])
         except VectorIndexError as exc:
             # 索引故障降级为内存计算：宁可慢，不可检索整体 500
-            print(f"[rag] 向量索引不可用，降级内存打散：{exc}", flush=True)
+            logger.warning("向量索引不可用，降级为内存暴力检索：%s", exc)
             candidates = store.list_chunks(kb_ids)
             vec_hits = MemoryIndex.score(candidates, qvec, width)
         if not candidates:
@@ -415,7 +420,7 @@ async def search(
             try:
                 vec_hits = index.search(kb_ids, qvec, width, chunks=candidates or None)
             except VectorIndexError as exc:
-                print(f"[rag] 向量索引不可用，降级内存打散：{exc}", flush=True)
+                logger.warning("向量索引不可用，降级为内存暴力检索：%s", exc)
                 candidates = store.list_chunks(kb_ids, with_vector=True)
                 vec_hits = MemoryIndex.score(candidates, qvec, width)
 
@@ -528,8 +533,9 @@ def apply_score_gate(
             (h.rerank_score if h.rerank_score is not None else (h.vector_score or 0.0))
             for h in hits
         )
-        print(f"[rag] 全部命中低于相关性门限 {min_score:.2f}（最高 {best:.2f}），按未命中处理",
-              flush=True)
+        logger.info(
+            "全部命中低于相关性门限 %.2f（最高 %.2f），按未命中处理", min_score, best
+        )
     return kept
 
 

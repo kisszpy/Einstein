@@ -12,9 +12,9 @@ import {
   ArrowLeft,
   ChevronDown,
   ChevronUp,
+  Code2,
   Download,
   Loader2,
-  Plus,
   Redo2,
   Save,
   SlidersHorizontal,
@@ -22,6 +22,8 @@ import {
   Undo2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DeckDslPane } from "./DeckDslPane";
+import { AddSlideButton, Field, SlideThumb, inputCls } from "./deck-atoms";
 import { SlideCanvas } from "./SlideCanvas";
 import * as api from "../api";
 import {
@@ -81,6 +83,12 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [propsOpen, setPropsOpen] = useState(false);
+  // slidep 产物的 DSL 模式：逐页改源码 → 校验 → 重编译，全链路无损
+  const [dslMode, setDslMode] = useState(false);
+  const [dslText, setDslText] = useState("");
+  const [dslBusy, setDslBusy] = useState(false);
+  const [dslDiag, setDslDiag] = useState<api.DslDiagnostic[] | null>(null);
+  const [dslError, setDslError] = useState("");
 
   const past = useRef<Deck[]>([]);
   const future = useRef<Deck[]>([]);
@@ -97,6 +105,8 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
     let alive = true;
     apply(null);
     setError("");
+    setDslMode(false);
+    setDslDiag(null);
     past.current = [];
     future.current = [];
     api
@@ -125,10 +135,31 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
   const slide: DeckSlide | null = deck ? (deck.slides[selected] ?? null) : null;
   const previews = deck?.preview_images ?? [];
   const hasDesign = previews.length > 0;
-  // 外部生成的 pptx（slidep/导入）没有 sidecar，解析模型只是有损近似——
-  // 与 WorkBuddy 一致：预览即真相，只展示真实渲染，不提供会「重排」的编辑
-  const readOnlyDesign = deck?.source === "parsed" && hasDesign;
-  const showDesign = readOnlyDesign || (hasDesign && designMode);
+  // slidep/svgdeck 产物：DSL 即真相源，提供逐页源码编辑（lint→重编译），不走结构化重排
+  const isDsl = deck?.engine === "slidep" || deck?.engine === "svgdeck";
+  const dslPages = deck?.pages ?? [];
+  useEffect(() => {
+    if (!isDsl) return;
+    setDslText(dslPages[selected]?.dsl ?? "");
+    setDslDiag(null);
+    setDslError("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, deck?.path, isDsl]);
+  // 本机没有 PowerPoint（拿不到真实渲染）时直接进 DSL 模式，别让用户对着占位图发呆
+  useEffect(() => {
+    if (
+      deck &&
+      (deck.engine === "slidep" || deck.engine === "svgdeck") &&
+      (deck.preview_images ?? []).length === 0
+    ) {
+      setDslMode(true);
+    }
+  }, [deck]);
+  // 外部生成的 pptx（slidep/导入）没有结构化语义——与 WorkBuddy 一致：
+  // 预览即真相；slidep 例外在 DSL 模式，其余不提供会「重排」的编辑
+  const readOnlyDesign = (deck?.source === "parsed" && hasDesign) || (isDsl && hasDesign);
+  const structEditable = !readOnlyDesign && !isDsl;
+  const showDesign = isDsl ? hasDesign && !dslMode : readOnlyDesign || (hasDesign && designMode);
   // img 标签带不了 Authorization 头，设计稿图片靠 browse ticket 鉴权
   const [ticket, setTicket] = useState("");
   useEffect(() => {
@@ -221,6 +252,27 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
     }
   };
 
+  /** slidep DSL：先校验后编译，编译成功后用返回的最新 deck 刷新（预览图随之更新）。 */
+  const runDsl = async (doApply: boolean) => {
+    if (!deck || dslBusy) return;
+    setDslBusy(true);
+    setDslError("");
+    try {
+      const res = await api.applyDeckDsl(project, path, selected, dslText, doApply);
+      setDslDiag(res.diagnostics ?? []);
+      if (res.ok && doApply) {
+        if (res.deck) apply(res.deck);
+        setNotice("已编译保存，预览已刷新");
+      } else if (!res.ok) {
+        setDslError("校验未通过：按诊断修正 DSL（文件未改动）");
+      }
+    } catch (exc) {
+      setDslError((exc as Error).message);
+    } finally {
+      setDslBusy(false);
+    }
+  };
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const meta = event.metaKey || event.ctrlKey;
@@ -273,8 +325,9 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
         <span className="h-4 w-px shrink-0 bg-line-strong" />
         <input
           value={deck.title}
+          readOnly={isDsl}
           onChange={(event) => mutate((current) => ({ ...current, title: event.target.value }))}
-          className="min-w-0 max-w-[280px] flex-1 rounded-md bg-transparent px-2 py-1 text-[13px] font-medium outline-none hover:bg-surface-3 focus:bg-surface-3"
+          className="min-w-0 max-w-[280px] flex-1 rounded-md bg-transparent px-2 py-1 text-[13px] font-medium outline-none hover:bg-surface-3 focus:bg-surface-3 disabled:cursor-default"
           placeholder="演示标题"
         />
         {!compact && (
@@ -284,6 +337,33 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
         )}
 
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          {isDsl && hasDesign && (
+            <div
+              className="flex shrink-0 items-center rounded-md border border-line bg-surface-1 text-[12px]"
+              role="group"
+              aria-label="编辑模式切换"
+              title="设计稿为 PowerPoint 真实渲染；DSL 源码模式改代码后重编译本页，无损往返"
+            >
+              <button
+                onClick={() => setDslMode(false)}
+                className={cn(
+                  "rounded-l-md px-2 py-1",
+                  !dslMode ? "bg-brand/10 font-medium text-brand-deep dark:text-brand": "text-secondary hover:bg-surface-3",
+                )}
+              >
+                设计稿
+              </button>
+              <button
+                onClick={() => setDslMode(true)}
+                className={cn(
+                  "flex items-center gap-1 rounded-r-md px-2 py-1",
+                  dslMode ? "bg-brand/10 font-medium text-brand-deep dark:text-brand": "text-secondary hover:bg-surface-3",
+                )}
+              >
+                <Code2 size={12} /> DSL 源码
+              </button>
+            </div>
+          )}
           {hasDesign && !readOnlyDesign && (
             <div
               className="flex shrink-0 items-center rounded-md border border-line bg-surface-1 text-[12px]"
@@ -324,7 +404,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
               <SlidersHorizontal size={14} />
             </button>
           )}
-          {!readOnlyDesign && (
+          {structEditable && (
             <select
               value={deck.theme}
               aria-label="主题配色"
@@ -341,7 +421,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
               ))}
             </select>
           )}
-          {!readOnlyDesign && (
+          {structEditable && (
             <button
               onClick={undo}
               disabled={past.current.length === 0}
@@ -351,7 +431,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
               <Undo2 size={14} />
             </button>
           )}
-          {!readOnlyDesign && (
+          {structEditable && (
             <button
               onClick={redo}
               disabled={future.current.length === 0}
@@ -368,7 +448,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
           >
             <Download size={14} />
           </a>
-          {!readOnlyDesign && (
+          {structEditable && (
             <button
               onClick={save}
               disabled={saving || !dirty}
@@ -431,7 +511,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
             ) : (
               <>
                 {deck.slides.map((item, i) => (
-                  <Thumb
+                  <SlideThumb
                     key={i}
                     slide={item}
                     theme={theme}
@@ -486,7 +566,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                     </button>
                   ))
                 : deck.slides.map((item, i) => (
-                    <Thumb
+                    <SlideThumb
                       key={i}
                       slide={item}
                       theme={theme}
@@ -498,7 +578,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                       className="w-[92px] shrink-0"
                     />
                   ))}
-              {!readOnlyDesign && (
+              {structEditable && (
                 <AddSlideButton
                   compact
                   onClick={() => {
@@ -518,7 +598,12 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
             <div className="flex items-center justify-between gap-2 px-4 py-2 text-[12px] text-tertiary">
               <span className="min-w-0 truncate">
                 第 {selected + 1} / {deck.slides.length} 页
-                {!showDesign && LAYOUT_LABELS[slide.layout]}
+                {!showDesign && !isDsl && LAYOUT_LABELS[slide.layout]}
+                {isDsl && !showDesign && (
+                  <span className="ml-2 rounded bg-brand/10 px-1.5 py-0.5 text-brand-deep dark:text-brand">
+                    DSL 源码
+                  </span>
+                )}
                 {showDesign && (
                   <span className="ml-2 rounded bg-brand/10 px-1.5 py-0.5 text-brand-deep dark:text-brand">
                     真实渲染
@@ -531,7 +616,13 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                 )}
               </span>
               <span className="hidden shrink-0 lg:inline">
-                {showDesign ? "预览即文件真实效果；要改内容请回智能体重新生成" : "点文字直接改，改完失焦生效"}
+                {showDesign
+                  ? isDsl
+                    ? "切「DSL 源码」可无损改版式"
+                    : "预览即文件真实效果；要改内容请回智能体重新生成"
+                  : isDsl
+                    ? "改完先校验，无 error 再编译保存"
+                    : "点文字直接改，改完失焦生效"}
               </span>
             </div>
             <div className={cn("mx-auto w-full px-4 pb-6", compact ? "max-w-[680px]" : "max-w-[920px]")}>
@@ -545,11 +636,24 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                     onLoad={onPreviewLoad}
                   />
                   <p className="mt-2 text-center text-[12px] text-tertiary">
-                    {readOnlyDesign
-                      ? "PowerPoint 真实渲染，与文件完全一致；要修改内容请在智能体里重新生成"
-                      : "设计稿 · PowerPoint 真实渲染（还原渐变/圆角/玻璃质感）；切「可编辑」改文字，保存会按主题重排"}
+                    {isDsl
+                      ? "PowerPoint 真实渲染 · 切「DSL 源码」可无损改版式"
+                      : readOnlyDesign
+                        ? "PowerPoint 真实渲染，与文件完全一致；要修改内容请在智能体里重新生成"
+                        : "设计稿 · PowerPoint 真实渲染（还原渐变/圆角/玻璃质感）；切「可编辑」改文字，保存会按主题重排"}
                   </p>
                 </>
+              ) : isDsl ? (
+                <DeckDslPane
+                  dsl={dslText}
+                  hasDsl={Boolean(dslPages[selected])}
+                  busy={dslBusy}
+                  diagnostics={dslDiag}
+                  error={dslError}
+                  onDslChange={setDslText}
+                  onLint={() => void runDsl(false)}
+                  onApply={() => void runDsl(true)}
+                />
               ) : (
                 <SlideCanvas
                   key={`${selected}-${slide.layout}`}
@@ -567,8 +671,8 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
           </div>
         </div>
 
-        {/* 属性面板：宽屏常驻，面板模式是可切换的浮层；设计稿只读模式下无编辑属性可调 */}
-        {!readOnlyDesign && (!compact || propsOpen) && (
+        {/* 属性面板：宽屏常驻，面板模式是可切换的浮层；设计稿/DSL 模式下无结构化属性可调 */}
+        {structEditable && (!compact || propsOpen) && (
           <div
             className={cn(
               "shrink-0 overflow-y-auto bg-surface-1 p-3",
@@ -940,84 +1044,5 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
         )}
       </div>
     </div>
-  );
-}
-
-function AddSlideButton({ onClick, compact = false }: { onClick: () => void; compact?: boolean }) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "flex items-center justify-center gap-1 rounded-md border border-dashed border-line-strong text-[12px] text-tertiary hover:border-brand hover:text-brand",
-        compact ? "h-[52px] w-[84px] shrink-0" : "py-2",
-      )}
-    >
-      <Plus size={12} /> 加一页
-    </button>
-  );
-}
-
-function Thumb({
-  slide,
-  theme,
-  index,
-  deckTitle,
-  author,
-  active,
-  onClick,
-  className,
-}: {
-  slide: DeckSlide;
-  theme: ThemePreset;
-  index: number;
-  deckTitle: string;
-  author: string;
-  active: boolean;
-  onClick: () => void;
-  className?: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      aria-label="幻灯片缩略图"
-      className={cn(
-        "group relative rounded-md ring-offset-1 transition-all",
-        active ? "ring-2 ring-brand" : "ring-1 ring-line hover:ring-line-strong",
-        className,
-      )}
-    >
-      <span className="absolute -left-1 top-0 z-10 rounded-full bg-surface-1 px-1 text-[9.5px] text-tertiary">
-        {index + 1}
-      </span>
-      <SlideCanvas
-        slide={slide}
-        theme={theme}
-        index={index}
-        deckTitle={deckTitle}
-        author={author}
-        className="w-full rounded-md"
-      />
-    </button>
-  );
-}
-
-const inputCls =
-  "w-full rounded-md border border-line bg-surface-2 px-2 py-1.5 text-[12.5px] outline-none focus:border-brand";
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="mb-3 block">
-      <span className="mb-1 block text-[12px] tracking-wide text-tertiary">{label}</span>
-      {children}
-      {hint && <span className="mt-1 block text-[12px] text-tertiary">{hint}</span>}
-    </label>
   );
 }

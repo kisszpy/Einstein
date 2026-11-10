@@ -44,14 +44,14 @@ def _require_visible(template_id: str, ws: str, uid: str) -> dict:
 
 
 @router.get("")
-async def list_templates(
+def list_templates(
     ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> list[dict]:
     return [templates.payload(t) for t in templates.list_templates(ws, uid)]
 
 
 @router.post("")
-async def create_template(
+def create_template(
     req: TemplateCreate,
     ws: str = Depends(current_workspace),
     user: users.User = Depends(current_user),
@@ -68,7 +68,7 @@ async def create_template(
 
 
 @router.patch("/{template_id}")
-async def update_template(
+def update_template(
     template_id: str, req: TemplatePatch,
     ws: str = Depends(current_workspace), user: users.User = Depends(current_user),
 ) -> dict:
@@ -85,7 +85,7 @@ async def update_template(
 
 
 @router.delete("/{template_id}")
-async def delete_template(
+def delete_template(
     template_id: str, ws: str = Depends(current_workspace),
     user: users.User = Depends(current_user),
 ) -> dict:
@@ -96,7 +96,7 @@ async def delete_template(
 
 
 @router.post("/{template_id}/use")
-async def use_template(
+def use_template(
     template_id: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
 ) -> dict:
     """标记一次使用并返回完整参数，前端据此填充发起任务的表单。"""

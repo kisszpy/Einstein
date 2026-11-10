@@ -162,7 +162,7 @@ def main() -> None:
         f"/api/workspaces/{team_id}/members/{admin.id}", headers=_auth(token)
     )
     assert remove_owner.status_code == 400, remove_owner.text
-    print(f"PASS-5b 团队空间：member 改角色被拒(403)→admin 可查成员；改自己/移除 owner 均被拒")
+    print("PASS-5b 团队空间：member 改角色被拒(403)→admin 可查成员；改自己/移除 owner 均被拒")
 
     # 5c. per-workspace 只读：在团队空间降为 viewer 后写被拒，个人的空间照常可写
     client.patch(

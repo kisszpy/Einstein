@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     env: str = "dev"
     # 默认关闭：debug=True 时 Starlette 会忽略自定义异常处理器直接吐堆栈（泄漏服务器路径）
     debug: bool = False
+    # 日志级别：DEBUG | INFO | WARNING | ERROR。统一写 stdout 由容器采集；
+    # 排查第三方库时调到 DEBUG（第三方默认仍压在 WARNING，见 core/logging.py）。
+    log_level: str = "INFO"
 
     # 模型接入（llama.cpp OpenAI 兼容端点）
     llm_base_url: str = "http://localhost:8080/v1"

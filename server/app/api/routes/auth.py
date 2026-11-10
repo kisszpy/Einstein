@@ -75,7 +75,7 @@ def _audit(username: str, status: int, detail: str) -> None:
 
 
 @router.post("/auth/login")
-async def login(req: Request, payload: dict) -> dict:
+def login(req: Request, payload: dict) -> dict:
     username = str(payload.get("username", "")).strip()
     password = str(payload.get("password", ""))
     if not username or not password:
@@ -112,7 +112,7 @@ async def login(req: Request, payload: dict) -> dict:
 
 
 @router.get("/auth/me")
-async def me(request: Request, user: users.User = Depends(current_user)) -> dict:
+def me(request: Request, user: users.User = Depends(current_user)) -> dict:
     session = sessions.get_session_store().resolve(
         _extract_bearer(request.headers.get("authorization"))
     )
@@ -126,7 +126,7 @@ async def me(request: Request, user: users.User = Depends(current_user)) -> dict
 
 
 @router.post("/auth/logout")
-async def logout(request: Request, user: users.User = Depends(current_user)) -> dict:
+def logout(request: Request, user: users.User = Depends(current_user)) -> dict:
     token = _extract_bearer(request.headers.get("authorization"))
     sessions.get_session_store().revoke(token)
     sessions.get_session_store().save()
@@ -134,7 +134,7 @@ async def logout(request: Request, user: users.User = Depends(current_user)) -> 
 
 
 @router.post("/auth/join")
-async def join_by_invite(payload: dict, user: users.User = Depends(current_user)) -> dict:
+def join_by_invite(payload: dict, user: users.User = Depends(current_user)) -> dict:
     """凭邀请码加入工作区：角色由码上标注，管理员不发码（需在成员页手动授予）。"""
     code = str(payload.get("code", "")).strip()
     if not code:
@@ -165,12 +165,12 @@ async def join_by_invite(payload: dict, user: users.User = Depends(current_user)
 
 
 @router.get("/users")
-async def list_users(admin: users.User = Depends(current_admin)) -> list[dict]:
+def list_users(admin: users.User = Depends(current_admin)) -> list[dict]:
     return [u.to_public() for u in users.get_user_store().list_all()]
 
 
 @router.post("/users")
-async def create_user(
+def create_user(
     payload: dict, admin: users.User = Depends(current_admin)
 ) -> dict:
     """新建账号：自动获得个人空间；只有显式指定「加入共享空间」才进团队。
@@ -209,7 +209,7 @@ async def create_user(
 
 
 @router.patch("/users/{user_id}")
-async def update_user(
+def update_user(
     user_id: str, payload: dict, admin: users.User = Depends(current_admin)
 ) -> dict:
     target = users.get_user_store().get(user_id)
@@ -244,7 +244,7 @@ async def update_user(
 
 
 @router.post("/users/{user_id}/password")
-async def reset_password(
+def reset_password(
     user_id: str, payload: dict, admin: users.User = Depends(current_admin)
 ) -> dict:
     target = users.get_user_store().get(user_id)
@@ -262,7 +262,7 @@ async def reset_password(
 
 
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: str, admin: users.User = Depends(current_admin)) -> dict:
+def delete_user(user_id: str, admin: users.User = Depends(current_admin)) -> dict:
     store = users.get_user_store()
     target = store.get(user_id)
     if target is None:

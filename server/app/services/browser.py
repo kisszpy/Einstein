@@ -23,6 +23,7 @@ from bs4 import BeautifulSoup
 
 from app.services.capabilities import web
 
+
 def nav_bridge(site_url: str) -> str:
     """导航桥 + storage shim。
 

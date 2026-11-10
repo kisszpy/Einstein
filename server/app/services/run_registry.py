@@ -26,6 +26,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -79,7 +83,7 @@ class RunRecord:
             )
             if not ok:
                 self.persisted = False
-                print(f"[run-registry] {self.run_id} 事件落库失败，退回纯内存", flush=True)
+                logger.warning("%s 事件落库失败，退回纯内存", self.run_id)
         self.changed.set()
 
     def finish(self, *, failed: bool = False) -> None:

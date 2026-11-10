@@ -32,7 +32,6 @@ import {
   type SkillInfo,
   type TaskSession,
   type ToolInfo,
-  type TreeNode,
 } from "./types";
 import { confirmDialog, promptDialog } from "@/lib/confirm";
 
@@ -48,14 +47,14 @@ interface TurnView {
 const PANEL_WIDTH_KEY = "einstein.agent.panelWidth";
 const SIDEBAR_KEY = "einstein.agent.sidebarOpen";
 
-/** 面板状态 → 独立浏览器页的深链。 */
+/** 面板状态 → 独立资产页的深链。 */
 function browserUrl(state: BrowserState): string {
   const query = new URLSearchParams();
   query.set("tab", state.tab);
   if (state.project) query.set("project", state.project);
   if (state.path) query.set("path", state.path);
   if (state.url) query.set("url", state.url);
-  return `/browser?${query.toString()}`;
+  return `/assets?${query.toString()}`;
 }
 
 const SUGGESTIONS = [
@@ -99,7 +98,6 @@ export function AgentsPage() {
   const [boundProject, setBoundProject] = useState("");
   // 文件树/预览指针：自动指向最近项目，纯浏览用，不影响运行
   const [browseProject, setBrowseProject] = useState("");
-  const [tree, setTree] = useState<TreeNode[]>([]);
   const [runs, setRuns] = useState<AgentRunItem[]>([]);
   const [query, setQuery] = useState("");
 
@@ -165,31 +163,9 @@ export function AgentsPage() {
     setRuns(await res.json());
   }, []);
 
-  const loadTree = useCallback(async (pid: string) => {
-    if (!pid) {
-      setTree([]);
-      return;
-    }
-    try {
-      const res = await fetch(`/api/projects/${encodeURIComponent(pid)}/tree`);
-      if (!res.ok) {
-        setTree([]);
-        return;
-      }
-      const data = (await res.json()) as { entries: TreeNode[] };
-      setTree(data.entries);
-    } catch {
-      setTree([]);
-    }
+  const selectBrowse = useCallback((pid: string) => {
+    setBrowseProject(pid);
   }, []);
-
-  const selectBrowse = useCallback(
-    (pid: string) => {
-      setBrowseProject(pid);
-      void loadTree(pid);
-    },
-    [loadTree],
-  );
 
   // 绑定 = 用户明确指定项目随运行发送；同时文件树跟过去
   const bindProject = useCallback(
@@ -339,7 +315,6 @@ export function AgentsPage() {
           const d = raw as { project?: string; artifacts?: Artifact[] };
           const pid = d.project || boundProject;
           if (d.project && d.project !== boundProject) bindProject(d.project);
-          else if (d.project) void loadTree(d.project);
           setPreviewToken((n) => n + 1);
           void loadProjects();
           // 跑完自动把产物摊开——和 WorkBuddy 一样，不用用户再点一次
@@ -357,7 +332,7 @@ export function AgentsPage() {
           break;
       }
     },
-    [boundProject, bindProject, loadTree, loadProjects, openFile],
+    [boundProject, bindProject, loadProjects, openFile],
   );
 
   const run = useCallback(
@@ -429,7 +404,6 @@ export function AgentsPage() {
       boundProject,
       loadProjects,
       loadRuns,
-      loadTree,
       bindProject,
       openFile,
       applyEvent,
@@ -619,22 +593,6 @@ export function AgentsPage() {
     }
   };
 
-  const deleteProject = async () => {
-    const pid = browseProject;
-    if (!pid) return;
-    const ok = await confirmDialog({
-      title: "删除项目",
-      message: `删除项目「${pid}」及其全部文件？此操作不可恢复。`,
-      confirmLabel: "删除",
-      danger: true,
-    });
-    if (!ok) return;
-    await fetch(`/api/projects/${encodeURIComponent(pid)}`, { method: "DELETE" });
-    if (boundProject === pid) setBoundProject("");
-    selectBrowse("");
-    void loadProjects();
-  };
-
   const deleteSession = async (session: TaskSession) => {
     const label = session.title.slice(0, 30) + (session.title.length > 30 ? "…" : "");
     const extra = session.runs.length > 1 ? `（含 ${session.runs.length} 轮对话）` : "";
@@ -722,16 +680,6 @@ export function AgentsPage() {
           onNewTask={newTask}
           query={query}
           onQuery={setQuery}
-          project={boundProject}
-          browseProject={browseProject}
-          projects={projects}
-          onSelectProject={bindProject}
-          onCreateProject={() => void createProject()}
-          onDeleteProject={() => void deleteProject()}
-          onRefreshTree={() => void loadTree(browseProject)}
-          onPreviewProject={() => browseProject && openProject(browseProject)}
-          tree={tree}
-          onOpenFile={(path) => openFile(path)}
         />
       </div>
 

@@ -5,8 +5,8 @@ llama.cpp server / 云端模型都实现同一接口，切换只改 .env。
 思考模型的推理流需要精确透传）；Agent 编排仍走 LangChain/LangGraph。
 """
 
-from collections.abc import AsyncIterator
 import time
+from collections.abc import AsyncIterator
 
 from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
@@ -23,7 +23,6 @@ def get_chat_model(model_id: str = "", temperature: float | None = None) -> Chat
     LangChain 路径（智能体）与原生流式路径共用同一份解析逻辑，避免
     「对话用了新模型、智能体还在用旧模型」这种漂移。
     """
-    settings = get_settings()
     target = models.resolve(model_id)
     kwargs: dict = dict(
         base_url=target.base_url,

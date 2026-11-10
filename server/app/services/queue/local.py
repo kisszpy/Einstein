@@ -13,6 +13,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from app.core.logging import get_logger
 from app.services.queue.base import (
     DEFAULT_LEASE_SECONDS,
     DONE,
@@ -23,6 +24,8 @@ from app.services.queue.base import (
     dumps,
     loads,
 )
+
+logger = get_logger(__name__)
 
 JOB_COLUMNS = (
     "id, kind, status, payload, result, attempts, max_attempts, error,"
@@ -118,7 +121,7 @@ class LocalQueue:
 
     def complete(self, job_id: str, result: dict | None = None) -> Job | None:
         if not self._owned(job_id):
-            print(f"[queue] {job_id} 已被其它 worker 接手，忽略本次 complete", flush=True)
+            logger.info("任务 %s 已被其它 worker 接手，忽略本次 complete", job_id)
             return None
         affected = self.db.execute(
             "UPDATE jobs SET status = ?, result = ?, error = '', lease_until = '', updated_at = ?"
@@ -134,7 +137,7 @@ class LocalQueue:
         if job is None:
             return None
         if not self._owned(job_id):
-            print(f"[queue] {job_id} 已被其它 worker 接手，忽略本次 fail", flush=True)
+            logger.info("任务 %s 已被其它 worker 接手，忽略本次 fail", job_id)
             return None
         # attempts 在 claim 时已 +1，这里只判断是否还能再来一次
         retryable = not permanent and job.attempts < job.max_attempts

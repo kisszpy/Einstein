@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from app.core.logging import get_logger
 from app.services.queue.base import Job
+
+logger = get_logger(__name__)
 
 HANDLERS: dict[str, Callable[[Job], dict]] = {}
 
@@ -83,7 +86,7 @@ def _kb_ingest(job: Job) -> dict:
         try:
             src.unlink()
         except OSError:
-            pass
+            pass  # 清理失败不影响主流程（Windows 上文件常被占用）
         raise PermanentJobError(f"知识库 {kb_id} 已被删除，放弃入库")
 
     progress("解析", 10)
@@ -105,7 +108,7 @@ def _kb_ingest(job: Job) -> dict:
     try:
         src.unlink()
     except OSError:
-        pass
+        pass  # 清理失败不影响主流程（Windows 上文件常被占用）
     return {
         "document_id": result.document.id,
         "name": result.document.name,
@@ -230,10 +233,10 @@ def _kb_ingest_batch(job: Job) -> dict:
     if stale:
         # 删不掉通常是权限/占用（Windows 上很常见）。留个明确日志，
         # 否则 uploads 目录会悄悄涨到几个 G。
-        print(
-            f"[worker] 批次 {job.id} 有 {stale} 个暂存文件删除失败，"
-            f"目录需人工清理：{Path(items[0].get('path', '')).parent if items else '?'}",
-            flush=True,
+        logger.warning(
+            "批次 %s 有 %d 个暂存文件删除失败，目录需人工清理：%s",
+            job.id, stale,
+            Path(items[0].get("path", "")).parent if items else "?",
         )
     return {
         "kb_id": kb_id, "total": total, "ok": ok, "deduped": deduped,

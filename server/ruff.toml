@@ -1,0 +1,35 @@
+# ruff 配置：只开「确定是问题」的规则，不追求一次改完历史代码。
+#
+# 规则集刻意收窄：E4/E7/E9（pycodestyle 的真错误）、F（pyflakes：未用导入/变量、
+# 重定义）、I（import 排序）、W（空白）。没开 B（bugbear）和 BLE001——
+# 本仓库有 150+ 处 `except Exception  # noqa: BLE001`，是刻意的降级策略，
+# 全面开启只会制造噪音，真正的收敛靠人工按场景判断。
+
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I", "W"]
+ignore = [
+    # 行宽交给人判断：本仓库大量中文注释与长字符串，硬卡 100 列会把
+    # 注释拆得比代码还碎，反而更难读。
+    "E501",
+]
+
+[lint.per-file-ignores]
+# 这两个文件必须在 import 之前改环境（禁用系统代理），否则 OpenAI SDK 会在
+# 导入时就把代理配置固化下来。E402 在这里是有意为之。
+"app/main.py" = ["E402"]
+"app/services/run_registry.py" = ["E402"]
+"app/workers/worker.py" = ["E402"]
+
+[lint.isort]
+known-first-party = ["app"]
+# 与仓库习惯一致：一行一个名字，不要折叠成 (a, b, c) 一行
+force-single-line = false
+combine-as-imports = true
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

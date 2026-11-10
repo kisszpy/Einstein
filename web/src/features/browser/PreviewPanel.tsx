@@ -26,8 +26,8 @@ export function PreviewPanel({ value, onChange, onClose, onMaximize, refreshToke
         <>
           <button
             onClick={onMaximize}
-            title="在浏览器页打开"
-            aria-label="在浏览器页打开"
+            title="在资产页打开"
+            aria-label="在资产页打开"
             className="rounded-md p-1.5 text-tertiary transition-colors hover:bg-surface-3 hover:text-primary"
           >
             <Maximize2 size={13} strokeWidth={1.9} />

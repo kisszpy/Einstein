@@ -32,7 +32,6 @@ from app.core.config import get_settings
 from app.db.engine import get_db
 from app.db.rows import TableState
 from app.db.schema import migrate
-from app.db.tables import ALERT_EVENTS, ALERT_RULES
 from app.services.state import JsonState
 
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -211,8 +210,7 @@ def _record(event: dict) -> None:
 
 def measure(kind: str, workspace_id: str, window_hours: int) -> tuple[float, str]:
     """返回 (当前值, 人话说明)。取值口径与看板保持一致，避免"看板和告警对不上"。"""
-    from app.services import models as model_registry
-    from app.services import traces
+    from app.services import models as model_registry, traces
 
     days = max(1, round(window_hours / 24))
 
