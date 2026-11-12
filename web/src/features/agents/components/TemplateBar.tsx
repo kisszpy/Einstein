@@ -142,7 +142,7 @@ export function SaveTemplateDialog({
       >
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-1.5 text-[13px] font-medium text-primary">
-            <BookmarkPlus size={14} strokeWidth={1.9} className="text-brand-deep dark:text-brand"/>
+            <BookmarkPlus size={14} strokeWidth={1.9} className="text-brand-ink "/>
             存为模板
           </div>
           <button
@@ -186,7 +186,7 @@ export function SaveTemplateDialog({
           <button
             onClick={() => void save()}
             disabled={busy}
-            className="rounded-md bg-brand px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="rounded-md bg-brand px-3 py-1.5 text-[12px] font-medium text-brand-fg transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {busy ? "保存中…" : "保存"}
           </button>

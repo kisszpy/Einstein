@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { PageBody, PageHeader } from "@/components/ui/page-header";
+import { shortTime } from "@/lib/utils";
 
 interface ApiKeyRow {
   id: string;
@@ -81,14 +83,11 @@ export function PlatformPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[960px] space-y-6 px-8 py-8">
-        <div>
-          <h1 className="text-lg font-medium">开放平台</h1>
-          <p className="mt-1 text-[13px] text-secondary">
-            API Key 绑定当前工作区：用密钥调用 <code className="text-xs">/v1</code> 接口时，
-            只能访问该工作区自己的知识库与专家，所有调用都会写入审计日志。
-          </p>
-        </div>
+      <PageBody width="narrow" className="space-y-6">
+        <PageHeader
+          title="开放平台"
+          description="API Key 绑定当前工作区：用密钥调用 /v1 接口时，只能访问该工作区自己的知识库与专家，所有调用都会写入审计日志。"
+        />
 
         {/* 密钥管理 */}
         <Card className="p-5">
@@ -115,7 +114,7 @@ export function PlatformPage() {
 
           {issued && (
             <div className="mt-3 rounded-lg border border-brand bg-brand-soft p-3">
-              <p className="text-xs text-brand-deep dark:text-brand">密钥已创建，请立即复制（关闭后不再显示）</p>
+              <p className="text-xs text-brand-ink ">密钥已创建，请立即复制（关闭后不再显示）</p>
               <div className="mt-1.5 flex items-center gap-2">
                 <code className="min-w-0 flex-1 truncate rounded bg-surface-1 px-2 py-1 text-xs text-primary">
                   {issued}
@@ -208,7 +207,7 @@ export function PlatformPage() {
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-surface-2">
                 <tr className="text-left text-tertiary">
-                  <th className="pb-1 font-normal">时间 (UTC)</th>
+                  <th className="pb-1 font-normal">时间</th>
                   <th className="pb-1 font-normal">密钥</th>
                   <th className="pb-1 font-normal">接口</th>
                   <th className="pb-1 text-right font-normal">状态</th>
@@ -219,7 +218,7 @@ export function PlatformPage() {
               <tbody>
                 {audit?.entries.map((e, i) => (
                   <tr key={`${e.ts}-${i}`} className="border-t border-line">
-                    <td className="py-1.5 text-tertiary">{e.ts}</td>
+                    <td className="py-1.5 tabular-nums text-tertiary">{shortTime(e.ts)}</td>
                     <td className="max-w-[120px] truncate py-1.5 text-secondary">
                       {e.key_name ?? "—"}
                     </td>
@@ -246,7 +245,7 @@ export function PlatformPage() {
             </table>
           </div>
         </Card>
-      </div>
+      </PageBody>
     </div>
   );
 }

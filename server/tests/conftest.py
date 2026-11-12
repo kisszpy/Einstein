@@ -32,6 +32,15 @@ os.environ["APP_AGENT_APPROVAL_TOOLS"] = ""
 # 测试只要结论，不要 INFO 噪音：正常路径每条请求都会打日志，全开会让
 # 失败用例的 traceback 被埋掉。需要看日志的用例自己临时调级别。
 os.environ["APP_LOG_LEVEL"] = "WARNING"
+# 美感润色每份稿子要跑一次设计检测器（起一个 Chromium）和一次模型调用。
+# 测试里默认关掉，需要验证这一层的用例自己 monkeypatch.get_settings 打开。
+os.environ["APP_PPT_POLISH"] = "false"
+
+# 方向生成默认也会调一次模型。测试里只保留「按内容推导」的确定性路径：
+# 走的是同一条代码，只是不花那一次调用。
+os.environ["APP_PPT_AUTO_DIRECTION"] = "false"
+# 逐页重排同样是模型调用；测试只验证校验/回退逻辑，不真的走网络。
+os.environ["APP_PPT_SKILL_LAYOUT"] = "false"
 
 import pytest  # noqa: E402
 

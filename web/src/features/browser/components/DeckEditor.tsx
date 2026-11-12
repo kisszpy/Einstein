@@ -295,7 +295,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-[13px]">
         <p className="text-danger">{error}</p>
-        <button onClick={onClose} className="text-brand-deep underline-offset-2 hover:underline dark:text-brand">
+        <button onClick={onClose} className="text-brand-ink underline-offset-2 hover:underline ">
           返回列表
         </button>
       </div>
@@ -348,7 +348,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                 onClick={() => setDslMode(false)}
                 className={cn(
                   "rounded-l-md px-2 py-1",
-                  !dslMode ? "bg-brand/10 font-medium text-brand-deep dark:text-brand": "text-secondary hover:bg-surface-3",
+                  !dslMode ? "bg-brand/10 font-medium text-brand-ink ": "text-secondary hover:bg-surface-3",
                 )}
               >
                 设计稿
@@ -357,7 +357,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                 onClick={() => setDslMode(true)}
                 className={cn(
                   "flex items-center gap-1 rounded-r-md px-2 py-1",
-                  dslMode ? "bg-brand/10 font-medium text-brand-deep dark:text-brand": "text-secondary hover:bg-surface-3",
+                  dslMode ? "bg-brand/10 font-medium text-brand-ink ": "text-secondary hover:bg-surface-3",
                 )}
               >
                 <Code2 size={12} /> DSL 源码
@@ -375,7 +375,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                 onClick={() => setDesignMode(true)}
                 className={cn(
                   "rounded-l-md px-2 py-1",
-                  designMode ? "bg-brand/10 font-medium text-brand-deep dark:text-brand": "text-secondary hover:bg-surface-3",
+                  designMode ? "bg-brand/10 font-medium text-brand-ink ": "text-secondary hover:bg-surface-3",
                 )}
               >
                 设计稿
@@ -384,7 +384,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                 onClick={() => setDesignMode(false)}
                 className={cn(
                   "rounded-r-md px-2 py-1",
-                  !designMode ? "bg-brand/10 font-medium text-brand-deep dark:text-brand": "text-secondary hover:bg-surface-3",
+                  !designMode ? "bg-brand/10 font-medium text-brand-ink ": "text-secondary hover:bg-surface-3",
                 )}
               >
                 可编辑
@@ -396,7 +396,7 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
               onClick={() => setPropsOpen((prev) => !prev)}
               className={cn(
                 "rounded-md p-1.5 hover:bg-surface-3",
-                propsOpen ? "text-brand-deep dark:text-brand": "text-secondary",
+                propsOpen ? "text-brand-ink ": "text-secondary",
               )}
               title="页面属性"
               aria-label="页面属性"
@@ -600,12 +600,12 @@ export function DeckEditor({ project, path, onClose, compact = false }: DeckEdit
                 第 {selected + 1} / {deck.slides.length} 页
                 {!showDesign && !isDsl && LAYOUT_LABELS[slide.layout]}
                 {isDsl && !showDesign && (
-                  <span className="ml-2 rounded bg-brand/10 px-1.5 py-0.5 text-brand-deep dark:text-brand">
+                  <span className="ml-2 rounded bg-brand/10 px-1.5 py-0.5 text-brand-ink ">
                     DSL 源码
                   </span>
                 )}
                 {showDesign && (
-                  <span className="ml-2 rounded bg-brand/10 px-1.5 py-0.5 text-brand-deep dark:text-brand">
+                  <span className="ml-2 rounded bg-brand/10 px-1.5 py-0.5 text-brand-ink ">
                     真实渲染
                   </span>
                 )}

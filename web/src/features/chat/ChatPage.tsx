@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Archive, ArrowDown, Download, Globe, Menu, Pencil, Pin, PinOff, Plus, Search, Share2, SquarePen } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { BrandMark } from "@/components/BrandMark";
 import {
   ComposerFrame,
   ComposerInput,
@@ -269,10 +270,10 @@ export function ChatPage() {
         <div
           className={cn(
             "flex items-center gap-1 truncate text-[13px]",
-            c.id === conversationId ? "text-brand-deep dark:text-brand": "text-primary",
+            c.id === conversationId ? "text-brand-ink ": "text-primary",
           )}
         >
-          {c.pinned && <Pin size={11} className="shrink-0 text-brand-deep dark:text-brand"/>}
+          {c.pinned && <Pin size={11} className="shrink-0 text-brand-ink "/>}
           {c.title}
         </div>
         <div className="text-xs text-tertiary">{c.message_count} 条消息</div>
@@ -285,7 +286,7 @@ export function ChatPage() {
                 e.stopPropagation();
                 renameConversation(c);
               }}
-              className="text-xs text-tertiary hover:text-brand"
+              className="text-xs text-tertiary hover:text-brand-ink"
               title="重命名"
             >
               <SquarePen size={13} />
@@ -295,7 +296,7 @@ export function ChatPage() {
                 e.stopPropagation();
                 void patchConversation(c.id, { pinned: !c.pinned });
               }}
-              className="text-xs text-tertiary hover:text-brand"
+              className="text-xs text-tertiary hover:text-brand-ink"
               title={c.pinned ? "取消置顶" : "置顶"}
             >
               {c.pinned ? <PinOff size={13} /> : <Pin size={13} />}
@@ -307,7 +308,7 @@ export function ChatPage() {
             e.stopPropagation();
             void exportConversation(c, e.shiftKey ? "json" : "md");
           }}
-          className="text-xs text-tertiary hover:text-brand"
+          className="text-xs text-tertiary hover:text-brand-ink"
           title="导出 Markdown（按住 Shift 导出 JSON）"
         >
           <Download size={13} />
@@ -317,7 +318,7 @@ export function ChatPage() {
             e.stopPropagation();
             setShareTarget({ id: c.id, title: c.title });
           }}
-          className="text-xs text-tertiary hover:text-brand"
+          className="text-xs text-tertiary hover:text-brand-ink"
           title="对外分享（生成免登录链接）"
         >
           <Share2 size={13} />
@@ -327,7 +328,7 @@ export function ChatPage() {
             e.stopPropagation();
             void patchConversation(c.id, { archived: !isArchived });
           }}
-          className="text-xs text-tertiary hover:text-brand"
+          className="text-xs text-tertiary hover:text-brand-ink"
           title={isArchived ? "取消归档" : "归档"}
         >
           <Archive size={13} />
@@ -465,7 +466,7 @@ export function ChatPage() {
                 {activeExpert ? (
                   <>
                     <span className="mb-3 text-4xl">{activeExpert.emoji}</span>
-                    <h1 className="text-xl font-medium">{activeExpert.name}</h1>
+                    <h1 className="text-[21px] font-semibold">{activeExpert.name}</h1>
                     <p className="mt-2 max-w-[480px] text-[13px] text-secondary">
                       {activeExpert.greeting || activeExpert.description}
                     </p>
@@ -475,7 +476,7 @@ export function ChatPage() {
                           <button
                             key={q}
                             onClick={() => setInput(q)}
-                            className="rounded-full border border-line bg-surface-1 px-3 py-1.5 text-xs text-secondary transition-colors duration-150 hover:border-brand hover:text-brand"
+                            className="rounded-full border border-line bg-surface-1 px-3 py-1.5 text-xs text-secondary transition-colors duration-150 hover:border-brand hover:text-brand-ink"
                           >
                             {q}
                           </button>
@@ -485,7 +486,8 @@ export function ChatPage() {
                   </>
                 ) : (
                   <>
-                    <h1 className="text-xl font-medium">有什么可以帮你？</h1>
+                    <BrandMark size={44} className="mb-4 rounded-[13px] shadow-[0_14px_30px_-16px_var(--brand)]" />
+                    <h1 className="text-[21px] font-semibold">有什么可以帮你？</h1>
                     <p className="mt-2 text-[13px] text-secondary">
                       直接提问，或在下方选择专家获得专业视角。回答将带知识库引用与思考过程。
                     </p>
@@ -495,7 +497,7 @@ export function ChatPage() {
                         <button
                           key={q}
                           onClick={() => setInput(q)}
-                          className="rounded-full border border-line bg-surface-1 px-3 py-1.5 text-xs text-secondary transition-colors duration-150 hover:border-brand hover:text-brand"
+                          className="rounded-full border border-line bg-surface-1 px-3 py-1.5 text-xs text-secondary transition-colors duration-150 hover:border-brand hover:text-brand-ink"
                         >
                           {q}
                         </button>
@@ -561,7 +563,7 @@ export function ChatPage() {
                 className={cn(
                   "rounded-full border px-3 py-1 text-xs transition-colors duration-150",
                   expertId === null
-                    ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
+                    ? "border-brand bg-brand-soft text-brand-ink "
                     : "border-line text-secondary hover:border-line-strong",
                 )}
               >
@@ -575,7 +577,7 @@ export function ChatPage() {
                   className={cn(
                     "rounded-full border px-3 py-1 text-xs transition-colors duration-150",
                     expertId === e.id
-                      ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
+                      ? "border-brand bg-brand-soft text-brand-ink "
                       : "border-line text-secondary hover:border-line-strong",
                   )}
                 >
@@ -591,7 +593,7 @@ export function ChatPage() {
           )}
           {/* 编辑态提示：说明这次发送会截断旧内容 */}
           {editingIndex !== null && (
-            <div className="mb-2 flex items-center gap-2 rounded-lg border border-brand/40 bg-brand-soft px-3 py-1.5 text-xs text-brand-deep dark:text-brand">
+            <div className="mb-2 flex items-center gap-2 rounded-lg border border-brand/40 bg-brand-soft px-3 py-1.5 text-xs text-brand-ink ">
               <Pencil size={12} className="shrink-0" />
               <span className="min-w-0 flex-1 truncate">
                 正在编辑第 {turnOf[editingIndex] ?? 1} 轮提问，发送后这条提问之后的内容将被替换
@@ -641,7 +643,7 @@ export function ChatPage() {
                         className={cn(
                           "rounded-full px-2 py-1 text-xs transition-colors duration-150",
                           webMode === mode
-                            ? "bg-brand-soft font-medium text-brand-deep dark:text-brand"
+                            ? "bg-brand-soft font-medium text-brand-ink "
                             : "text-tertiary hover:text-secondary",
                         )}
                       >

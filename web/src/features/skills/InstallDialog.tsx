@@ -174,7 +174,7 @@ export function InstallDialog({ open, initialUrl = "", onClose, onInstalled }: P
                     href={preview.repo.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-[13px] font-medium text-primary hover:text-brand"
+                    className="text-[13px] font-medium text-primary hover:text-brand-ink"
                   >
                     {preview.repo.repo}
                   </a>
@@ -208,7 +208,7 @@ export function InstallDialog({ open, initialUrl = "", onClose, onInstalled }: P
                           : preview.candidates.map((c) => c.path),
                       )
                     }
-                    className="text-[12px] text-brand-deep transition-opacity dark:text-brand duration-150 hover:opacity-80"
+                    className="text-[12px] text-brand-ink transition-opacity  duration-150 hover:opacity-80"
                   >
                     {picked.length === preview.candidates.length ? "取消全选" : "全选"}
                   </button>

@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
+import { Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageBody, PageHeader } from "@/components/ui/page-header";
 import {
   VisibilityBadge,
   VisibilitySelect,
@@ -105,7 +108,7 @@ function MultiSelect({
             className={cn(
               "rounded-md border px-2.5 py-1.5 text-xs transition-colors duration-150",
               selected.includes(o.id)
-                ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
+                ? "border-brand bg-brand-soft text-brand-ink "
                 : "border-line text-secondary hover:border-line-strong",
             )}
           >
@@ -252,16 +255,12 @@ export function ExpertsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[860px] space-y-6 px-8 py-8">
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-lg font-medium">专家</h1>
-            <p className="mt-1 text-[13px] text-secondary">
-              专家 = 人设 + 挂载技能 + 挂载知识库 + 模型参数。对话页选择专家即生效。
-            </p>
-          </div>
-          <Button onClick={startNew}>新建专家</Button>
-        </div>
+      <PageBody width="narrow" className="space-y-6">
+        <PageHeader
+          title="专家"
+          description="专家 = 人设 + 挂载技能 + 挂载知识库 + 模型参数。对话页选择专家即生效。"
+          actions={<Button onClick={startNew}>新建专家</Button>}
+        />
 
         {/* 编辑表单 */}
         {editing && (
@@ -376,20 +375,19 @@ export function ExpertsPage() {
         )}
 
         {/* 专家列表 */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {experts.map((e) => (
-            <Card key={e.id} className="p-4">
-              <div className="flex items-start justify-between">
-                <div className="flex items-start gap-3">
-                  <span className="text-2xl">{e.emoji}</span>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+            <Card key={e.id} className="flex flex-col p-4">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl leading-none">{e.emoji}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
                       <span className="text-[13px] font-medium text-primary">{e.name}</span>
                       <span
                         className={cn(
                           "rounded px-1.5 py-0.5 text-[12px]",
                           e.status === "live"
-                            ? "bg-brand-soft text-brand-deep dark:text-brand"
+                            ? "bg-brand-soft text-brand-ink "
                             : e.status === "testing"
                               ? "bg-warning/15 text-warning"
                               : "bg-surface-3 text-tertiary",
@@ -399,12 +397,12 @@ export function ExpertsPage() {
                       </span>
                       <VisibilityBadge value={e.visibility} />
                     </div>
-                    <p className="mt-0.5 text-xs text-secondary">{e.description}</p>
-                    <div className="mt-1.5 flex flex-wrap gap-1">
+                    <p className="mt-1 text-[12.5px] leading-relaxed text-secondary">{e.description}</p>
+                    <div className="mt-2 flex flex-wrap gap-1">
                       {e.skill_ids.map((id) => (
                         <span
                           key={id}
-                          className="rounded bg-brand-soft px-1.5 py-0.5 text-xs text-brand-deep dark:text-brand"
+                          className="rounded-md bg-brand-soft px-1.5 py-0.5 text-[11.5px] text-brand-ink "
                         >
                           {skillName(id)}
                         </span>
@@ -412,7 +410,7 @@ export function ExpertsPage() {
                       {e.kb_ids.map((id) => (
                         <span
                           key={id}
-                          className="rounded bg-surface-3 px-1.5 py-0.5 text-xs text-secondary"
+                          className="rounded-md bg-surface-3 px-1.5 py-0.5 text-[11.5px] text-secondary"
                         >
                           📚 {kbName(id)}
                         </span>
@@ -420,7 +418,7 @@ export function ExpertsPage() {
                       {e.tool_ids.map((t) => (
                         <span
                           key={t}
-                          className="rounded bg-surface-3 px-1.5 py-0.5 text-xs text-secondary"
+                          className="rounded-md bg-surface-3 px-1.5 py-0.5 text-[11.5px] text-secondary"
                         >
                           🔧 {TOOL_OPTIONS.find((o) => o.id === t)?.name ?? t}
                         </span>
@@ -428,29 +426,31 @@ export function ExpertsPage() {
                     </div>
                   </div>
                 </div>
-                <div className="flex shrink-0 flex-col items-end gap-1">
+                <div className="mt-auto flex items-center justify-between gap-2 border-t border-line pt-2.5">
                   {/* 发布流：draft → testing → live，可回退 */}
-                  {(e.status ?? "draft") === "draft" && (
-                    <Button variant="ghost" onClick={() => void publish(e, "testing")}>
-                      转测试
-                    </Button>
-                  )}
-                  {(e.status ?? "draft") === "testing" && (
-                    <>
-                      <Button variant="ghost" onClick={() => void publish(e, "live")}>
-                        上线
+                  <div className="flex items-center gap-1">
+                    {(e.status ?? "draft") === "draft" && (
+                      <Button variant="ghost" onClick={() => void publish(e, "testing")}>
+                        转测试
                       </Button>
-                      <Button variant="ghost" onClick={() => void publish(e, "draft")}>
-                        退回草稿
+                    )}
+                    {(e.status ?? "draft") === "testing" && (
+                      <>
+                        <Button variant="ghost" onClick={() => void publish(e, "live")}>
+                          上线
+                        </Button>
+                        <Button variant="ghost" onClick={() => void publish(e, "draft")}>
+                          退回草稿
+                        </Button>
+                      </>
+                    )}
+                    {e.status === "live" && (
+                      <Button variant="ghost" onClick={() => void publish(e, "testing")}>
+                        下架回测试
                       </Button>
-                    </>
-                  )}
-                  {e.status === "live" && (
-                    <Button variant="ghost" onClick={() => void publish(e, "testing")}>
-                      下架回测试
-                    </Button>
-                  )}
-                  <div className="flex gap-1">
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
                     <Button variant="ghost" onClick={() => startEdit(e)}>
                       编辑
                     </Button>
@@ -459,16 +459,20 @@ export function ExpertsPage() {
                     </Button>
                   </div>
                 </div>
-              </div>
             </Card>
           ))}
           {experts.length === 0 && (
-            <Card className="col-span-2 p-8 text-center text-sm text-tertiary">
-              还没有专家。点击右上角「新建专家」创建第一个。
-            </Card>
+            <div className="md:col-span-2">
+              <EmptyState
+                icon={Users}
+                title="还没有专家"
+                description="点击右上角「新建专家」，配好人设、技能和知识库后即可在对话页选用。"
+                action={<Button onClick={startNew}>新建专家</Button>}
+              />
+            </div>
           )}
         </div>
-      </div>
+      </PageBody>
     </div>
   );
 }

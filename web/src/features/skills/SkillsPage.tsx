@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { PageBody, PageHeader } from "@/components/ui/page-header";
 import {
   VisibilityBadge,
   VisibilitySelect,
@@ -232,47 +233,44 @@ export function SkillsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[860px] space-y-5 px-8 py-8">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-lg font-medium">技能</h1>
-            <p className="mt-1 text-[13px] text-secondary">
-              可复用的能力包。既可以是本地编写的提示词 + 工具声明，也可以直接从 GitHub 安装
-              Agent Skills 技能包（SKILL.md + 资源文件）。
-            </p>
-          </div>
-          <div className="flex shrink-0 gap-2">
-            <input
-              ref={importInputRef}
-              type="file"
-              accept=".zip"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) void importZip(file);
-                e.target.value = "";
-              }}
-            />
-            <Button variant="outline" onClick={() => importInputRef.current?.click()}>
-              <Upload size={13} className="mr-1.5" />
-              导入 zip
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setInstallUrl("");
-                setInstallOpen(true);
-              }}
-            >
-              <Download size={13} className="mr-1.5" />
-              从 GitHub 安装
-            </Button>
-            <Button onClick={startNew}>
-              <Plus size={13} className="mr-1.5" />
-              新建技能
-            </Button>
-          </div>
-        </div>
+      <PageBody width="narrow" className="space-y-5">
+        <PageHeader
+          title="技能"
+          description="可复用的能力包。既可以是本地编写的提示词 + 工具声明，也可以直接从 GitHub 安装 Agent Skills 技能包（SKILL.md + 资源文件）。"
+          actions={
+            <div className="flex shrink-0 gap-2">
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".zip"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void importZip(file);
+                  e.target.value = "";
+                }}
+              />
+              <Button variant="outline" onClick={() => importInputRef.current?.click()}>
+                <Upload size={13} className="mr-1.5" />
+                导入 zip
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setInstallUrl("");
+                  setInstallOpen(true);
+                }}
+              >
+                <Download size={13} className="mr-1.5" />
+                从 GitHub 安装
+              </Button>
+              <Button onClick={startNew}>
+                <Plus size={13} className="mr-1.5" />
+                新建技能
+              </Button>
+            </div>
+          }
+        />
 
         <div className="flex w-fit gap-1 rounded-lg border border-line bg-surface-2 p-1">
           {(
@@ -348,7 +346,7 @@ export function SkillsPage() {
                       className={cn(
                         "rounded-md border px-2 py-1 text-xs transition-colors duration-150",
                         form.tools.includes(t.id)
-                          ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
+                          ? "border-brand bg-brand-soft text-brand-ink "
                           : "border-line text-secondary hover:border-line-strong",
                       )}
                     >
@@ -617,7 +615,7 @@ export function SkillsPage() {
             </Card>
           </div>
         )}
-      </div>
+      </PageBody>
     </div>
   );
 }

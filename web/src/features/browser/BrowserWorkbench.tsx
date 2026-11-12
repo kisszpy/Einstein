@@ -8,10 +8,12 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   BookOpen,
+  ChevronDown,
   Code2,
   FileCode2,
   FolderOpen,
   Globe2,
+  LayoutTemplate,
   Loader2,
   PanelLeft,
   Presentation,
@@ -23,6 +25,7 @@ import { ArtifactView } from "./components/ArtifactView";
 import { DeckCraftStage } from "./components/DeckCraftStage";
 import { DeckEditor } from "./components/DeckEditor";
 import { FileTree } from "./components/FileTree";
+import { ThemePackPanel } from "./components/ThemePackPanel";
 import { WebView } from "./WebView";
 import * as api from "./api";
 import { type BrowserState, type ProjectInfo, type TreeEntry } from "./types";
@@ -31,6 +34,7 @@ const TABS = [
   { id: "artifact" as const, label: "产物", icon: FolderOpen },
   { id: "web" as const, label: "网页", icon: Globe2 },
   { id: "deck" as const, label: "演示", icon: Presentation },
+  { id: "templates" as const, label: "模板", icon: LayoutTemplate },
 ];
 
 interface Props {
@@ -59,7 +63,7 @@ export function BrowserWorkbench({
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [entries, setEntries] = useState<TreeEntry[]>([]);
   const [loadingTree, setLoadingTree] = useState(false);
-  const [railOpen, setRailOpen] = useState(!compact);
+  const [railOpen, setRailOpen] = useState(() => !compact && window.innerWidth >= 768);
   const [treeTick, setTreeTick] = useState(0);
   /** pptx 的两种呈现：放映级（DeckCraft，默认）与结构化（服务端按主题重排）。
    *  默认给放映级——用户要的是「所见即所得的漂亮演示」。 */
@@ -118,13 +122,13 @@ export function BrowserWorkbench({
   );
   const activeProject = projects.find((item) => item.id === project);
   const railWidth = compact ? 176 : 212;
-  const showRail = tab !== "web" && railOpen;
+  const showRail = tab !== "web" && tab !== "templates" && railOpen;
 
   return (
     <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", className)}>
       {/* 顶栏：三个来源 + 当前上下文 */}
-      <div className="flex shrink-0 items-center gap-1 border-b border-line px-2.5">
-        <div className="flex items-center gap-0.5 py-1.5">
+      <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-line px-2.5">
+        <div className="flex min-w-0 shrink items-center gap-0.5 overflow-x-auto py-1.5 [scrollbar-width:none]">
           {TABS.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
@@ -136,9 +140,9 @@ export function BrowserWorkbench({
                 if (compact && id !== "web") setRailOpen(true);
               }}
               className={cn(
-                "flex items-center gap-1.5 rounded-md px-2 py-1 text-[12.5px] transition-colors",
+                "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-[12.5px] transition-colors",
                 tab === id
-                  ? "bg-brand-soft font-medium text-brand-deep dark:text-brand"
+                  ? "bg-brand-soft font-medium text-brand-ink "
                   : "text-secondary hover:bg-surface-3 hover:text-primary",
               )}
               title={label}
@@ -153,32 +157,42 @@ export function BrowserWorkbench({
 
         <span className="mx-0.5 h-4 w-px bg-line-strong" />
 
-        {compact && tab !== "web" && (
+        {tab !== "web" && tab !== "templates" && (
           <button
             onClick={() => setRailOpen((prev) => !prev)}
             title={railOpen ? "收起文件栏" : "展开文件栏"}
+            aria-label={railOpen ? "收起文件栏" : "展开文件栏"}
+            aria-expanded={railOpen}
             className={cn(
               "rounded-md p-1.5 transition-colors",
-              railOpen ? "text-brand-deep dark:text-brand": "text-tertiary hover:bg-surface-3 hover:text-secondary",
+              compact ? "" : "md:hidden",
+              railOpen ? "text-brand-ink " : "text-tertiary hover:bg-surface-3 hover:text-secondary",
             )}
           >
             <PanelLeft size={13} strokeWidth={1.8} />
           </button>
         )}
 
-        <select
-          value={project}
-          aria-label="切换项目"
-          onChange={(event) => onChange({ project: event.target.value, path: "" })}
-          className="max-w-[168px] rounded-md border border-line bg-surface-2 px-2 py-1 text-[12px] text-secondary outline-none"
-        >
-          <option value="">选择项目…</option>
-          {projects.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name}（{item.artifacts}）
-            </option>
-          ))}
-        </select>
+        <div className="relative shrink-0">
+          <select
+            value={project}
+            aria-label="切换项目"
+            onChange={(event) => onChange({ project: event.target.value, path: "" })}
+            className="h-8 w-[142px] appearance-none truncate rounded-lg border border-line-control bg-surface-1 pl-2.5 pr-7 text-[12.5px] text-secondary outline-none transition-colors hover:border-line-strong focus-visible:border-brand sm:w-[186px]"
+          >
+            <option value="">选择项目…</option>
+            {projects.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}（{item.artifacts}）
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            size={13}
+            strokeWidth={2}
+            className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-tertiary"
+          />
+        </div>
 
         {!compact && (
           <span className="ml-auto flex items-center gap-2 pr-1 text-[12px] text-tertiary">
@@ -190,7 +204,15 @@ export function BrowserWorkbench({
                 <span className="h-3 w-px bg-line" />
               </>
             )}
-            <span>票据 {ticket ? "已签发" : ticketError ? "获取失败" : "…"}</span>
+            <span className="flex items-center gap-1.5">
+              <span
+                className={cn(
+                  "h-1.5 w-1.5 rounded-full",
+                  ticket ? "bg-success" : ticketError ? "bg-danger" : "bg-line-strong",
+                )}
+              />
+              {ticket ? "预览服务正常" : ticketError ? "预览服务未就绪" : "连接中"}
+            </span>
           </span>
         )}
 
@@ -199,12 +221,17 @@ export function BrowserWorkbench({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
         {showRail && (
-          <aside
-            className="flex shrink-0 flex-col border-r border-line bg-surface-2"
-            style={{ width: railWidth }}
-          >
+          <>
+            <div
+              className="absolute inset-0 z-20 bg-black/30 md:hidden"
+              onClick={() => setRailOpen(false)}
+            />
+            <aside
+              className="flex shrink-0 flex-col border-r border-line bg-surface-2 max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:shadow-[var(--shadow-pop)]"
+              style={{ width: railWidth }}
+            >
             <div className="flex items-center justify-between px-2.5 pb-1 pt-2 text-[12px] tracking-wide text-tertiary">
               <span className="flex items-center gap-1">
                 {tab === "deck" ? "演示文稿" : "产物"}
@@ -242,18 +269,26 @@ export function BrowserWorkbench({
                   </p>
                 )
               ) : (
-                <p className="px-2.5 py-6 text-[12px] leading-relaxed text-tertiary">
-                  先在上面选一个项目
-                </p>
+                <div className="px-3 py-8 text-center">
+                  <FolderOpen size={18} className="mx-auto mb-2 text-tertiary" strokeWidth={1.6} />
+                  <p className="text-[12px] leading-relaxed text-tertiary">
+                    在顶部选一个项目
+                    <br />
+                    即可查看产物文件
+                  </p>
+                </div>
               )}
             </div>
           </aside>
+          </>
         )}
 
         <div className="flex min-w-0 flex-1 flex-col">
           {tab === "web" && (
             <WebView url={url} ticket={ticket} onNavigate={(next) => onChange({ url: next })} />
           )}
+
+          {tab === "templates" && <ThemePackPanel />}
 
           {tab === "artifact" &&
             (project ? (
@@ -363,7 +398,7 @@ function DeckList({
           className={cn(
             "flex w-full items-center gap-2 px-2.5 py-2 text-left text-[12.5px]",
             active === item.path
-              ? "bg-brand-soft text-brand-deep dark:text-brand"
+              ? "bg-brand-soft text-brand-ink "
               : "text-secondary hover:bg-surface-3 hover:text-primary",
           )}
           title={item.path}
@@ -396,7 +431,7 @@ function ProjectGrid({
             onClick={() => onPick(item.id)}
             className="group flex flex-col items-start gap-2 rounded-xl border border-line bg-surface-1 p-4 text-left transition-colors hover:border-brand/40 hover:bg-brand-soft/40"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-3 text-secondary group-hover:bg-brand-soft group-hover:text-brand">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-3 text-secondary group-hover:bg-brand-soft group-hover:text-brand-ink">
               <FolderOpen size={15} strokeWidth={1.8} />
             </span>
             <span className="w-full truncate text-[13px] font-medium">{item.name}</span>
@@ -453,7 +488,7 @@ function ProjectOverview({
                   className="flex items-center gap-2 rounded-lg border border-line bg-surface-1 px-3 py-2 text-left hover:border-brand/40 hover:bg-brand-soft/30"
                 >
                   {file.path.endsWith(".html") ? (
-                    <FileCode2 size={13} className="shrink-0 text-brand-deep dark:text-brand"/>
+                    <FileCode2 size={13} className="shrink-0 text-brand-ink "/>
                   ) : file.path.endsWith(".pptx") ? (
                     <Presentation size={13} className="shrink-0 text-warning" />
                   ) : (
@@ -479,7 +514,7 @@ function ProjectOverview({
 function EmptyDeck({ hasProject, hasDecks }: { hasProject: boolean; hasDecks: boolean }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
-      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft text-brand-deep dark:text-brand">
+      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft text-brand-ink ">
         <Presentation size={20} strokeWidth={1.6} />
       </span>
       <p className="text-[13.5px] font-medium">

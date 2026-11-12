@@ -649,6 +649,96 @@ RUN_EVENTS = Table(
     order="created_at",
 )
 
+# ---------------------------------------------------------------- AI PPT 制作
+#
+# 四张表把「模板主题包 → 会话 → 消息 → 生成记录」各管一段：
+# - 主题包是 workspace 级共享资产（同空间全员可读、可引用），删除仅 owner 或 admin；
+# - 会话是运行类数据，owner 隔离；clarify_count 钉住「歧义追问一次」的规则；
+# - 消息 payload 里放确认卡（outline）与结果卡（result），刷新页面靠它恢复；
+# - 生成记录保留历次结果卡，票据过期后靠 list_generations 重新签票。
+PPT_THEME_PACKS = Table(
+    name="ppt_theme_packs",
+    columns=(
+        _c("id"),
+        _c("workspace_id", default="'default'"),
+        _c("owner_id", default="''"),
+        _c("name"),
+        _c("source_filename", default="''"),
+        _c("source_path", default="''"),
+        # ready | partial | failed
+        _c("status", default="'ready'"),
+        _c("palette", "json", default="'{}'"),
+        _c("fonts", "json", default="'{}'"),
+        _c("layouts", "json", default="'[]'"),
+        # 风格迁移的抽取结论（preset + report）：整份 preset 是渲染参数文档，
+        # 拆成几十列没有意义，但必须有列——没有列时写库会静默丢掉它
+        _c("style", "json", default="'{}'"),
+        # slide_size 等不在列表展示的字段放 meta，避免主题包表越来越宽
+        _c("meta", "json", default="'{}'"),
+        _c("fidelity", "json", default="'{}'"),
+        _c("created_at", default="''"),
+        _c("updated_at", default="''"),
+    ),
+    order="updated_at DESC",
+)
+
+PPT_SESSIONS = Table(
+    name="ppt_sessions",
+    columns=(
+        _c("id"),
+        _c("workspace_id", default="'default'"),
+        _c("owner_id", default="''"),
+        _c("title", default="''"),
+        _c("project", default="''"),
+        # 默认专家按拍板结论 #3：全部专家可选，默认 ppt-beautifier
+        _c("expert_id", default="'ppt-beautifier'"),
+        _c("skill_ids", "json", default="'[]'"),
+        _c("kb_ids", "json", default="'[]'"),
+        _c("theme_pack_id", default="''"),
+        # idle | analyzing | awaiting_confirm | generating | done | failed
+        _c("status", default="'idle'"),
+        # 歧义追问次数：>=1 后模型提示词里不再允许追问（仅追问一次）
+        _c("clarify_count", "int", default="0"),
+        _c("page_count", "int", default="0"),
+        _c("total_slides", "int", default="0"),
+        _c("created_at", default="''"),
+        _c("updated_at", default="''"),
+    ),
+    order="updated_at DESC",
+)
+
+PPT_MESSAGES = Table(
+    name="ppt_messages",
+    columns=(
+        _c("id"),
+        _c("session_id"),
+        _c("seq", "int", default="0"),
+        _c("role", default="'user'"),
+        _c("content", default="''"),
+        # outline 确认卡 / result 结果卡都放 payload，结构随版本演化不加列
+        _c("payload", "json", default="'{}'"),
+        _c("created_at", default="''"),
+    ),
+    order="seq",
+)
+
+PPT_GENERATIONS = Table(
+    name="ppt_generations",
+    columns=(
+        _c("id"),
+        _c("session_id"),
+        _c("project", default="''"),
+        _c("deck_path", default="''"),
+        _c("total_slides", "int", default="0"),
+        _c("layouts_used", "json", default="'[]'"),
+        _c("fidelity", "json", default="'{}'"),
+        _c("status", default="'ok'"),
+        _c("error", default="''"),
+        _c("created_at", default="''"),
+    ),
+    order="created_at",
+)
+
 TABLES: dict[str, Table] = {
     t.name: t
     for t in (
@@ -677,6 +767,10 @@ TABLES: dict[str, Table] = {
         RUN_TRACES,
         SHARES,
         RUN_EVENTS,
+        PPT_THEME_PACKS,
+        PPT_SESSIONS,
+        PPT_MESSAGES,
+        PPT_GENERATIONS,
     )
 }
 
@@ -730,5 +824,9 @@ def ddl_all() -> list[str]:
         "CREATE INDEX IF NOT EXISTS idx_memory_ws ON workspace_memory(workspace_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username ON users(username)",
+        "CREATE INDEX IF NOT EXISTS idx_ppt_pack_ws ON ppt_theme_packs(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ppt_sess_ws ON ppt_sessions(workspace_id, owner_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ppt_msg_sess ON ppt_messages(session_id, seq)",
+        "CREATE INDEX IF NOT EXISTS idx_ppt_gen_sess ON ppt_generations(session_id, created_at)",
     ]
     return statements

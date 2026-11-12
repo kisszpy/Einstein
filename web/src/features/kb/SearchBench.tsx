@@ -40,7 +40,7 @@ export function SearchBench({
               className={cn(
                 "rounded-md border px-2 py-0.5 text-xs transition-colors duration-150",
                 mode === m
-                  ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
+                  ? "border-brand bg-brand-soft text-brand-ink "
                   : "border-line text-secondary hover:border-line-strong",
               )}
             >

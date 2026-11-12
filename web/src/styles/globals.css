@@ -4,53 +4,66 @@
 
 /* ---------- 语义 token（对齐 WorkBuddy 设计系统，亮暗两套） ---------- */
 :root {
-  --bg-page: #f5f6f8;          /* 页面底：微冷灰，比卡片低一档（原 #f2f2f2 偏脏黄） */
+  --bg-page: #f4f6fa;          /* 页面底：微冷灰带一丝蓝调，与品牌蓝同族 */
   --bg-surface-1: #ffffff;     /* 卡片 / 输入器 */
-  --bg-surface-2: #eef0f3;     /* 侧栏 / 次级面板：比页面底再深一档，形成"侧栏凹陷"层次 */
-  --bg-surface-3: #f3f4f6;     /* 浮层内嵌块 / 用户消息 */
+  --bg-surface-2: #eceff6;     /* 侧栏 / 次级面板：比页面底再深一档，形成"侧栏凹陷"层次 */
+  --bg-surface-3: #f2f4f9;     /* 浮层内嵌块 / 用户消息 */
   --bg-hover: rgba(15, 23, 42, 0.05);
   --text-primary: #17181a;
   --text-secondary: rgba(15, 23, 42, 0.68);
   /* 60% 才过 AA 4.5:1；45% 只有 2.86:1，全站辅助文字都读不清 */
-  --text-tertiary: rgba(15, 23, 42, 0.61);
-  --text-placeholder: #8a9099;
-  --line-subtle: rgba(15, 23, 42, 0.08);
-  --line-strong: rgba(15, 23, 42, 0.16);
-  --brand: #00c29a;
-  --brand-strong: #00997a;     /* 渐变深端 / hover；大面积实心时不再刺眼 */
-  --brand-deep: #066255;
-  --brand-fg: #ffffff;
-  --brand-soft: rgba(0, 194, 154, 0.08);
-  --success: #218552;
-  --warning: #a35c00;
-  --danger: #cc3232;
-  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-input: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.04);
-  --shadow-pop: 0 8px 24px rgba(15, 23, 42, 0.1), 0 2px 6px rgba(15, 23, 42, 0.04);
-  --shadow-btn: 0 1px 2px rgba(0, 153, 122, 0.28);
+  --text-tertiary: rgba(15, 23, 42, 0.62);
+  --text-placeholder: #6f7681;  /* 4.58:1 on white */
+  --line-subtle: rgba(15, 23, 42, 0.09);
+  --line-strong: rgba(15, 23, 42, 0.18);
+  /* 输入框 / 下拉 / 分段控件专用：比 subtle 深，补足"白底白框"糊成一片的问题 */
+  --line-control: rgba(15, 23, 42, 0.2);
+  /* 品牌蓝阶：500 / 600 / 700 逐级加深，两套主题保持同序（旧 token 在暗色里是反的） */
+  --brand: #2f6bdc;
+  --brand-strong: #2456c4;
+  --brand-deep: #1a3f96;
+  /* 品牌"文字色"：只在浅底/soft 底上当文字、图标用；--brand 本身禁止当 <14px 文字 */
+  --brand-ink: #2050b4;
+  --brand-fg: #ffffff;         /* 白字压 #2f6bdc = 4.93:1，过 AA */
+  --brand-soft: rgba(47, 107, 220, 0.08);
+  --success: #1f7a4d;
+  --warning: #96620a;
+  --danger: #c9302c;
+  --danger-fg: #ffffff;
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.05), 0 1px 1px rgba(15, 23, 42, 0.03);
+  --shadow-input: 0 1px 2px rgba(15, 23, 42, 0.05), 0 4px 16px rgba(15, 23, 42, 0.05);
+  --shadow-pop: 0 8px 24px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.05);
+  --shadow-btn: 0 1px 2px rgba(26, 63, 150, 0.28);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .dark {
-  --bg-page: #17181a;          /* 带一丝冷调的死灰，比纯 #1a1a1a 更接近现代编辑器 */
-  --bg-surface-1: #212327;
-  --bg-surface-2: #1b1d20;
-  --bg-surface-3: #2a2d31;
+  --bg-page: #14161a;
+  --bg-surface-1: #1c1f25;
+  --bg-surface-2: #171a1f;
+  --bg-surface-3: #262a31;
   --bg-hover: rgba(255, 255, 255, 0.06);
   --text-primary: #e9eaec;
-  --text-secondary: rgba(233, 234, 236, 0.66);
+  --text-secondary: rgba(233, 234, 236, 0.68);
   /* 同亮色：45% 只有 3.79:1，提到 62% 过 AA */
   --text-tertiary: rgba(233, 234, 236, 0.62);
-  --text-placeholder: #7c7c7c;
+  --text-placeholder: #8f959d;
   --line-subtle: rgba(255, 255, 255, 0.1);
   --line-strong: rgba(255, 255, 255, 0.18);
-  --brand: #2fd6b0;
-  --brand-strong: #14b595;
-  --brand-deep: #0dbfa3;
-  --brand-fg: #06251f;
-  --brand-soft: rgba(47, 214, 176, 0.14);
-  --success: #55b982;
+  --line-control: rgba(255, 255, 255, 0.22);
+  --brand: #6f9bff;
+  --brand-strong: #5a86f5;
+  --brand-deep: #4a75e6;
+  --brand-ink: #8fb3ff;        /* 5.65:1 on brand-soft */
+  --brand-fg: #0a1020;         /* 亮蓝底配墨字，替代白字（白字仅 2.5:1） */
+  --brand-soft: rgba(111, 155, 255, 0.16);
+  --success: #5fbf8a;
   --warning: #e0a44a;
   --danger: #e46a6a;
+  --danger-fg: #1b0c0c;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-input: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.24);
   --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
@@ -70,19 +83,93 @@
   --color-placeholder: var(--text-placeholder);
   --color-line: var(--line-subtle);
   --color-line-strong: var(--line-strong);
+  --color-line-control: var(--line-control);
   --color-brand: var(--brand);
   --color-brand-strong: var(--brand-strong);
   --color-brand-deep: var(--brand-deep);
+  --color-brand-ink: var(--brand-ink);
   --color-brand-fg: var(--brand-fg);
   --color-brand-soft: var(--brand-soft);
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-danger: var(--danger);
+  --color-danger-fg: var(--danger-fg);
   --radius-card: 12px;
   --radius-panel: 16px;
   --shadow-card: var(--shadow-card);
   --shadow-input: var(--shadow-input);
   --shadow-float: var(--shadow-pop);
+}
+
+/* ---------- 通用排版与数据展示工具类 ---------- */
+/* 页面头：所有业务页共用，避免每页各写一套 h1 尺寸 */
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.page-title {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+.page-desc {
+  margin-top: 6px;
+  max-width: 68ch;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+/* 数据表：表头次级色 + 行分隔 + 数值右对齐，替代各页手写 table */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.data-table thead th {
+  padding: 0 12px 8px;
+  text-align: left;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  border-bottom: 1px solid var(--line-subtle);
+  white-space: nowrap;
+}
+.data-table tbody td {
+  padding: 11px 12px;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--line-subtle);
+  vertical-align: middle;
+}
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.data-table tbody tr {
+  transition: background-color var(--dur-fast) ease;
+}
+.data-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+.data-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.data-table th.num {
+  text-align: right;
+}
+/* 窄屏：表格本身变成横向滚动容器，避免列被压成竖排或溢出卡片 */
+@media (max-width: 640px) {
+  .data-table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
 }
 
 body {
@@ -138,23 +225,125 @@ select:focus-visible {
   padding-inline: 24px;
 }
 
+/* ---------- PPT 设计台：滑块与滚动条走品牌色，不用系统默认灰 ---------- */
+.ppt-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+.ppt-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--brand) 0%,
+    var(--brand) var(--ppt-fill, 50%),
+    var(--line-strong) var(--ppt-fill, 50%),
+    var(--line-strong) 100%
+  );
+}
+.ppt-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -5px;
+  height: 14px;
+  width: 14px;
+  border-radius: 999px;
+  background: var(--bg-surface-1);
+  border: 2px solid var(--brand);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.ppt-range:hover::-webkit-slider-thumb,
+.ppt-range:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+.ppt-range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line-strong);
+}
+.ppt-range::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--brand);
+}
+.ppt-range::-moz-range-thumb {
+  height: 12px;
+  width: 12px;
+  border-radius: 999px;
+  background: var(--bg-surface-1);
+  border: 2px solid var(--brand);
+}
+.ppt-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ppt-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--brand) 45%, transparent) transparent;
+}
+.ppt-scroll::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+.ppt-scroll::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--brand) 7%, transparent);
+  border-radius: 999px;
+}
+.ppt-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand) 42%, transparent);
+}
+.ppt-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--brand) 68%, transparent);
+}
+
+@keyframes ppt-sheen {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.ppt-sheen {
+  background-image: linear-gradient(
+    100deg,
+    transparent 20%,
+    color-mix(in srgb, var(--brand) 16%, transparent) 45%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  animation: ppt-sheen 1.4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ppt-sheen {
+    animation: none;
+  }
+}
+
 /* ---------- 登录页：光晕与动效 ---------- */
 :root {
-  --login-glow: rgba(0, 194, 154, 0.2);
-  --login-glow-alt: rgba(0, 140, 194, 0.14);
+  --login-glow: rgba(47, 107, 220, 0.18);
+  --login-glow-alt: rgba(34, 184, 230, 0.13);
   --login-grid: rgba(0, 0, 0, 0.05);
   /* 神经网络节点的 rgb 分量，canvas 里拼 rgba 用，必须是不带 rgba() 的三元组 */
-  --login-node: 0, 178, 146;
-  --login-link: 0, 150, 152;
-  --login-accent: #4f7cff;
+  --login-node: 47, 107, 220;
+  --login-link: 96, 140, 240;
+  --login-accent: #22b8e6;
 }
 .dark {
-  --login-glow: rgba(47, 214, 176, 0.18);
-  --login-glow-alt: rgba(72, 120, 255, 0.14);
+  --login-glow: rgba(111, 155, 255, 0.18);
+  --login-glow-alt: rgba(34, 184, 230, 0.12);
   --login-grid: rgba(255, 255, 255, 0.05);
-  --login-node: 47, 214, 176;
-  --login-link: 84, 206, 198;
-  --login-accent: #7aa2ff;
+  --login-node: 111, 155, 255;
+  --login-link: 150, 180, 255;
+  --login-accent: #56d3f0;
 }
 
 @keyframes login-rise {

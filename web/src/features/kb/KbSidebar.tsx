@@ -21,7 +21,7 @@ export function KbSidebar({
   onCreate: () => void;
 }) {
   return (
-    <aside className="w-72 shrink-0 overflow-y-auto border-r border-line bg-surface-2 p-4">
+    <aside className="hidden w-72 shrink-0 overflow-y-auto border-r border-line bg-surface-2 p-4 md:block">
       <h2 className="mb-3 text-[13px] font-medium">知识库</h2>
       <div className="space-y-1">
         {kbs.map((kb) => (
@@ -31,7 +31,7 @@ export function KbSidebar({
               className={cn(
                 "min-w-0 flex-1 rounded-lg px-3 py-2 text-left transition-colors duration-150",
                 selected === kb.id
-                  ? "bg-brand-soft text-brand-deep dark:text-brand"
+                  ? "bg-brand-soft text-brand-ink "
                   : "text-secondary hover:bg-surface-3 hover:text-primary",
               )}
             >

@@ -4,7 +4,8 @@
 Bearer 令牌进不去。这里签发短期、限范围的票据，用查询参数或路径段带上：
 
 - 只对 GET 生效；
-- 只放行 `/api/projects/` 与 `/api/browse/` 两个前缀（预览与网页代理）；
+- 只放行 `/api/projects/`、`/api/browse/` 与 `/api/ppt/thumbs/` 三个前缀
+  （产物预览、网页代理、结果卡缩略图）；
 - 15 分钟过期，进程内存储，重启即失效（预览出问题不会变成长期后门）。
 """
 
@@ -16,7 +17,7 @@ import threading
 import time
 
 TTL_SEC = 900
-ALLOWED_PREFIXES = ("/api/projects/", "/api/browse/")
+ALLOWED_PREFIXES = ("/api/projects/", "/api/browse/", "/api/ppt/thumbs/")
 
 # 产物的子资源（样式/图片/站内跳转）走 /file/{ticket}/... 路径段带票据：
 # iframe 内的相对路径无法附加查询参数，只能把票据编进目录。

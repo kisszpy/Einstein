@@ -202,7 +202,7 @@ export function WebView({ url, ticket, onNavigate }: Props) {
           disabled={readLoading}
           className={cn(
             "flex items-center gap-1.5 rounded-md border border-line px-2 py-1.5 text-[12px]",
-            readMode ? "bg-brand-soft text-brand-deep dark:text-brand" : "text-secondary hover:bg-surface-3",
+            readMode ? "bg-brand-soft text-brand-ink " : "text-secondary hover:bg-surface-3",
           )}
           title="抽取正文，不受框架限制"
         >
@@ -281,7 +281,7 @@ function StartPage({ onPick }: { onPick: (url: string) => void }) {
   return (
     <div className="h-full overflow-y-auto px-6 py-10">
       <div className="mx-auto max-w-[620px]">
-        <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-soft text-brand-deep dark:text-brand">
+        <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-soft text-brand-ink ">
           <Globe size={19} strokeWidth={1.7} />
         </span>
         <h2 className="mt-4 text-[17px] font-medium">网页浏览</h2>

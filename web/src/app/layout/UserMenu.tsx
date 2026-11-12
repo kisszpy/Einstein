@@ -57,7 +57,7 @@ export function UserMenu() {
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-secondary transition-colors duration-150 hover:bg-surface-3 hover:text-primary"
       >
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-soft text-[12px] font-medium text-brand-deep dark:text-brand">
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-soft text-[12px] font-medium text-brand-ink ">
           {initial}
         </span>
         <span className="max-w-[7rem] truncate">{user.display_name}</span>
@@ -92,7 +92,7 @@ export function UserMenu() {
                   <button
                     onClick={() => void join()}
                     disabled={busy || !code.trim()}
-                    className="h-7 rounded-lg bg-brand px-2.5 text-[12px] text-white disabled:opacity-40"
+                    className="h-7 rounded-lg bg-brand px-2.5 text-[12px] text-brand-fg disabled:opacity-40"
                   >
                     加入
                   </button>

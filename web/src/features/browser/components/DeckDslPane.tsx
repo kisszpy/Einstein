@@ -68,7 +68,7 @@ export function DeckDslPane({
         <div className="mt-2 rounded-md border border-line bg-surface-2 p-2.5 text-[12px] leading-relaxed">
           {error && <p className="text-danger">{error}</p>}
           {diagnostics && diagnostics.length === 0 && !error && (
-            <p className="font-medium text-brand-deep dark:text-brand">校验通过，无诊断问题</p>
+            <p className="font-medium text-brand-ink ">校验通过，无诊断问题</p>
           )}
           <ul className="space-y-1">
             {(diagnostics ?? []).map((item, i) => {

@@ -96,7 +96,7 @@ export function SkillFilesDialog({ skill, onClose }: Props) {
                 className={cn(
                   "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] transition-colors duration-150",
                   active === file.path
-                    ? "bg-brand-soft text-brand-deep dark:text-brand"
+                    ? "bg-brand-soft text-brand-ink "
                     : "text-secondary hover:bg-surface-3 hover:text-primary",
                 )}
               >

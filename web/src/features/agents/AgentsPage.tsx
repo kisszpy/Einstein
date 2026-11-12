@@ -12,6 +12,7 @@ import { readSseStream } from "@/features/chat/sse-parser";
 import { PreviewPanel } from "@/features/browser/PreviewPanel";
 import { tabForPath, type BrowserState } from "@/features/browser/types";
 import { Button } from "@/components/ui/button";
+import { BrandMark } from "@/components/BrandMark";
 import { cn } from "@/lib/utils";
 import { TaskSidebar } from "./components/TaskSidebar";
 import { Composer } from "./components/Composer";
@@ -134,7 +135,7 @@ export function AgentsPage() {
   const [narrow, setNarrow] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     const saved = window.localStorage.getItem(SIDEBAR_KEY);
-    return saved === null ? true : saved === "1";
+    return saved === null ? window.innerWidth >= 768 : saved === "1";
   });
   const [panelWidth, setPanelWidth] = useState(() => {
     const saved = Number(window.localStorage.getItem(PANEL_WIDTH_KEY));
@@ -666,9 +667,15 @@ export function AgentsPage() {
 
   return (
     <div className="relative flex h-full min-h-0 overflow-hidden bg-page">
+      {sidebarOpen && (
+        <div
+          className="absolute inset-0 z-20 bg-black/30 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
       <div
         className={cn(
-          "shrink-0 overflow-hidden transition-[width] duration-200 ease-out",
+          "shrink-0 overflow-hidden transition-[width] duration-200 ease-out max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:shadow-[var(--shadow-pop)]",
           sidebarOpen ? "w-[264px]" : "w-0",
         )}
       >
@@ -689,6 +696,8 @@ export function AgentsPage() {
           <button
             onClick={() => setSidebarOpen((v) => !v)}
             title={sidebarOpen ? "收起任务栏" : "展开任务栏"}
+            aria-label={sidebarOpen ? "收起任务栏" : "展开任务栏"}
+            aria-expanded={sidebarOpen}
             className="rounded-md p-1.5 text-tertiary transition-colors duration-150 hover:bg-hover hover:text-primary"
           >
             <PanelLeft size={15} strokeWidth={1.9} />
@@ -733,10 +742,8 @@ export function AgentsPage() {
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto">
             <div className="conversation-column pb-6">
               <div className="mb-6 flex flex-col items-center text-center">
-                <span className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-soft text-[17px] font-semibold text-brand-deep">
-                  E
-                </span>
-                <h1 className="text-[22px] font-medium tracking-tight text-primary">
+                <BrandMark size={44} className="mb-4 rounded-[13px] shadow-[0_14px_30px_-16px_var(--brand)]" />
+                <h1 className="text-[21px] font-semibold text-primary">
                   今天想做点什么？
                 </h1>
                 <p className="mt-1.5 text-[13px] text-secondary">

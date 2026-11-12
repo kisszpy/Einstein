@@ -1,6 +1,6 @@
 /** 内置浏览器用到的数据结构。字段与后端 deck 模型一一对应。 */
 
-export type BrowserSource = "artifact" | "web" | "deck";
+export type BrowserSource = "artifact" | "web" | "deck" | "templates";
 
 /** 工作台的全部状态：独立页放 URL，智能体页面板放组件内。 */
 export interface BrowserState {
@@ -14,6 +14,7 @@ export const BROWSER_TABS: { id: BrowserSource; label: string }[] = [
   { id: "artifact", label: "产物" },
   { id: "web", label: "网页" },
   { id: "deck", label: "演示" },
+  { id: "templates", label: "模板" },
 ];
 
 /** 按文件后缀决定落到哪个标签：pptx 进编辑器，其余进产物预览。 */

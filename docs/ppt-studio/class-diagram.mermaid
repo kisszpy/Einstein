@@ -1,0 +1,230 @@
+```mermaid
+classDiagram
+    direction LR
+
+    class ThemePack {
+        +str id
+        +str workspace_id
+        +str owner_id
+        +str name
+        +str source_filename
+        +str source_path
+        +str status
+        +dict palette
+        +dict fonts
+        +list~LayoutInfo~ layouts
+        +dict header_footer
+        +FidelityReport fidelity
+        +SlideSize slide_size
+        +str created_at
+        +str updated_at
+        +to_payload() dict
+    }
+
+    class LayoutInfo {
+        +int index
+        +str name
+        +str kind
+        +list~PlaceholderBox~ placeholders
+        +bool has_title
+        +bool has_body
+    }
+
+    class PlaceholderBox {
+        +int idx
+        +str ph_type
+        +float left
+        +float top
+        +float width
+        +float height
+    }
+
+    class FidelityReport {
+        +int score
+        +list~FidelityIssue~ issues
+        +list~str~ degradations
+        +str summary_zh
+    }
+
+    class FidelityIssue {
+        +str kind
+        +int slide_index
+        +str detail
+        +str fallback
+    }
+
+    class ThemePackStore {
+        +list_packs(workspace_id, uid) list
+        +get_pack(pack_id) ThemePack
+        +create_pack(ws, uid, filename, name, theme) ThemePack
+        +delete_pack(pack_id) bool
+        +can_edit(pack, uid, is_admin) bool
+        +source_bytes(pack) bytes
+    }
+
+    class Outline {
+        +str title
+        +str subtitle
+        +str audience
+        +str lang
+        +int page_count
+        +StyleSpec style
+        +str sources_policy
+        +int version
+        +list~OutlineSection~ sections
+        +list~SourceRef~ sources
+        +normalize() Outline
+        +validate() list~str~
+        +flatten_pages() list~OutlinePage~
+        +total_slides() int
+    }
+
+    class OutlineSection {
+        +str id
+        +str title
+        +int page_start
+        +list~OutlinePage~ pages
+    }
+
+    class OutlinePage {
+        +str id
+        +str title
+        +str kicker
+        +str layout
+        +list~str~ bullets
+        +str note
+        +list~SourceRef~ sources
+        +str layout_resolved
+    }
+
+    class StyleSpec {
+        +str theme_pack_id
+        +str preset_theme
+        +str tone
+        +str density
+    }
+
+    class SourceRef {
+        +str id
+        +str kind
+        +str title
+        +str url
+        +str kb_name
+        +str snippet
+    }
+
+    class PptSession {
+        +str id
+        +str workspace_id
+        +str owner_id
+        +str title
+        +str project
+        +str expert_id
+        +list~str~ skill_ids
+        +list~str~ kb_ids
+        +str theme_pack_id
+        +str status
+        +str created_at
+        +str updated_at
+    }
+
+    class PptMessage {
+        +str id
+        +str session_id
+        +int seq
+        +str role
+        +str content
+        +Outline outline
+        +dict result
+        +str created_at
+    }
+
+    class PptGeneration {
+        +str id
+        +str session_id
+        +str project
+        +str deck_path
+        +int total_slides
+        +list~str~ layouts_used
+        +FidelityReport fidelity
+        +str status
+        +str error
+        +str created_at
+    }
+
+    class Outliner {
+        +analyze(session, request, ws, uid) AsyncIterator
+        -_collect_web(query, mode) WebContext
+        -_collect_kb(kb_ids, query, history) Retrieval
+        -_compose_system(expert_id, theme, page_target, ws, uid) str
+        -_parse_json(text) dict
+        -_sse(event, data) str
+    }
+
+    class DeckRenderer {
+        +render(template_bytes, outline, theme) RenderResult
+        -_drop_existing_slides(prs) None
+        -_pick_layout(prs, page, index, total) tuple
+        -_fill_placeholder(slide, page, theme) list
+        -_absolute_fallback(slide, page, theme) None
+        -_append_sources_slide(prs, outline, theme) int
+        -_set_font(run, size, color, bold, font_name) None
+    }
+
+    class DeckGenerator {
+        +generate(session, outline, project, ws, uid) dict
+        -_resolve_project(ws, project, uid) Path
+        -_save_to_deck(root, filename, blob) str
+        -_issue_ticket(uid, ws) str
+        -_record(session, result) PptGeneration
+    }
+
+    class Sandbox {
+        +project_dir(ws, project) Path
+        +resolve_in(root, rel) Path
+        +dir_size(root) int
+        +write_bytes(ws, project, rel, b64) dict
+        +MAX_PROJECT_BYTES
+    }
+
+    class WebAugment {
+        +MODE_AUTO
+        +MODE_ON
+        +MODE_OFF
+        +decide(user_text, history, mode) Decision
+        +collect(decision) WebContext
+        +payload(ctx) dict
+    }
+
+    class Retrieval {
+        +retrieve(kb_ids, query, history) RetrievalResult
+    }
+
+    ThemePack *-- LayoutInfo
+    ThemePack *-- FidelityReport
+    LayoutInfo *-- PlaceholderBox
+    FidelityReport *-- FidelityIssue
+    ThemePackStore "1" o-- "many" ThemePack
+
+    Outline *-- OutlineSection
+    Outline *-- StyleSpec
+    Outline *-- SourceRef
+    OutlineSection *-- OutlinePage
+    OutlinePage o-- SourceRef
+
+    PptSession "1" o-- "many" PptMessage
+    PptSession "1" o-- "many" PptGeneration
+    PptMessage o-- Outline
+    PptGeneration o-- FidelityReport
+
+    Outliner ..> WebAugment : 取材
+    Outliner ..> Retrieval : KB 检索
+    Outliner ..> Outline : 产出
+    Outliner ..> ThemePack : 版式约束
+
+    DeckRenderer ..> ThemePack : 色板/字体/版式
+    DeckRenderer ..> Outline : 消费
+    DeckGenerator ..> DeckRenderer
+    DeckGenerator ..> Sandbox : 落盘
+    DeckGenerator ..> PptGeneration : 记录
+```

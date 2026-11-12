@@ -452,6 +452,39 @@ def _migration_021(db: Database) -> list[str]:
     ]
 
 
+# 022：AI PPT 制作 —— 主题包 / 会话 / 消息 / 生成记录。
+#
+# 四张表一起建省一次迁移；DDL 与读写共用 app/db/tables.py 的同一份规范，
+# 避免出现「代码里一套、迁移里另一套」。索引与 ddl_all() 的清单保持一致。
+# （架构文档写的是追加 012，但 012 已被切片嵌入指纹占用；迁移只增不改，
+# 已应用的编号绝不能复用，这里顺延到 022。）
+def _migration_022(db: Database) -> list[str]:
+    from app.db.tables import TABLES
+
+    return [
+        TABLES["ppt_theme_packs"].ddl(),
+        TABLES["ppt_sessions"].ddl(),
+        TABLES["ppt_messages"].ddl(),
+        TABLES["ppt_generations"].ddl(),
+        "CREATE INDEX IF NOT EXISTS idx_ppt_pack_ws ON ppt_theme_packs(workspace_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ppt_sess_ws ON ppt_sessions(workspace_id, owner_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ppt_msg_sess ON ppt_messages(session_id, seq)",
+        "CREATE INDEX IF NOT EXISTS idx_ppt_gen_sess ON ppt_generations(session_id, created_at)",
+    ]
+
+
+# 023：主题包的风格抽取结论要真正落库。
+#
+# 022 建表时漏了 style 列：写库按列规范过滤字段，抽出来的 preset/report 被静默
+# 丢掉，列表接口只能退回主题 accent（多数公司模板压根没改主题，于是色板显示的
+# 是 Office 出厂的 4F81BD），mode/ratio 也全空。补列之后 style_of 的补抽结果
+# 才留得住，列表与详情不必每次重解析 pptx。
+def _migration_023(db: Database) -> list[str]:
+    if _column_exists(db, "ppt_theme_packs", "style"):
+        return []
+    return ["ALTER TABLE ppt_theme_packs ADD COLUMN style TEXT NOT NULL DEFAULT '{}'"]
+
+
 MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (2, _MIGRATION_002),
     (3, _MIGRATION_003),
@@ -473,6 +506,8 @@ MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (19, _migration_019),
     (20, _migration_020),
     (21, _migration_021),
+    (22, _migration_022),
+    (23, _migration_023),
 ]
 
 _TYPE_TOKENS = {

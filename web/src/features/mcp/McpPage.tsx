@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
+import { Plug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageBody, PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
 import { confirmDialog } from "@/lib/confirm";
 
@@ -36,7 +39,7 @@ const EMPTY_FORM = {
 };
 
 const STATUS_STYLE: Record<McpServer["status"], { label: string; cls: string }> = {
-  ok: { label: "已连接", cls: "bg-brand-soft text-brand-deep dark:text-brand" },
+  ok: { label: "已连接", cls: "bg-brand-soft text-brand-ink " },
   error: { label: "连接失败", cls: "bg-danger/10 text-danger" },
   unknown: { label: "未刷新", cls: "bg-surface-3 text-tertiary" },
 };
@@ -136,17 +139,21 @@ export function McpPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[860px] space-y-6 px-8 py-8">
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-lg font-medium">MCP 服务</h1>
-            <p className="mt-1 text-[13px] text-secondary">
-              注册外部 MCP Server，工具同步后与内置工具同构挂载给智能体。
-              支持 stdio 与 streamable http 两种传输。
-            </p>
-          </div>
-          <Button onClick={() => { setAdding(true); setError(null); }}>注册服务器</Button>
-        </div>
+      <PageBody width="narrow" className="space-y-6">
+        <PageHeader
+          title="MCP 服务"
+          description="注册外部 MCP Server，工具同步后与内置工具同构挂载给智能体。支持 stdio 与 streamable http 两种传输。"
+          actions={
+            <Button
+              onClick={() => {
+                setAdding(true);
+                setError(null);
+              }}
+            >
+              注册服务器
+            </Button>
+          }
+        />
 
         {/* 注册表单 */}
         {adding && (
@@ -160,7 +167,7 @@ export function McpPage() {
                   className={cn(
                     "rounded-md border px-3 py-1.5 text-xs transition-colors duration-150",
                     form.transport === t
-                      ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
+                      ? "border-brand bg-brand-soft text-brand-ink "
                       : "border-line text-secondary hover:border-line-strong",
                   )}
                 >
@@ -210,9 +217,12 @@ export function McpPage() {
         {/* 服务器列表 */}
         <div className="space-y-2">
           {servers.length === 0 && !adding && (
-            <Card className="p-8 text-center text-[13px] text-tertiary">
-              还没有注册 MCP 服务器。注册后点击「刷新工具」同步工具清单。
-            </Card>
+            <EmptyState
+              icon={Plug}
+              title="还没有注册 MCP 服务器"
+              description="注册外部 MCP Server 后点「刷新工具」同步工具清单，工具会随内置工具一起挂载给智能体。"
+              action={<Button onClick={() => setAdding(true)}>注册服务器</Button>}
+            />
           )}
           {servers.map((s) => {
             const status = STATUS_STYLE[s.status];
@@ -266,7 +276,7 @@ export function McpPage() {
                               className={cn(
                                 "rounded px-1.5 py-0.5 text-xs transition-colors duration-150",
                                 approved
-                                  ? "bg-brand-soft text-brand-deep dark:text-brand"
+                                  ? "bg-brand-soft text-brand-ink "
                                   : "bg-surface-3 text-tertiary line-through",
                               )}
                             >
@@ -305,7 +315,7 @@ export function McpPage() {
             );
           })}
         </div>
-      </div>
+      </PageBody>
     </div>
   );
 }

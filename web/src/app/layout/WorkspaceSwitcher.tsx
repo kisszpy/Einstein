@@ -122,7 +122,7 @@ export function WorkspaceSwitcher() {
                 onClick={() => switchTo(w.id)}
                 className={cn(
                   "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors duration-150",
-                  w.id === active ? "bg-brand-soft text-brand-deep dark:text-brand" : "text-secondary hover:bg-surface-3",
+                  w.id === active ? "bg-brand-soft text-brand-ink " : "text-secondary hover:bg-surface-3",
                 )}
               >
                 <span className="flex min-w-0 items-center gap-1.5">
@@ -171,7 +171,7 @@ export function WorkspaceSwitcher() {
                 <button
                   disabled={busy || !name.trim()}
                   onClick={() => void create()}
-                  className="h-8 shrink-0 rounded-lg bg-brand px-3 text-[13px] text-white transition-opacity duration-150 disabled:opacity-40"
+                  className="h-8 shrink-0 rounded-lg bg-brand px-3 text-[13px] text-brand-fg transition-opacity duration-150 disabled:opacity-40"
                 >
                   创建
                 </button>

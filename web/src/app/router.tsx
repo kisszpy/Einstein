@@ -11,6 +11,9 @@ import { LoginPage } from "@/features/auth/LoginPage";
 const ChatPage = lazy(() =>
   import("@/features/chat/ChatPage").then((m) => ({ default: m.ChatPage })),
 );
+const PptStudioPage = lazy(() =>
+  import("@/features/ppt-studio/PptStudioPage").then((m) => ({ default: m.PptStudioPage })),
+);
 const BrowserPage = lazy(() =>
   import("@/features/browser/BrowserPage").then((m) => ({ default: m.BrowserPage })),
 );
@@ -82,6 +85,14 @@ export const router = createBrowserRouter([
         element: (
           <LazyPage>
             <ChatPage />
+          </LazyPage>
+        ),
+      },
+      {
+        path: "ppt-studio",
+        element: (
+          <LazyPage>
+            <PptStudioPage />
           </LazyPage>
         ),
       },

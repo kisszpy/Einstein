@@ -75,7 +75,7 @@ export function FileTree({
             className={cn(
               "group flex w-full items-center gap-1.5 py-[5px] pr-2 text-left text-[12.5px] transition-colors",
               active === entry.path
-                ? "bg-brand-soft text-brand-deep dark:text-brand"
+                ? "bg-brand-soft text-brand-ink "
                 : "text-secondary hover:bg-surface-3 hover:text-primary",
             )}
             style={{ paddingLeft: 8 + depth * 12 }}

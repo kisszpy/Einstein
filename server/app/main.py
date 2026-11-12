@@ -32,6 +32,7 @@ from app.api.routes import (
     openapi,
     platform,
     projects,
+    ppt as ppt_routes,
     public as public_routes,
     shares as share_routes,
     skills,
@@ -397,6 +398,7 @@ def create_app() -> FastAPI:
     app.include_router(model_routes.router, prefix="/api")
     app.include_router(alert_routes.router, prefix="/api")
     app.include_router(template_routes.router, prefix="/api")
+    app.include_router(ppt_routes.router, prefix="/api")
     app.include_router(share_routes.router, prefix="/api")
     # 免登录访问面：token 即权限（中间件对 /api/public/ 前缀放行）
     app.include_router(public_routes.router, prefix="/api")

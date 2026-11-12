@@ -154,7 +154,7 @@ export function DeckCraftPage() {
           {dirty ? "有未保存改动（Ctrl+S 保存）" : "无改动"}
         </span>
         {saved && (
-          <span className="text-brand">
+          <span className="text-brand-ink">
             已回收 {saved.name}（{(saved.bytes.byteLength / 1024).toFixed(0)}KB
             {saved.bytes.byteLength > 2
               ? `，PK=${new Uint8Array(saved.bytes.slice(0, 2))[0] === 0x50 ? "✓" : "✗"}`

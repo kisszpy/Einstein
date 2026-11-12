@@ -103,7 +103,7 @@ export function ConfirmDialog({
           className={cn(
             BUTTON_BASE,
             danger
-              ? "bg-danger text-white hover:opacity-90"
+              ? "bg-danger text-danger-fg hover:opacity-90"
               : "bg-primary text-surface-1 hover:opacity-90",
           )}
         >

@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
+import { FlaskConical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageBody, PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
 import { confirmDialog } from "@/lib/confirm";
 
@@ -189,16 +192,21 @@ export function EvalPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[960px] space-y-6 px-8 py-8">
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-lg font-medium">评测</h1>
-            <p className="mt-1 text-[13px] text-secondary">
-              RAG 回归测试：改提示词、换模型前先跑一遍。检索质量看 Recall / MRR，回答质量看关键词通过率。
-            </p>
-          </div>
-          <Button onClick={() => { setCreating(true); setError(null); }}>新建评测集</Button>
-        </div>
+      <PageBody width="narrow">
+        <PageHeader
+          title="评测"
+          description="RAG 回归测试：改提示词、换模型前先跑一遍。检索质量看 Recall / MRR，回答质量看关键词通过率。"
+          actions={
+            <Button
+              onClick={() => {
+                setCreating(true);
+                setError(null);
+              }}
+            >
+              新建评测集
+            </Button>
+          }
+        />
 
         {/* 知识库选择 + 检索模式 */}
         <div className="flex flex-wrap items-center gap-2">
@@ -211,7 +219,7 @@ export function EvalPage() {
               className={cn(
                 "rounded-md border px-2.5 py-1 text-xs transition-colors duration-150",
                 selectedKb === kb.id
-                  ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
+                  ? "border-brand bg-brand-soft text-brand-ink "
                   : "border-line text-secondary hover:border-line-strong",
               )}
             >
@@ -226,7 +234,7 @@ export function EvalPage() {
               className={cn(
                 "rounded-md border px-2.5 py-1 text-xs transition-colors duration-150",
                 runMode === m
-                  ? "border-brand bg-brand-soft text-brand-deep dark:text-brand"
+                  ? "border-brand bg-brand-soft text-brand-ink "
                   : "border-line text-secondary hover:border-line-strong",
               )}
             >
@@ -293,9 +301,21 @@ export function EvalPage() {
         {/* 评测集列表 */}
         <div className="space-y-2">
           {kbSets.length === 0 && !creating && (
-            <Card className="p-8 text-center text-[13px] text-tertiary">
-              当前知识库还没有评测集。用例格式：问题 + 期望命中的文档 + 回答必须包含的关键词。
-            </Card>
+            <EmptyState
+              icon={FlaskConical}
+              title="当前知识库还没有评测集"
+              description="一个评测集 = 若干「问题 + 期望命中的文档 + 回答必须包含的关键词」。改提示词或换模型后跑一遍，就能看出检索和回答有没有退步。"
+              action={
+                <Button
+                  onClick={() => {
+                    setCreating(true);
+                    setError(null);
+                  }}
+                >
+                  新建第一个评测集
+                </Button>
+              }
+            />
           )}
           {kbSets.map((s) => (
             <Card key={s.id} className="p-4">
@@ -381,13 +401,13 @@ export function EvalPage() {
                         <span className="text-secondary">{r.mode}</span>
                         <span className="text-secondary">
                           MRR {r.mrr}
-                          <span className={delta("mrr") && delta("mrr")! < 0 ? "text-danger" : "text-brand-deep dark:text-brand" }>
+                          <span className={delta("mrr") && delta("mrr")! < 0 ? "text-danger" : "text-brand-ink " }>
                             {fmtDelta(delta("mrr"))}
                           </span>
                         </span>
                         <span className="text-secondary">
                           Recall {r.recall_at_k}
-                          <span className={delta("recall_at_k") && delta("recall_at_k")! < 0 ? "text-danger" : "text-brand-deep dark:text-brand" }>
+                          <span className={delta("recall_at_k") && delta("recall_at_k")! < 0 ? "text-danger" : "text-brand-ink " }>
                             {fmtDelta(delta("recall_at_k"))}
                           </span>
                         </span>
@@ -406,7 +426,7 @@ export function EvalPage() {
                       <span
                         className={cn(
                           "rounded px-1.5 py-0.5 text-xs",
-                          it.hit ? "bg-brand-soft text-brand-deep dark:text-brand" : "bg-danger/10 text-danger",
+                          it.hit ? "bg-brand-soft text-brand-ink " : "bg-danger/10 text-danger",
                         )}
                       >
                         {it.hit ? `检索命中 #${it.rank}` : "检索未命中"}
@@ -415,7 +435,7 @@ export function EvalPage() {
                         <span
                           className={cn(
                             "rounded px-1.5 py-0.5 text-xs",
-                            it.answer_pass ? "bg-brand-soft text-brand-deep dark:text-brand" : "bg-danger/10 text-danger",
+                            it.answer_pass ? "bg-brand-soft text-brand-ink " : "bg-danger/10 text-danger",
                           )}
                         >
                           {it.answer_pass ? "回答通过" : "回答未通过"}
@@ -439,7 +459,7 @@ export function EvalPage() {
             </div>
           </Card>
         )}
-      </div>
+      </PageBody>
     </div>
   );
 }

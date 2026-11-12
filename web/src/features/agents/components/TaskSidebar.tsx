@@ -50,7 +50,7 @@ export function TaskSidebar({
       <div className="px-3 pb-1.5 pt-3">
         <button
           onClick={onNewTask}
-          className="flex h-8 w-full items-center justify-center gap-1.5 rounded-lg bg-brand-soft text-[13px] font-medium text-brand-deep transition-colors duration-150 hover:bg-brand/20 dark:text-brand"
+          className="flex h-8 w-full items-center justify-center gap-1.5 rounded-lg bg-brand-soft text-[13px] font-medium text-brand-ink transition-colors duration-150 hover:bg-brand/20 "
         >
           <Plus size={14} strokeWidth={2} />
           新建任务
@@ -111,7 +111,7 @@ export function TaskSidebar({
                       <span
                         className={cn(
                           "block truncate text-[12.5px] leading-5",
-                          active ? "text-brand-deep dark:text-brand" : "text-secondary",
+                          active ? "text-brand-ink " : "text-secondary",
                         )}
                       >
                         {session.title}

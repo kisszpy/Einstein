@@ -23,7 +23,7 @@ export const VISIBILITY_HINT: Record<Visibility, string> = {
 
 const BADGE_STYLE: Record<Visibility, string> = {
   private: "bg-surface-3 text-tertiary",
-  workspace: "bg-brand-soft text-brand-deep dark:text-brand",
+  workspace: "bg-brand-soft text-brand-ink ",
   shared: "bg-warning/15 text-warning",
 };
 

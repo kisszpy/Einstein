@@ -128,7 +128,7 @@ export function AssistantTurn({
                   {done ? (
                     <Check size={12} className="mt-[5px] shrink-0 text-tertiary" />
                   ) : doing ? (
-                    <Loader2 size={11} className="mt-[6px] shrink-0 animate-spin text-brand-deep dark:text-brand"/>
+                    <Loader2 size={11} className="mt-[6px] shrink-0 animate-spin text-brand-ink "/>
                   ) : (
                     <Circle size={8} className="mt-[8px] shrink-0 text-tertiary/60" />
                   )}
@@ -169,9 +169,9 @@ export function AssistantTurn({
             )}
           >
             {running ? (
-              <Loader2 size={13} className="animate-spin text-brand-deep dark:text-brand"/>
+              <Loader2 size={13} className="animate-spin text-brand-ink "/>
             ) : (
-              <Sparkles size={13} className="text-brand-deep dark:text-brand"/>
+              <Sparkles size={13} className="text-brand-ink "/>
             )}
             <span>
               {running
@@ -210,7 +210,7 @@ export function AssistantTurn({
                         strokeWidth={1.9}
                         className={cn(
                           "mt-[3px] shrink-0",
-                          failed ? "text-danger" : row.result ? "text-tertiary" : "text-brand-deep dark:text-brand"
+                          failed ? "text-danger" : row.result ? "text-tertiary" : "text-brand-ink "
                         )}
                       />
                       <span className="min-w-0 flex-1">
@@ -277,7 +277,7 @@ export function AssistantTurn({
               title={cite.text}
               className="flex items-center gap-1.5 truncate rounded-lg bg-surface-1 px-2.5 py-1.5 text-[12px] text-secondary"
             >
-              <span className="shrink-0 font-medium text-brand-deep dark:text-brand">[{cite.index}]</span>
+              <span className="shrink-0 font-medium text-brand-ink ">[{cite.index}]</span>
               <span className="truncate">{cite.document_name}</span>
               <span className="ml-auto shrink-0 text-[12px] text-tertiary">
                 相关度 {Number(cite.score ?? 0).toFixed(2)}
@@ -299,7 +299,7 @@ export function AssistantTurn({
                 title="在右侧预览（不改页面）"
                 className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
               >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-[12px] font-semibold text-brand-deep">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-[12px] font-semibold text-brand-ink">
                   {fileName(artifact.path).split(".").pop()?.slice(0, 3).toUpperCase()}
                 </span>
                 <span className="min-w-0 flex-1">
@@ -310,7 +310,7 @@ export function AssistantTurn({
                     {artifactKindLabel(artifact)}
                   </span>
                 </span>
-                <span className="mr-1 shrink-0 rounded-md px-1.5 py-1 text-[12px] text-tertiary transition-colors group-hover:text-brand">
+                <span className="mr-1 shrink-0 rounded-md px-1.5 py-1 text-[12px] text-tertiary transition-colors group-hover:text-brand-ink">
                   预览
                 </span>
               </button>

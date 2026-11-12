@@ -8,8 +8,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageBody, PageHeader } from "@/components/ui/page-header";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { confirmDialog } from "@/lib/confirm";
@@ -108,7 +111,7 @@ function Badge({ tone = "muted", children }: { tone?: "muted" | "brand"; childre
     <span
       className={cn(
         "rounded px-1.5 py-0.5 text-[12px]",
-        tone === "brand" ? "bg-brand-soft text-brand-deep dark:text-brand" : "bg-surface-3 text-tertiary",
+        tone === "brand" ? "bg-brand-soft text-brand-ink " : "bg-surface-3 text-tertiary",
       )}
     >
       {children}
@@ -374,16 +377,12 @@ export function ModelsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[960px] space-y-4 px-8 py-8">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-lg font-medium">模型</h1>
-            <p className="mt-1 text-[13px] text-secondary">
-              对话与智能体实际调用的端点。留空则由 .env 决定。
-            </p>
-          </div>
-          <Button onClick={openCreate}>添加模型</Button>
-        </div>
+      <PageBody width="narrow">
+        <PageHeader
+          title="模型"
+          description="对话与智能体实际调用的端点。留空则由 .env 决定。"
+          actions={<Button onClick={openCreate}>添加模型</Button>}
+        />
 
         {loadError && (
           <Card className="flex items-center justify-between gap-3 p-4">
@@ -417,9 +416,12 @@ export function ModelsPage() {
         )}
 
         {!loading && !loadError && items.length === 0 && (
-          <Card className="p-8 text-center text-sm text-tertiary">
-            还没有登记模型，所有调用走 .env。点击右上角「添加模型」登记一个端点。
-          </Card>
+          <EmptyState
+            icon={Cpu}
+            title="还没有登记模型"
+            description="所有调用当前走 .env 里的默认端点。登记一个自己的端点后，可以按工作区隔离调用与计费。"
+            action={<Button onClick={openCreate}>添加第一个模型</Button>}
+          />
         )}
 
         {items.map((row) => {
@@ -539,7 +541,7 @@ export function ModelsPage() {
             </Card>
           );
         })}
-      </div>
+      </PageBody>
 
       {/* 添加 / 编辑：项目里没有 Modal，遮罩 + Esc 自己处理 */}
       {editing && (

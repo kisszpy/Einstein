@@ -49,7 +49,7 @@ function WebPanel({ web }: { web: WebState }) {
   if (web.status === "checking" || web.status === "searching") {
     return (
       <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-surface-2 px-2.5 py-1.5 text-xs text-tertiary">
-        <Globe size={12} className="shrink-0 animate-pulse text-brand-deep dark:text-brand"/>
+        <Globe size={12} className="shrink-0 animate-pulse text-brand-ink "/>
         <span className="truncate">
           {web.status === "checking" ? "判断是否需要联网…" : `联网检索：${web.query ?? ""}`}
         </span>
@@ -93,7 +93,7 @@ function WebPanel({ web }: { web: WebState }) {
                 target="_blank"
                 rel="noreferrer"
                 title={s.snippet}
-                className="text-brand-deep underline-offset-2 hover:underline dark:text-brand"
+                className="text-brand-ink underline-offset-2 hover:underline "
               >
                 [W{s.index}] {s.title}
               </a>
@@ -101,7 +101,7 @@ function WebPanel({ web }: { web: WebState }) {
               <Link
                 to={`/assets?tab=web&url=${encodeURIComponent(s.final_url || s.url)}`}
                 title="在资产页打开"
-                className="shrink-0 text-tertiary transition-colors hover:text-brand"
+                className="shrink-0 text-tertiary transition-colors hover:text-brand-ink"
               >
                 <AppWindow size={12} />
               </Link>
@@ -305,7 +305,7 @@ export const MessageBubble = memo(function MessageBubble({
                   onClick={() => onEdit(index)}
                   disabled={busy}
                   title="编辑后重发"
-                  className="flex items-center gap-1 rounded px-1 py-0.5 text-xs text-tertiary transition-colors hover:text-brand disabled:opacity-50"
+                  className="flex items-center gap-1 rounded px-1 py-0.5 text-xs text-tertiary transition-colors hover:text-brand-ink disabled:opacity-50"
                 >
                   <Pencil size={11} />
                   编辑
@@ -367,7 +367,7 @@ export const MessageBubble = memo(function MessageBubble({
                       key={c.chunk_id}
                       title={c.text}
                       onClick={() => void locate(c.chunk_id)}
-                      className="rounded bg-surface-3 px-1.5 py-0.5 text-xs text-secondary transition-colors duration-150 hover:bg-brand-soft hover:text-brand"
+                      className="rounded bg-surface-3 px-1.5 py-0.5 text-xs text-secondary transition-colors duration-150 hover:bg-brand-soft hover:text-brand-ink"
                     >
                       [{c.index}] {c.document_name} · {c.score.toFixed(2)}
                     </button>
@@ -401,8 +401,8 @@ export const MessageBubble = memo(function MessageBubble({
                   onClick={() => void sendRating("up")}
                   title="有帮助"
                   className={cn(
-                    "rounded p-1 transition-colors duration-150 hover:text-brand",
-                    rating === "up" && "text-brand-deep dark:text-brand"
+                    "rounded p-1 transition-colors duration-150 hover:text-brand-ink",
+                    rating === "up" && "text-brand-ink "
                   )}
                 >
                   <ThumbsUp size={13} />
@@ -423,7 +423,7 @@ export const MessageBubble = memo(function MessageBubble({
                     onClick={() => onRegenerate(index)}
                     disabled={busy}
                     title="重新生成一版，旧答案会保留"
-                    className="ml-0.5 flex items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors duration-150 hover:text-brand disabled:cursor-not-allowed disabled:opacity-40"
+                    className="ml-0.5 flex items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors duration-150 hover:text-brand-ink disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <RefreshCw size={12} />
                     重新生成
@@ -454,12 +454,12 @@ export const MessageBubble = memo(function MessageBubble({
                             ? "把这一轮的问题加进评测集，用来做回归"
                             : "没有找到这一轮的问题"
                         }
-                        className="rounded-md border border-line bg-surface-1 px-2.5 py-1 text-xs text-secondary transition-colors duration-150 hover:border-brand hover:text-brand disabled:opacity-50"
+                        className="rounded-md border border-line bg-surface-1 px-2.5 py-1 text-xs text-secondary transition-colors duration-150 hover:border-brand hover:text-brand-ink disabled:opacity-50"
                       >
                         {evalBusy ? "处理中…" : "把这个问题加入评测集"}
                       </button>
                       {evalNotice && (
-                        <span className={cn("text-xs", evalAdded ? "text-brand-deep dark:text-brand": "text-tertiary")}>
+                        <span className={cn("text-xs", evalAdded ? "text-brand-ink ": "text-tertiary")}>
                           {evalNotice}
                         </span>
                       )}
@@ -473,7 +473,7 @@ export const MessageBubble = memo(function MessageBubble({
                             type="button"
                             disabled={evalBusy}
                             onClick={() => void appendToEvalSet(s)}
-                            className="flex w-full items-center justify-between rounded-md border border-line bg-surface-1 px-2 py-1.5 text-left text-xs text-secondary transition-colors duration-150 hover:border-brand hover:text-brand disabled:opacity-50"
+                            className="flex w-full items-center justify-between rounded-md border border-line bg-surface-1 px-2 py-1.5 text-left text-xs text-secondary transition-colors duration-150 hover:border-brand hover:text-brand-ink disabled:opacity-50"
                           >
                             <span className="truncate">{s.name}</span>
                             <span className="shrink-0 text-tertiary">{s.items.length} 条</span>

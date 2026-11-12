@@ -160,7 +160,7 @@ export function AlertsTab() {
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[13px] font-medium text-primary">{rule.name}</span>
-                  <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[12px] text-brand-deep dark:text-brand">
+                  <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[12px] text-brand-ink ">
                     {rule.kind_label}
                   </span>
                   {!rule.enabled && (

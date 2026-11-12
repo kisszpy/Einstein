@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { PageBody, PageHeader } from "@/components/ui/page-header";
+import { StatCard } from "@/components/ui/stat-card";
 import { MembersCard } from "./MembersCard";
 import { InvitesCard } from "./InvitesCard";
 import { MemoryCard } from "./MemoryCard";
 import { confirmDialog } from "@/lib/confirm";
+import { shortTime } from "@/lib/utils";
 
 interface Summary {
   requests: {
@@ -51,13 +54,7 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 function Metric({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <Card className="flex-1 p-4">
-      <p className="text-xs text-tertiary">{label}</p>
-      <p className="mt-1 text-xl font-medium text-primary">{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-tertiary">{sub}</p>}
-    </Card>
-  );
+  return <StatCard label={label} value={value} hint={sub} />;
 }
 
 export function AdminPage() {
@@ -105,18 +102,16 @@ export function AdminPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[960px] space-y-6 px-8 py-8">
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-lg font-medium">系统管理 · 可观测</h1>
-            <p className="mt-1 text-[13px] text-secondary">
-              API 请求与模型调用指标，每 5 秒自动刷新。指标数据保留最近 2000 条请求 / 1000 次调用。
-            </p>
-          </div>
-          <Button variant="ghost" onClick={() => void clear()}>
-            清空指标
-          </Button>
-        </div>
+      <PageBody width="narrow" className="space-y-6">
+        <PageHeader
+          title="系统管理 · 可观测"
+          description="API 请求与模型调用指标，每 5 秒自动刷新。指标数据保留最近 2000 条请求 / 1000 次调用。"
+          actions={
+            <Button variant="ghost" onClick={() => void clear()}>
+              清空指标
+            </Button>
+          }
+        />
 
         {/* 成员表有 6 列，半宽卡片会挤压换行；与邀请码卡片上下通栏排布 */}
         <MembersCard />
@@ -126,35 +121,35 @@ export function AdminPage() {
 
         {summary && (
           <>
-            <div className="flex gap-3">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               <Metric label="API 请求" value={String(summary.requests.total)} sub={`错误 ${summary.requests.errors} · 错误率 ${errorRate}`} />
               <Metric label="平均延迟" value={`${summary.requests.avg_ms} ms`} sub={`P95 ${summary.requests.p95_ms} ms`} />
               <Metric label="模型调用" value={String(summary.llm.total)} sub={`平均 ${summary.llm.avg_ms} ms`} />
               <Metric label="Token (入/出)" value={tokens} />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid gap-4 lg:grid-cols-2">
               {/* 热点路径 */}
               <Card className="p-4">
-                <h3 className="text-[13px] font-medium">热点路径</h3>
-                <table className="mt-2 w-full text-xs">
+                <h3 className="text-[13px] font-medium text-primary">热点路径</h3>
+                <table className="data-table mt-3">
                   <thead>
-                    <tr className="text-left text-tertiary">
-                      <th className="pb-1 font-normal">路径</th>
-                      <th className="pb-1 text-right font-normal">次数</th>
-                      <th className="pb-1 text-right font-normal">均延迟</th>
-                      <th className="pb-1 text-right font-normal">错误</th>
+                    <tr>
+                      <th>路径</th>
+                      <th className="num">次数</th>
+                      <th className="num">均延迟</th>
+                      <th className="num">错误</th>
                     </tr>
                   </thead>
                   <tbody>
                     {summary.requests.top_paths.map((p) => (
-                      <tr key={p.path} className="border-t border-line">
-                        <td className="max-w-[220px] truncate py-1.5 text-secondary" title={p.path}>
+                      <tr key={p.path}>
+                        <td className="max-w-[220px] truncate" title={p.path}>
                           {p.path}
                         </td>
-                        <td className="py-1.5 text-right text-secondary">{p.count}</td>
-                        <td className="py-1.5 text-right text-secondary">{p.avg_ms} ms</td>
-                        <td className="py-1.5 text-right">
+                        <td className="num">{p.count}</td>
+                        <td className="num">{p.avg_ms} ms</td>
+                        <td className="num">
                           {p.errors > 0 ? (
                             <span className="text-danger">{p.errors}</span>
                           ) : (
@@ -170,22 +165,22 @@ export function AdminPage() {
               {/* 模型调用分类 */}
               <Card className="p-4">
                 <h3 className="text-[13px] font-medium">模型调用</h3>
-                <table className="mt-2 w-full text-xs">
+                <table className="data-table mt-3">
                   <thead>
-                    <tr className="text-left text-tertiary">
-                      <th className="pb-1 font-normal">类型</th>
-                      <th className="pb-1 text-right font-normal">次数</th>
-                      <th className="pb-1 text-right font-normal">均耗时</th>
-                      <th className="pb-1 text-right font-normal">错误</th>
+                    <tr>
+                      <th>类型</th>
+                      <th className="num">次数</th>
+                      <th className="num">均耗时</th>
+                      <th className="num">错误</th>
                     </tr>
                   </thead>
                   <tbody>
                     {Object.entries(summary.llm.by_kind).map(([kind, a]) => (
-                      <tr key={kind} className="border-t border-line">
-                        <td className="py-1.5 text-secondary">{KIND_LABEL[kind] ?? kind}</td>
-                        <td className="py-1.5 text-right text-secondary">{a.count}</td>
-                        <td className="py-1.5 text-right text-secondary">{a.avg_ms} ms</td>
-                        <td className="py-1.5 text-right">
+                      <tr key={kind}>
+                        <td>{KIND_LABEL[kind] ?? kind}</td>
+                        <td className="num">{a.count}</td>
+                        <td className="num">{a.avg_ms} ms</td>
+                        <td className="num">
                           {a.errors > 0 ? (
                             <span className="text-danger">{a.errors}</span>
                           ) : (
@@ -212,28 +207,28 @@ export function AdminPage() {
         <Card className="p-4">
           <h3 className="text-[13px] font-medium">最近请求</h3>
           <div className="mt-2 max-h-72 overflow-y-auto">
-            <table className="w-full text-xs">
+            <table className="data-table">
               <thead className="sticky top-0 bg-surface-1">
-                <tr className="text-left text-tertiary">
-                  <th className="pb-1 font-normal">时间 (UTC)</th>
-                  <th className="pb-1 font-normal">方法</th>
-                  <th className="pb-1 font-normal">路径</th>
-                  <th className="pb-1 text-right font-normal">状态</th>
-                  <th className="pb-1 text-right font-normal">耗时</th>
+                <tr>
+                  <th>时间</th>
+                  <th>方法</th>
+                  <th>路径</th>
+                  <th className="num">状态</th>
+                  <th className="num">耗时</th>
                 </tr>
               </thead>
               <tbody>
                 {requests.map((r) => (
-                  <tr key={r.id} className="border-t border-line">
-                    <td className="py-1.5 text-tertiary">{r.ts}</td>
-                    <td className="py-1.5 text-secondary">{r.method}</td>
+                  <tr key={r.id}>
+                    <td className="py-1.5 text-tertiary tabular-nums">{shortTime(r.ts)}</td>
+                    <td>{r.method}</td>
                     <td className="max-w-[320px] truncate py-1.5 text-secondary" title={r.path}>
                       {r.path}
                     </td>
                     <td className={`py-1.5 text-right ${r.status >= 400 ? "text-danger" : "text-tertiary"}`}>
                       {r.status}
                     </td>
-                    <td className="py-1.5 text-right text-secondary">{r.duration_ms} ms</td>
+                    <td className="num">{r.duration_ms} ms</td>
                   </tr>
                 ))}
                 {requests.length === 0 && (
@@ -252,30 +247,30 @@ export function AdminPage() {
         <Card className="p-4">
           <h3 className="text-[13px] font-medium">最近模型调用</h3>
           <div className="mt-2 max-h-72 overflow-y-auto">
-            <table className="w-full text-xs">
+            <table className="data-table">
               <thead className="sticky top-0 bg-surface-1">
-                <tr className="text-left text-tertiary">
-                  <th className="pb-1 font-normal">时间 (UTC)</th>
-                  <th className="pb-1 font-normal">类型</th>
-                  <th className="pb-1 font-normal">模型</th>
-                  <th className="pb-1 text-right font-normal">入/出 Token</th>
-                  <th className="pb-1 text-right font-normal">耗时</th>
-                  <th className="pb-1 text-right font-normal">状态</th>
+                <tr>
+                  <th>时间</th>
+                  <th>类型</th>
+                  <th>模型</th>
+                  <th className="num">入/出 Token</th>
+                  <th className="num">耗时</th>
+                  <th className="num">状态</th>
                 </tr>
               </thead>
               <tbody>
                 {llm.map((c) => (
-                  <tr key={c.id} className="border-t border-line">
-                    <td className="py-1.5 text-tertiary">{c.ts}</td>
-                    <td className="py-1.5 text-secondary">{KIND_LABEL[c.kind] ?? c.kind}</td>
-                    <td className="max-w-[200px] truncate py-1.5 text-secondary" title={c.model}>
+                  <tr key={c.id}>
+                    <td className="text-tertiary tabular-nums">{shortTime(c.ts)}</td>
+                    <td>{KIND_LABEL[c.kind] ?? c.kind}</td>
+                    <td className="max-w-[200px] truncate" title={c.model}>
                       {c.model}
                     </td>
-                    <td className="py-1.5 text-right text-secondary">
+                    <td className="num">
                       {c.prompt_tokens != null ? `${c.prompt_tokens} / ${c.completion_tokens ?? 0}` : "—"}
                     </td>
-                    <td className="py-1.5 text-right text-secondary">{c.duration_ms} ms</td>
-                    <td className={`py-1.5 text-right ${c.status !== "ok" ? "text-danger" : "text-tertiary"}`}>
+                    <td className="num">{c.duration_ms} ms</td>
+                    <td className={`num ${c.status !== "ok" ? "text-danger" : "text-tertiary"}`}>
                       {c.status}
                     </td>
                   </tr>
@@ -291,7 +286,7 @@ export function AdminPage() {
             </table>
           </div>
         </Card>
-      </div>
+      </PageBody>
     </div>
   );
 }

@@ -24,7 +24,7 @@ export function AddSlideButton({
     <button
       onClick={onClick}
       className={cn(
-        "flex items-center justify-center gap-1 rounded-md border border-dashed border-line-strong text-[12px] text-tertiary hover:border-brand hover:text-brand",
+        "flex items-center justify-center gap-1 rounded-md border border-dashed border-line-strong text-[12px] text-tertiary hover:border-brand hover:text-brand-ink",
         compact ? "h-[52px] w-[84px] shrink-0" : "py-2",
       )}
     >

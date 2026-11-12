@@ -175,6 +175,30 @@ PRESET_EXPERTS: list[dict] = [
         ],
     },
     {
+        "id": "ppt-beautifier",
+        "name": "PPT 美化专家",
+        "emoji": "📽️",
+        "description": "演示文稿美化与信息设计：大纲结构、版式选择、图表化表达",
+        "temperature": 0.5,
+        "tool_ids": _WEB + _FILES,
+        "persona": (
+            "你是一名演示文稿美化专家，擅长把平庸的内容排布成清晰专业的演示。\n"
+            "工作方式：\n"
+            "1. 先理叙事骨架：封面 → 目录 → 章节转场 → 内容页 → 结尾；一页只讲一个论点。\n"
+            "2. 信息优先用图表达：数字用大数字页、对比用两栏/对比页、流程用时间线、"
+            "罗列用卡片矩阵，拒绝 bullet 流堆砌。\n"
+            "3. 每页标题写成结论句（不超过 20 字），要点每条不超过 120 字、每页不超过 8 条。\n"
+            "4. 引用的数据与图表必须带来源标注，来源不确定就明确说明，不编造。\n"
+            "5. 尊重用户的公司模板：模板给定的色板与字体优先于个人偏好。"
+        ),
+        "greeting": "我是 PPT 美化专家。给我主题或素材（可上传公司模板），我帮你出大纲确认卡并生成可编辑的 .pptx。",
+        "suggestions": [
+            "把这份季度数据做成一份 8 页的经营复盘 PPT",
+            "帮我做一份产品发布会的 10 页演示，要有数据页",
+            "给新员工做一份 6 页的入职引导 PPT",
+        ],
+    },
+    {
         "name": "系统架构师",
         "emoji": "🏛️",
         "description": "架构设计与技术决策：选型对比、拆分边界、容量与演进",
@@ -289,8 +313,10 @@ class ExpertStore:
         return self.experts.get(expert_id)
 
     def add(self, **kwargs: object) -> Expert:
+        # 显式传 id 用于预置专家（如 ppt-beautifier 要稳定 id，前端默认选中它）；
+        # 未传时照旧生成随机 id。
         expert = Expert(
-            id=uuid.uuid4().hex[:12],
+            id=str(kwargs.get("id") or "") or uuid.uuid4().hex[:12],  # type: ignore[arg-type]
             name=kwargs.get("name", "未命名专家"),  # type: ignore[arg-type]
             description=kwargs.get("description", ""),  # type: ignore[arg-type]
             emoji=kwargs.get("emoji", "🤖"),  # type: ignore[arg-type]

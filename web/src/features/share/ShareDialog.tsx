@@ -154,12 +154,12 @@ export function ShareDialog({ open, onClose, kind, targetId, title }: Props) {
           {items.map((s) => (
             <div key={s.id} className="rounded-lg border border-line p-3">
               <div className="flex items-center gap-2">
-                <Link2 size={13} className={s.live ? "text-brand-deep dark:text-brand": "text-tertiary"} />
+                <Link2 size={13} className={s.live ? "text-brand-ink ": "text-tertiary"} />
                 <span className="min-w-0 flex-1 truncate text-[12.5px]">{shareUrl(s.id)}</span>
                 <span
                   className={
                     s.live
-                      ? "shrink-0 rounded-full bg-brand-soft px-2 py-0.5 text-[12px] text-brand-deep dark:text-brand"
+                      ? "shrink-0 rounded-full bg-brand-soft px-2 py-0.5 text-[12px] text-brand-ink "
                       : "shrink-0 rounded-full bg-surface-3 px-2 py-0.5 text-[12px] text-tertiary"
                   }
                 >
@@ -172,7 +172,7 @@ export function ShareDialog({ open, onClose, kind, targetId, title }: Props) {
                 {s.expires_at && <span>· 到期 {s.expires_at.slice(0, 10)}</span>}
                 <div className="ml-auto flex items-center gap-2">
                   <button
-                    className="flex items-center gap-1 hover:text-brand"
+                    className="flex items-center gap-1 hover:text-brand-ink"
                     onClick={() => void copy(shareUrl(s.id), `${s.id}-link`)}
                   >
                     <Copy size={12} />
@@ -180,7 +180,7 @@ export function ShareDialog({ open, onClose, kind, targetId, title }: Props) {
                   </button>
                   {kind === "kb" && (
                     <button
-                      className="flex items-center gap-1 hover:text-brand"
+                      className="flex items-center gap-1 hover:text-brand-ink"
                       onClick={() => void copy(embedSnippet(s.id), `${s.id}-embed`)}
                     >
                       <Copy size={12} />
@@ -191,7 +191,7 @@ export function ShareDialog({ open, onClose, kind, targetId, title }: Props) {
                     href={`/s/${s.id}`}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center gap-1 hover:text-brand"
+                    className="flex items-center gap-1 hover:text-brand-ink"
                   >
                     <ExternalLink size={12} />
                     打开

@@ -17,6 +17,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useTheme } from "@/app/layout/useTheme";
+import { BrandMark } from "@/components/BrandMark";
 import { bootstrap, lastUsername, login, useAuth } from "@/lib/auth";
 import { usePrefersReducedMotion } from "@/lib/usePrefersReducedMotion";
 import { NeuralField } from "./NeuralField";
@@ -76,7 +77,7 @@ function Ticker() {
       aria-hidden
       className="mt-4 flex h-[18px] items-center justify-center gap-1.5 font-mono text-[12px] tracking-[0.02em] text-tertiary"
     >
-      <span className="text-brand-deep dark:text-brand">›</span>
+      <span className="text-brand-ink">›</span>
       <span className="tabular-nums">{text}</span>
       {!reduce && <span className="login-caret inline-block h-3 w-[1.5px] bg-brand" />}
     </p>
@@ -164,11 +165,11 @@ export function LoginPage() {
         />
         <NeuralField className="absolute inset-0 h-full w-full opacity-70" />
         <div
-          className="login-drift absolute -left-[18%] -top-[30%] h-[680px] w-[680px] rounded-full blur-[140px]"
+          className="login-drift absolute -left-[18%] -top-[30%] h-[680px] w-[680px] rounded-full blur-[110px]"
           style={{ background: "radial-gradient(circle, var(--login-glow), transparent 70%)" }}
         />
         <div
-          className="login-drift absolute -bottom-[34%] right-[-14%] h-[620px] w-[620px] rounded-full blur-[130px]"
+          className="login-drift absolute -bottom-[34%] right-[-14%] h-[620px] w-[620px] rounded-full blur-[100px]"
           style={{
             background: "radial-gradient(circle, var(--login-glow-alt), transparent 72%)",
             animationDelay: "-9s",
@@ -187,15 +188,10 @@ export function LoginPage() {
       {/* ---------- 顶栏 ---------- */}
       <header className="relative z-10 mx-auto flex w-full max-w-[1180px] items-center justify-between px-5 pt-6 sm:px-8">
         <div className="login-fade flex items-center gap-2.5">
-          <span
-            className="flex h-8 w-8 items-center justify-center rounded-[10px] text-[13px] font-semibold text-brand-fg shadow-[0_8px_20px_-10px_var(--brand)]"
-            style={{ background: "linear-gradient(145deg, var(--brand), var(--brand-deep))" }}
-          >
-            E
-          </span>
+          <BrandMark size={30} className="shadow-[0_8px_20px_-10px_var(--brand)]" />
           <span className="leading-none">
-            <span className="block text-[13.5px] font-medium tracking-[-0.01em]">Einstein</span>
-            <span className="mt-1 block text-[9.5px] tracking-[0.22em] text-tertiary">
+            <span className="block text-[13.5px] font-medium">Einstein</span>
+            <span className="mt-1 block text-[10px] tracking-[0.18em] text-tertiary">
               AI PLATFORM
             </span>
           </span>
@@ -269,17 +265,14 @@ export function LoginPage() {
                       }}
                     />
                   </span>
-                  <span
-                    className="relative flex h-[46px] w-[46px] items-center justify-center rounded-[15px] text-[18px] font-semibold text-brand-fg shadow-[0_12px_28px_-12px_var(--brand)]"
-                    style={{ background: "linear-gradient(145deg, var(--brand), var(--brand-deep))" }}
-                  >
-                    E
-                  </span>
+                  <BrandMark
+                    size={46}
+                    title="Einstein"
+                    className="relative rounded-[11px] shadow-[0_12px_28px_-12px_var(--brand)]"
+                  />
                 </div>
 
-                <h1 className="text-center text-[21px] font-medium tracking-[-0.015em]">
-                  进入智能工作台
-                </h1>
+                <h1 className="text-center text-[21px] font-semibold">进入智能工作台</h1>
                 <p className="mt-2 text-center text-[12.5px] leading-5 text-tertiary">
                   一套底座，三种用法——检索、执行、接入。
                 </p>
@@ -295,7 +288,7 @@ export function LoginPage() {
                         <User
                           size={15}
                           strokeWidth={1.7}
-                          className="pointer-events-none absolute left-3.5 top-1/2 z-10 -translate-y-1/2 text-tertiary transition-all duration-300 group-focus-within:scale-110 group-focus-within:text-brand"
+                          className="pointer-events-none absolute left-3.5 top-1/2 z-10 -translate-y-1/2 text-tertiary transition-all duration-300 group-focus-within:scale-110 group-focus-within:text-brand-ink"
                         />
                         <input
                           id="username"
@@ -321,7 +314,7 @@ export function LoginPage() {
                         <Lock
                           size={15}
                           strokeWidth={1.7}
-                          className="pointer-events-none absolute left-3.5 top-1/2 z-10 -translate-y-1/2 text-tertiary transition-all duration-300 group-focus-within:scale-110 group-focus-within:text-brand"
+                          className="pointer-events-none absolute left-3.5 top-1/2 z-10 -translate-y-1/2 text-tertiary transition-all duration-300 group-focus-within:scale-110 group-focus-within:text-brand-ink"
                         />
                         <input
                           id="password"
@@ -381,7 +374,6 @@ export function LoginPage() {
                           "linear-gradient(120deg, var(--brand), var(--brand-deep) 58%, var(--brand))",
                       }}
                     />
-                    <span aria-hidden className="login-btn-sheen absolute bottom-0 top-0" />
                     {done && (
                       <span
                         aria-hidden
@@ -426,7 +418,7 @@ export function LoginPage() {
                       setPassword("admin123");
                       setError("");
                     }}
-                    className="shrink-0 rounded-md px-2 py-1 text-[12px] text-brand-deep transition-colors duration-150 hover:bg-brand-soft dark:text-brand"
+                    className="shrink-0 rounded-md px-2 py-1 text-[12px] text-brand-ink transition-colors duration-150 hover:bg-brand-soft "
                   >
                     一键填入
                   </button>
@@ -444,7 +436,7 @@ export function LoginPage() {
                 className="login-pop flex items-center gap-1.5 rounded-full border border-line bg-surface-1/55 px-3 py-1.5 text-[12px] text-secondary backdrop-blur transition-colors duration-200 hover:border-brand/30 hover:text-primary"
                 style={{ animationDelay: `${340 + i * 90}ms` }}
               >
-                <f.icon size={12} strokeWidth={1.8} className="text-brand-deep dark:text-brand"/>
+                <f.icon size={12} strokeWidth={1.8} className="text-brand-ink"/>
                 {f.label}
               </span>
             ))}

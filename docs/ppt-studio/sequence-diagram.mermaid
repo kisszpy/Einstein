@@ -1,0 +1,135 @@
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant FE as PptStudioPage<br/>(PptComposer/TemplatePicker)
+    participant API as /api/ppt<br/>(routes/ppt.py)
+    participant TP as ThemePackService
+    participant SS as SessionStore
+    participant OUT as Outliner
+    participant WEB as web_augment
+    participant RAG as retrieval
+    participant LLM as llm.stream_chat
+    participant REN as DeckRenderer
+    participant GEN as DeckGenerator
+    participant SB as sandbox
+    participant PRJ as projects 表
+    participant DC as DeckCraftStage<br/>(iframe)
+    participant SAVE as PUT 项目 file-bytes
+
+    rect rgb(238, 246, 255)
+    note over U,TP: ① 上传公司模板 → 主题包
+    U->>FE: 选 .pptx 后点上传
+    FE->>API: POST /ppt/templates (multipart)
+    API->>API: 校验后缀/体积(≤32MB)
+    API->>TP: parse_theme_pack(bytes, filename)
+    TP->>TP: Presentation(BytesIO) 读母版/版式/占位符
+    TP->>TP: 解析 theme1.xml → clrScheme / fontScheme
+    TP->>TP: 扫描 SmartArt/图表 → FidelityReport
+    TP->>TP: 源文件落盘 data/ppt_templates/<ws>/<id>.pptx
+    TP-->>API: ThemePack
+    API-->>FE: 200 {id, palette, layouts, fidelity}
+    note right of FE: 上传按钮：解析中 → 已就绪（挂保真度徽标）
+    end
+
+    rect rgb(240, 255, 244)
+    note over U,SS: ② 输入需求 → 会话
+    U->>FE: 输入需求 + 选专家(默认 ppt-beautifier) + Skills + 模板
+    FE->>API: POST /ppt/sessions {project, expert_id, skill_ids, theme_pack_id}
+    API->>PRJ: projects.require(ws, project, uid)
+    API->>SS: create_session(...)
+    SS-->>FE: PptSession
+    end
+
+    rect rgb(255, 250, 238)
+    note over FE,LLM: ③ 取材 → 确认卡（SSE）
+    FE->>API: POST /ppt/sessions/{sid}/analyze (SSE)
+    API->>SS: append_message(user) / 读取 clarify_count
+    API-->>FE: event: meta {session_id, message_id}
+    API->>OUT: analyze(session, req, ws, uid)
+    OUT-->>FE: event: phase {collecting, 10}
+    OUT->>WEB: decide(prompt, history, web_mode)
+    WEB-->>OUT: Decision{search, query}
+    OUT-->>FE: event: web {searching, query}
+    OUT->>WEB: collect(decision)
+    WEB-->>OUT: WebContext{block, results}
+    OUT-->>FE: event: web {done, results}
+    OUT-->>FE: event: phase {kb, 35}
+    OUT->>RAG: retrieve(kb_ids, prompt, history)
+    RAG-->>OUT: {hits, citations, error?}
+    OUT-->>FE: event: sources {sources[]}
+    OUT-->>FE: event: phase {outlining, 55}
+    OUT->>LLM: stream_chat(system = PPT大纲专家 + 主题约束 + 来源规则)
+    LLM-->>OUT: token 流
+    OUT-->>FE: event: delta {text}
+    alt 需求有歧义 且 clarify_count == 0
+        OUT-->>FE: event: clarification {question}
+        OUT->>SS: status=idle, clarify_count += 1
+        note right of FE: 只追问一次；用户补充后再 analyze
+    else 需求明确
+        OUT->>OUT: _parse_json(text) + Outline.normalize()
+        OUT->>SS: append_message(assistant, outline), status=awaiting_confirm
+        OUT-->>FE: event: outline {outline}
+        OUT-->>FE: event: done
+    end
+    end
+
+    rect rgb(248, 240, 255)
+    note over U,SS: ④ 卡上编辑（本地即时生效）
+    U->>FE: 改标题/加删页/改要点/换风格/切来源策略
+    FE->>API: PUT /ppt/sessions/{sid}/outline {outline}
+    API->>API: Outline.validate() → warnings[]
+    API->>SS: 覆盖消息 payload.outline
+    API-->>FE: {outline, page_count, total_slides, warnings}
+    end
+
+    rect rgb(255, 240, 242)
+    note over FE,SAVE: ⑤ 确认生成 → 落盘
+    U->>FE: 点「确认生成」
+    FE->>API: POST /ppt/sessions/{sid}/generate (SSE) {outline, project, filename}
+    API-->>FE: event: phase {validating, 15}
+    API->>API: Outline.validate() + 版式匹配预检(warnings)
+    API-->>FE: event: phase {rendering, 55}
+    API->>GEN: generate(session, outline, project, ws, uid)
+    GEN->>TP: get(theme_pack_id) / source_bytes
+    GEN->>REN: render(template_bytes, outline, theme)
+    REN->>REN: 清空示例页 → 逐页 add_slide(layout) → 填占位符 → 来源附录页
+    REN-->>GEN: {blob, total_slides, layouts_used, degradations}
+    GEN->>SB: resolve_in(project_dir, "deck/<name>.pptx") + 体积配额校验
+    SB-->>GEN: 写盘完成 {path, bytes}
+    GEN->>GEN: 签票 tickets.issue(uid, ws)
+    GEN->>SS: insert PptGeneration(ok)
+    API-->>FE: event: phase {saving, 90}
+    API-->>FE: event: done {deck:{project,path,name,bytes,ticket,download_url}, fidelity}
+    FE->>FE: 渲染 ResultCard（页数 + 保真度 + 打开编辑器）
+    end
+
+    rect rgb(238, 250, 252)
+    note over FE,SAVE: ⑥ 内嵌 DeckCraft 编辑 → Ctrl+S 回传
+    U->>FE: 点「打开编辑器」
+    FE->>DC: 打开抽屉，deckUrl = deck.download_url（含 ticket）
+    DC->>DC: fetch(bytes) → postMessage("deckcraft:open")
+    DC-->>FE: "deckcraft:ready"
+    U->>DC: 编辑（改版式/文字）
+    DC-->>FE: "deckcraft:dirty" → 底部"有未保存改动 · Ctrl+S"
+    U->>DC: Ctrl+S
+    DC-->>FE: "deckcraft:save" {name, bytes}
+    FE->>SAVE: PUT /api/projects/{p}/file-bytes {path, content_base64}
+    SAVE->>SB: write_bytes（.pptx 白名单 / 32MB / 64MB 项目配额）
+    SB-->>SAVE: {bytes, previous_bytes, created}
+    SAVE-->>FE: 200
+    FE->>U: 状态条「已写回 deck/xxx.pptx（1.2MB，原 1.1MB）」
+    end
+
+    rect rgb(250, 250, 250)
+    note over U,FE: ⑦ 失败与恢复
+    alt 生成失败
+        API-->>FE: event: error {message, retryable:true}
+        FE->>U: PhaseTrack 红态 + 「重试」（同参数重发 generate）
+    else 刷新页面
+        FE->>API: GET /ppt/sessions/{sid}
+        API-->>FE: {session, messages[]}（含历史 outline 与 result）
+        FE->>U: 恢复消息流，结果卡可再次打开抽屉
+    end
+    end
+```

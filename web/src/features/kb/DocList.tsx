@@ -140,7 +140,7 @@ export function DocList({
                           target="_blank"
                           rel="noreferrer"
                           title={d.source_url}
-                          className="inline-flex min-w-0 items-center gap-1 text-secondary transition-colors duration-150 hover:text-brand"
+                          className="inline-flex min-w-0 items-center gap-1 text-secondary transition-colors duration-150 hover:text-brand-ink"
                         >
                           <LinkIcon className="h-3 w-3 shrink-0" />
                           <span className="truncate">{sourceHost(d.source_url)}</span>
@@ -165,7 +165,7 @@ export function DocList({
                         className={cn(
                           "rounded-md px-1.5 py-1 text-xs transition-colors duration-150 hover:bg-surface-1 hover:text-primary",
                           expanded && panel === "chunks"
-                            ? "text-brand-deep dark:text-brand"
+                            ? "text-brand-ink "
                             : "text-tertiary",
                         )}
                       >
@@ -177,7 +177,7 @@ export function DocList({
                       className={cn(
                         "rounded-md px-1.5 py-1 text-xs transition-colors duration-150 hover:bg-surface-1 hover:text-primary",
                         expanded && panel === "versions"
-                          ? "text-brand-deep dark:text-brand"
+                          ? "text-brand-ink "
                           : "text-tertiary",
                       )}
                     >
@@ -248,7 +248,7 @@ export function DocList({
                               <button
                                 disabled={!dirty || !draft.trim() || rowBusy === c.id}
                                 onClick={() => void onSaveChunk(c)}
-                                className="rounded-md px-1.5 py-0.5 text-brand-deep transition-colors dark:text-brand hover:bg-brand-soft disabled:opacity-40"
+                                className="rounded-md px-1.5 py-0.5 text-brand-ink transition-colors  hover:bg-brand-soft disabled:opacity-40"
                               >
                                 {rowBusy === c.id ? "保存中…" : "保存"}
                               </button>
@@ -290,7 +290,7 @@ export function DocList({
                             <span className="font-mono">v{v.version}</span>
                             {v.note && <span className="text-tertiary">{v.note}</span>}
                             {v.version === d.version && (
-                              <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[12px] text-brand-deep dark:text-brand">
+                              <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[12px] text-brand-ink ">
                                 当前
                               </span>
                             )}
@@ -304,7 +304,7 @@ export function DocList({
                           <button
                             disabled={rowBusy === d.id}
                             onClick={() => void onRollback(d, v.version)}
-                            className="shrink-0 rounded-md px-1.5 py-1 text-xs text-brand-deep transition-colors dark:text-brand duration-150 hover:bg-brand-soft disabled:opacity-50"
+                            className="shrink-0 rounded-md px-1.5 py-1 text-xs text-brand-ink transition-colors  duration-150 hover:bg-brand-soft disabled:opacity-50"
                           >
                             回滚到此版
                           </button>

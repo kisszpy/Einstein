@@ -116,7 +116,7 @@ export function DeckCraftStage({ project, path, ticket, onSaved }: Props) {
           </span>
         )}
         {status.kind === "ok" && (
-          <span className="flex min-w-0 items-center gap-1 text-brand">
+          <span className="flex min-w-0 items-center gap-1 text-brand-ink">
             <CheckCircle2 size={11} className="shrink-0" />
             <span className="truncate">{status.text}</span>
           </span>

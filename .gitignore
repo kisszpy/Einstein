@@ -36,3 +36,14 @@ tools/craft-fonts/fonts/*
 
 # DeckCraft 的 wasm 引擎 bundle 是构建产物（tools/deckcraft/build-web.sh 生成后复制进来）
 web/public/deckcraft/
+
+# impeccable 设计检测引擎（Apache-2.0，pbakaus/impeccable）：单平台 20MB × 5 个平台
+# 不适合入库。入库的是锁定的版本 + sha256（tools/impeccable/engine-checksums.txt）
+# 与 LICENSE/NOTICE 署名；缺二进制时检测器自动跳过，生成不受影响。需要时重建：
+#   python tools/impeccable/fetch.py
+tools/impeccable/bin/
+
+# 生成产物：根目录的成稿 pptx 与诊断导出（PowerPoint 逐页导出的 PNG）。
+# 真正要留的样张放 docs/ 里，根目录只放源码。
+/*.pptx
+server/tools/diag_export*/

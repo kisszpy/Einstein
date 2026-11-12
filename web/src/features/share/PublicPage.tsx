@@ -98,11 +98,11 @@ export function PublicPage() {
   return (
     <Shell>
       <div className="flex items-center gap-2 border-b border-line pb-3">
-        <Link2 size={14} className="text-brand-deep dark:text-brand"/>
+        <Link2 size={14} className="text-brand-ink "/>
         <h1 className="min-w-0 flex-1 truncate text-[15px] font-medium">
           {conv?.title || kb?.name || data.title}
         </h1>
-        <span className="shrink-0 rounded-full bg-brand-soft px-2 py-0.5 text-[12px] text-brand-deep dark:text-brand">
+        <span className="shrink-0 rounded-full bg-brand-soft px-2 py-0.5 text-[12px] text-brand-ink ">
           只读分享
         </span>
       </div>
@@ -156,7 +156,7 @@ export function PublicPage() {
                           key={`${c.document_name}-${i}`}
                           className="rounded-lg border border-line px-3 py-2 text-[12px] text-secondary"
                         >
-                          <span className="mr-1 text-brand-deep dark:text-brand">[{c.index ?? i + 1}]</span>
+                          <span className="mr-1 text-brand-ink ">[{c.index ?? i + 1}]</span>
                           {c.document_name}
                         </div>
                       ))}

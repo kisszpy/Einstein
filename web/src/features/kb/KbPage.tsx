@@ -1,5 +1,8 @@
+import { Database } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageBody } from "@/components/ui/page-header";
 import { VisibilityBadge, VisibilitySelect } from "@/components/ui/visibility";
 import { BatchImport } from "@/features/kb/BatchImport";
 import { CreateKbDialog } from "@/features/kb/CreateKbDialog";
@@ -34,13 +37,38 @@ export function KbPage() {
       />
 
       {/* 详情区 */}
-      <div className="min-w-0 flex-1 overflow-y-auto">
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* 窄屏没有左侧列表，用下拉切换 */}
+        <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 md:hidden">
+          <select
+            value={w.selected ?? ""}
+            aria-label="切换知识库"
+            onChange={(e) => w.setSelected(e.target.value)}
+            className="min-w-0 flex-1 rounded-lg border border-line-control bg-surface-1 px-2.5 py-1.5 text-[12.5px] text-primary outline-none"
+          >
+            {w.kbs.length === 0 && <option value="">还没有知识库</option>}
+            {w.kbs.map((kb) => (
+              <option key={kb.id} value={kb.id}>
+                {kb.name}（{kb.document_count}）
+              </option>
+            ))}
+          </select>
+          <Button variant="outline" className="shrink-0" onClick={() => w.setCreateOpen(true)}>
+            新建
+          </Button>
+        </div>
+        <div className="min-w-0 flex-1 overflow-y-auto">
         {!w.selected ? (
-          <div className="flex h-full items-center justify-center text-sm text-tertiary">
-            选择或创建一个知识库开始
+          <div className="flex h-full items-center justify-center p-8">
+            <EmptyState
+              icon={Database}
+              title="还没有选中知识库"
+              description="从左侧选择一个知识库，或新建一个，把文档拖进来就能开始检索。"
+              className="max-w-[420px] bg-transparent"
+            />
           </div>
         ) : (
-          <div className="mx-auto max-w-[860px] space-y-6 px-8 py-8">
+          <PageBody width="narrow" className="space-y-6">
             {currentKb && (
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -76,7 +104,7 @@ export function KbPage() {
               </div>
             )}
             {w.notice && (
-              <div className="rounded-lg border border-brand/40 bg-brand-soft px-3.5 py-2.5 text-[12.5px] text-brand-deep dark:text-brand">
+              <div className="rounded-lg border border-brand/40 bg-brand-soft px-3.5 py-2.5 text-[12.5px] text-brand-ink ">
                 {w.notice}
               </div>
             )}
@@ -175,8 +203,9 @@ export function KbPage() {
               onCompare={() => void w.runCompare()}
               onDismissCompare={() => w.setCompare(null)}
             />
-          </div>
+          </PageBody>
         )}
+        </div>
       </div>
 
       {/* 共享给成员 */}

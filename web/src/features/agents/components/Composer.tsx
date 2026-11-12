@@ -131,7 +131,7 @@ export function Composer({
                             <span
                               className={cn(
                                 "mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
-                                on ? "border-brand bg-brand text-white" : "border-line-strong",
+                                on ? "border-brand bg-brand text-brand-fg" : "border-line-strong",
                               )}
                             >
                               {on && <Check size={10} strokeWidth={3} />}
@@ -162,7 +162,7 @@ export function Composer({
                                 <span
                                   className={cn(
                                     "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
-                                    on ? "border-brand bg-brand text-white" : "border-line-strong",
+                                    on ? "border-brand bg-brand text-brand-fg" : "border-line-strong",
                                   )}
                                 >
                                   {on && <Check size={10} strokeWidth={3} />}
@@ -197,7 +197,7 @@ export function Composer({
                                 <span
                                   className={cn(
                                     "mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
-                                    on ? "border-brand bg-brand text-white" : "border-line-strong",
+                                    on ? "border-brand bg-brand text-brand-fg" : "border-line-strong",
                                   )}
                                 >
                                   {on && <Check size={10} strokeWidth={3} />}
@@ -225,7 +225,7 @@ export function Composer({
                         className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors duration-150 hover:bg-hover"
                       >
                         <span className="flex-1 text-[12.5px] text-primary">由智能体创建</span>
-                        {!project && <Check size={12} className="text-brand-deep dark:text-brand"/>}
+                        {!project && <Check size={12} className="text-brand-ink "/>}
                       </button>
                       {projects.map((p) => (
                         <button
@@ -240,7 +240,7 @@ export function Composer({
                             {p.name}
                           </span>
                           <span className="shrink-0 text-[12px] text-tertiary">{p.files} 文件</span>
-                          {project === p.id && <Check size={12} className="text-brand-deep dark:text-brand"/>}
+                          {project === p.id && <Check size={12} className="text-brand-ink "/>}
                         </button>
                       ))}
                       <button

@@ -80,12 +80,12 @@ export function MarketPanel({ onInstall }: Props) {
                     href={item.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="truncate text-[13px] font-medium text-primary transition-colors duration-150 hover:text-brand"
+                    className="truncate text-[13px] font-medium text-primary transition-colors duration-150 hover:text-brand-ink"
                   >
                     {item.full_name || item.name}
                   </a>
                   {item.installed > 0 && (
-                    <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[12px] text-brand-deep dark:text-brand">
+                    <span className="rounded bg-brand-soft px-1.5 py-0.5 text-[12px] text-brand-ink ">
                       已装 {item.installed}
                     </span>
                   )}

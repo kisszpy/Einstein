@@ -17,6 +17,7 @@ function check(section, name, ok, detail = "") {
 
 const ROUTES = [
   { path: "/chat", name: "对话", expect: "有什么可以帮你" },
+  { path: "/ppt-studio", name: "AI PPT", expect: "AI 制作演示文稿" },
   { path: "/assets", name: "资产", expect: "" },
   { path: "/kb", name: "知识库", expect: "" },
   { path: "/experts", name: "专家", expect: "" },
@@ -89,7 +90,7 @@ const ROUTES = [
   reset();
   await page.goto(`${BASE}/chat`, { waitUntil: "networkidle" });
   const navText = await page.locator("nav, aside").first().innerText().catch(() => "");
-  check("导航", "合并入口存在", navText.includes("专家 & 技能 & MCP"), navText.slice(0, 120));
+  check("导航", "合并入口存在", navText.includes("专家 · 技能 · MCP"), navText.slice(0, 120));
   const activeCount = await page.locator("nav a[aria-current='page'], aside a[aria-current='page']").count().catch(() => 0);
   check("导航", "当前页高亮唯一", activeCount <= 1, `aria-current=${activeCount}`);
 

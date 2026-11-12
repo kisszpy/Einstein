@@ -168,3 +168,51 @@
 - 截图：`.workbuddy/ui-review/shots/`（dark*/light* 各 9 页 + mobile-login）
 - 截图脚本：`.workbuddy/ui-review/shoot.mjs`（回归时可重跑）
 - 关键代码位置均已在正文标注 `文件:行号`
+
+---
+
+# 改版落地记录（2026-11-12）
+
+评审结论按「系统性打磨」执行：保留信息架构与页面骨架，重建设计系统与品牌识别。
+
+## 1. 品牌与配色
+
+- 主色由薄荷绿改为**爱因斯坦蓝**（家族 `#2f6bdc` / `#2456c4` / `#1a3f96`）。白字压 `#2f6bdc` = 4.93:1，亮色主题主按钮对比度问题一次解决。
+- 暗色主题用亮蓝 `#6f9bff`：亮底必须配墨字（`#0a1020`），白字仅 2.5:1，因此引入 `brand-fg` 语义。
+- 令牌语义（两套主题同序）：
+  - `brand` 500 填充 / `brand-strong` 600 渐变底 / `brand-deep` 700 深压底
+  - `brand-ink` 品牌色**文字与图标**（亮色 #2050b4，压 soft 底 ≈5.3:1；暗色 #8fb3ff ≈5.65:1）
+  - `brand-soft` 品牌浅底 / `brand-fg` 压品牌实底的字色
+  - `danger-fg` 压 danger 实底的字色（暗色 danger 变浅红，白字不可用）
+- 规则：`text-brand-*` 一律给文字用；实心品牌底统一 `text-brand-fg`。全站 130+ 处 `text-brand` 机械迁移到 `text-brand-ink`。
+
+## 2. 设计系统原语
+
+| 原语 | 文件 | 作用 |
+|---|---|---|
+| `BrandMark` | `web/src/components/BrandMark.tsx` | 爱因斯坦头像 × 神经网络 SVG 标识（`favicon.svg` 同源） |
+| `PageHeader` / `PageBody` | `web/src/components/ui/page-header.tsx` | 统一页头（20px/600 标题 + 68ch 说明 + 右侧操作）与内容宽度（narrow 880 / wide 1240） |
+| `EmptyState` | `web/src/components/ui/empty-state.tsx` | 空态：虚线圈 + 品牌图标片 + 标题 + 一句可执行说明 + 主行动 |
+| `StatCard` | `web/src/components/ui/stat-card.tsx` | 指标卡（tabular-nums，含 hint） |
+| `.data-table` | `globals.css` | 表格规范：表头 11.5px、行高 11px、数字右对齐等宽、窄屏自动横向滚动 |
+| `shortTime()` | `web/src/lib/utils.ts` | ISO → `11-12 12:46`；列表中不再出现 `2026-11-12T12:46:08+00:00` |
+
+动效令牌：`--dur-fast 120ms` / `--dur-base 180ms` / `--dur-slow 320ms`，缓动 `--ease-out: cubic-bezier(.16,1,.3,1)`。
+
+## 3. 品牌落地
+
+- `index.html`：favicon 换 SVG 标 + `theme-color #2f6bdc`。
+- 侧栏、登录页、AI 对话空态、智能体空态统一使用同一枚 BrandMark。
+- Logo 语义：蓝色圆角底 + 白发头像 + 神经突触节点，两枚青色节点表示「正在思考的连接」。
+
+## 4. 窄屏（<768px）
+
+- 全局侧栏收为抽屉（汉堡按钮 + 遮罩 + Esc + 滚动锁定）。
+- 知识库左侧库列表隐藏，改顶部下拉切换 + 新建。
+- 智能体任务栏、资产文件栏同样改为可开合抽屉，默认收起。
+- 专家卡片单列，表格横向滚动，页头操作自动换行。
+
+## 5. 验收
+
+- `npx tsc --noEmit` 通过；`npm run build` 通过；`vitest run` 49/49 通过。
+- 截图：`.workbuddy/ui-review/shots-v2/`（12 页 × dark/light + 登录页 + 移动端 8 页 × 2 主题 + 抽屉），脚本 `shoot-v2.mjs` / `shoot-mobile.mjs` 可重跑。

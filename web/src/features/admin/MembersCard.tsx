@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useAuth } from "@/lib/auth";
 import { confirmDialog, promptDialog } from "@/lib/confirm";
-import { cn } from "@/lib/utils";
+import { cn, shortTime } from "@/lib/utils";
 
 interface Member {
   id: string;
@@ -240,7 +240,9 @@ export function MembersCard() {
                 <td className="max-w-[180px] truncate py-2 text-tertiary" title={m.workspaces.join(", ")}>
                   {m.workspaces.length} 个
                 </td>
-                <td className="py-2 text-tertiary">{m.last_login_at ?? "从未登录"}</td>
+                <td className="py-2 tabular-nums text-tertiary">
+                  {m.last_login_at ? shortTime(m.last_login_at) : "从未登录"}
+                </td>
                 <td className="py-2">
                   <span className={cn(m.disabled ? "text-danger" : "text-success")}>
                     {m.disabled ? "已禁用" : "正常"}
