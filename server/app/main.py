@@ -10,7 +10,7 @@ for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY"
     os.environ.pop(_k, None)
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.api import deps
 from app.api.routes import (
@@ -55,6 +55,26 @@ PUBLIC_API_PATHS = {
 
 # viewer（只读角色）放行的写路径：对话消费类——看得了就要问得了
 VIEWER_ALLOWED_PREFIXES = ("/api/chat", "/api/agent", "/api/conversations", "/api/auth/")
+
+# iframe / img 鉴权失败时回这张页面：它们没有 Authorization 头，之前只能拿到一段
+# JSON，被浏览器原样画进预览面板。给个能读懂的原因 + 一个「重新打开」按钮。
+_PREVIEW_AUTH_PAGE = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>预览需要重新打开</title></head>
+<body style="margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center;
+font:14px/1.6 -apple-system,'Segoe UI','Microsoft YaHei',sans-serif;color:#3f3f46;background:#fafafa">
+<div style="max-width:380px;padding:28px;text-align:center">
+  <p style="font-size:15px;font-weight:600;margin:0 0 8px">这个预览的访问凭据过期了</p>
+  <p style="margin:0 0 18px;color:#71717a">
+    预览链接只有 15 分钟有效期，长时间停留或服务重启后会失效。
+    点下面的按钮重新打开，文件本身没有丢。
+  </p>
+  <button onclick="location.reload()" style="border:0;border-radius:8px;padding:8px 16px;
+  font:inherit;color:#fff;background:#18181b;cursor:pointer">重新打开预览</button>
+  <p style="margin:18px 0 0;font-size:12px;color:#a1a1aa">
+    还是不行就关掉预览面板，重新点开这个文件。
+  </p>
+</div></body></html>"""
 
 # 检查点清理周期。TTL 是小时级，每小时扫一遍足够，代价是每条会话一次读。
 CHECKPOINT_SWEEP_SECONDS = 3600
@@ -303,6 +323,14 @@ def create_app() -> FastAPI:
                         request.state.user = user
                         request.state.ticket = grant
             if user is None:
+                # iframe / img / <a download> 带不了 Authorization 头，失败时浏览器会把
+                # JSON 原样渲染在预览面板里——用户看到的就是
+                # {"detail":"未登录或登录已过期，请重新登录"} 这串机器话。
+                # 这类请求改回一张能读懂、能自救的页面。
+                if not request.headers.get("authorization") and path.startswith(
+                    tickets.ALLOWED_PREFIXES
+                ):
+                    return HTMLResponse(_PREVIEW_AUTH_PAGE, status_code=401)
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "未登录或登录已过期，请重新登录"},

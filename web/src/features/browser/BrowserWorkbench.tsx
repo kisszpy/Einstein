@@ -195,12 +195,25 @@ export function BrowserWorkbench({
 
   useEffect(() => {
     let alive = true;
-    api
-      .getTicket()
-      .then((next) => alive && setTicket(next))
-      .catch((exc: Error) => alive && setTicketError(exc.message));
+    const pull = (force = false) => {
+      api
+        .getTicket(force)
+        .then((next) => {
+          if (!alive) return;
+          setTicket(next);
+          setTicketError("");
+        })
+        .catch((exc: Error) => alive && setTicketError(exc.message));
+    };
+    // 打开面板就先取一张新票：模块级缓存可能来自上一个服务进程（重启前签的），
+    // 直接拿来用只会让 iframe 收 401。
+    pull(true);
+    // 票据 15 分钟过期。面板常常开着很久，十分钟换一张：否则用户切个文件、
+    // iframe 换个 URL 就撞上 401，看到一张「凭据过期」的页面。
+    const timer = window.setInterval(() => pull(true), 10 * 60 * 1000);
     return () => {
       alive = false;
+      window.clearInterval(timer);
     };
   }, []);
 
