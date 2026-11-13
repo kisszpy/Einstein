@@ -30,9 +30,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH"
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl libpq5 \
+    && apt-get install -y --no-install-recommends curl libpq5 nodejs npm chromium fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 10001 einstein
+
+# 浏览器实测排版（htmlkit/measure）与 browser_pro 工具走 Node 兜底路径：
+# 需要 node + playwright-core + chromium。CWD 是 /app，_node_modules() 会找到
+# /app/web/node_modules；chromium 路径经 EINSTEIN_CHROME_PATH 传给渲染脚本。
+# 中文字体必须装：没字体时 Chromium 用 fallback 测行宽，中文排版的几何全是错的。
+RUN mkdir -p /app/web \
+    && cd /app/web \
+    && npm install --omit=dev playwright-core \
+    && chown -R einstein:einstein /app/web
+
+ENV EINSTEIN_CHROME_PATH=/usr/bin/chromium
 
 COPY --from=builder /opt/venv /opt/venv
 
