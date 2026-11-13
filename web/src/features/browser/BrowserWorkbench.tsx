@@ -5,7 +5,15 @@
  * 独立页 /assets（状态放 URL）和智能体页右侧的预览面板（状态放组件内）。
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import {
   BookOpen,
   ChevronDown,
@@ -24,6 +32,8 @@ import { cn } from "@/lib/utils";
 import { ArtifactView } from "./components/ArtifactView";
 import { DeckCraftStage } from "./components/DeckCraftStage";
 import { DeckEditor } from "./components/DeckEditor";
+import { confirmDialog } from "@/lib/confirm";
+import { Trash2 } from "lucide-react";
 import { FileTree } from "./components/FileTree";
 import { ThemePackPanel } from "./components/ThemePackPanel";
 import { WebView } from "./WebView";
@@ -68,6 +78,120 @@ export function BrowserWorkbench({
   /** pptx 的两种呈现：放映级（DeckCraft，默认）与结构化（服务端按主题重排）。
    *  默认给放映级——用户要的是「所见即所得的漂亮演示」。 */
   const [deckMode, setDeckMode] = useState<"craft" | "dsl">("craft");
+
+  /** 文件栏宽度：写死 212 时，com/shop/common/api/Result.java 这种长路径
+   *  会被截成「Resu…」，而工程类项目恰恰全是这种深度。改成可拖，并把用户
+   *  最后一次的宽度记在本地——同一个人的屏幕和习惯不会每次都变。 */
+  const RAIL_MIN = 168;
+  const railDefault = compact ? 216 : 248;
+  const railKey = `assets.railWidth${compact ? ".compact" : ""}`;
+  const [railWidth, setRailWidth] = useState<number>(() => {
+    try {
+      const saved = Number(window.localStorage.getItem(railKey));
+      if (Number.isFinite(saved) && saved >= RAIL_MIN) return saved;
+    } catch {
+      // 无痕模式下 localStorage 会抛，静默回落到默认宽度
+    }
+    return railDefault;
+  });
+  const railWidthRef = useRef(railWidth);
+  const railBoxRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ startX: number; startW: number; max: number } | null>(null);
+
+  useEffect(() => {
+    railWidthRef.current = railWidth;
+  }, [railWidth]);
+
+  const rememberRail = useCallback(
+    (value: number) => {
+      try {
+        window.localStorage.setItem(railKey, String(value));
+      } catch {
+        // 存不下不影响本次使用
+      }
+    },
+    [railKey],
+  );
+
+  /** 拖动右边缘改宽度：上限取容器的 62%，保证右侧预览区还有可用面积。 */
+  const onRailResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const max = Math.max(
+      RAIL_MIN,
+      Math.round((railBoxRef.current?.clientWidth ?? window.innerWidth) * 0.62),
+    );
+    dragRef.current = { startX: event.clientX, startW: railWidthRef.current, max };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    // 拖动时锁住选中与光标：否则扫过文字会变成蓝色高亮，手感很差
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+  };
+
+  const onRailResizeMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const next = Math.min(drag.max, Math.max(RAIL_MIN, drag.startW + (event.clientX - drag.startX)));
+    setRailWidth(next);
+  };
+
+  const onRailResizeEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    document.body.style.userSelect = "";
+    document.body.style.cursor = "";
+    rememberRail(railWidthRef.current);
+  };
+
+  /** 删除整个项目：连带目录内所有文件，二次确认要写清范围。 */
+  const handleDeleteProject = async (id: string, name: string) => {
+    const ok = await confirmDialog({
+      title: "删除项目",
+      message: `「${name}」以及它里面的全部文件都会被永久删除，无法恢复。`,
+      confirmLabel: "删除项目",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteProject(id);
+      void api.listProjects().then(setProjects).catch(() => undefined);
+      if (project === id) onChange({ project: "", path: "" });
+      setTreeTick((n) => n + 1);
+    } catch (err) {
+      void confirmDialog({
+        title: "删除失败",
+        message: err instanceof Error ? err.message : "请稍后再试",
+        confirmLabel: "知道了",
+      });
+    }
+  };
+
+  /** 删除一个文件：确认 → 调接口 → 刷新树与项目列表 → 选中项被删则清空。 */
+  const handleDelete = async (target: string) => {
+    if (!project) return;
+    const ok = await confirmDialog({
+      title: "删除文件",
+      message: `${target.split("/").pop()} 将被永久删除，无法恢复。`,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteFile(project, target);
+      setTreeTick((n) => n + 1);
+      void api.listProjects().then(setProjects).catch(() => undefined);
+      if (path === target) onChange({ path: "" });
+    } catch (err) {
+      void confirmDialog({
+        title: "删除失败",
+        message: err instanceof Error ? err.message : "请稍后再试",
+        confirmLabel: "知道了",
+      });
+    }
+  };
 
   useEffect(() => {
     let alive = true;
@@ -121,7 +245,6 @@ export function BrowserWorkbench({
     [files],
   );
   const activeProject = projects.find((item) => item.id === project);
-  const railWidth = compact ? 176 : 212;
   const showRail = tab !== "web" && tab !== "templates" && railOpen;
 
   return (
@@ -221,7 +344,7 @@ export function BrowserWorkbench({
         </div>
       </div>
 
-      <div className="relative flex min-h-0 flex-1">
+      <div ref={railBoxRef} className="relative flex min-h-0 flex-1">
         {showRail && (
           <>
             <div
@@ -229,7 +352,7 @@ export function BrowserWorkbench({
               onClick={() => setRailOpen(false)}
             />
             <aside
-              className="flex shrink-0 flex-col border-r border-line bg-surface-2 max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:shadow-[var(--shadow-pop)]"
+              className="relative flex shrink-0 flex-col border-r border-line bg-surface-2 max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-30 max-md:shadow-[var(--shadow-pop)]"
               style={{ width: railWidth }}
             >
             <div className="flex items-center justify-between px-2.5 pb-1 pt-2 text-[12px] tracking-wide text-tertiary">
@@ -249,11 +372,17 @@ export function BrowserWorkbench({
               {project ? (
                 files.length > 0 ? (
                   tab === "deck" ? (
-                    <DeckList decks={decks} active={path} onPick={(next) => onChange({ tab: "deck", path: next })} />
+                    <DeckList
+                      decks={decks}
+                      active={path}
+                      onPick={(next) => onChange({ tab: "deck", path: next })}
+                      onDelete={handleDelete}
+                    />
                   ) : (
                     <FileTree
                       entries={files}
                       active={path}
+                      onDelete={handleDelete}
                       onPick={(next) =>
                         onChange(
                           next.toLowerCase().endsWith(".pptx")
@@ -279,6 +408,23 @@ export function BrowserWorkbench({
                 </div>
               )}
             </div>
+            {/* 拖拽手柄：命中区 6px、视觉 2px，鼠标扫过才亮，平时不抢注意力。
+                双击恢复默认宽度——拖坏了能一键回到可用状态。 */}
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="拖动调整文件栏宽度，双击恢复默认"
+              onPointerDown={onRailResizeStart}
+              onPointerMove={onRailResizeMove}
+              onPointerUp={onRailResizeEnd}
+              onPointerCancel={onRailResizeEnd}
+              onDoubleClick={() => {
+                setRailWidth(railDefault);
+                rememberRail(railDefault);
+              }}
+              title="拖动调整宽度，双击恢复默认"
+              className="absolute -right-[3px] top-0 z-10 h-full w-[6px] cursor-col-resize touch-none bg-transparent transition-colors hover:bg-brand/25 active:bg-brand/40"
+            />
           </aside>
           </>
         )}
@@ -306,10 +452,15 @@ export function BrowserWorkbench({
                   projectInfo={activeProject}
                   files={files}
                   onPick={(next) => onChange({ path: next })}
+                  onDelete={handleDelete}
                 />
               )
             ) : (
-              <ProjectGrid projects={projects} onPick={(id) => onChange({ project: id, path: "" })} />
+              <ProjectGrid
+                projects={projects}
+                onPick={(id) => onChange({ project: id, path: "" })}
+                onDelete={handleDeleteProject}
+              />
             ))}
 
           {tab === "deck" &&
@@ -384,28 +535,46 @@ function DeckList({
   decks,
   active,
   onPick,
+  onDelete,
 }: {
   decks: TreeEntry[];
   active: string;
   onPick: (path: string) => void;
+  onDelete?: (path: string) => void;
 }) {
   return (
     <div className="py-1">
       {decks.map((item) => (
-        <button
+        <div
           key={item.path}
-          onClick={() => onPick(item.path)}
           className={cn(
-            "flex w-full items-center gap-2 px-2.5 py-2 text-left text-[12.5px]",
-            active === item.path
-              ? "bg-brand-soft text-brand-ink "
-              : "text-secondary hover:bg-surface-3 hover:text-primary",
+            "group flex w-full items-center",
+            active === item.path ? "bg-brand-soft" : "hover:bg-surface-3",
           )}
-          title={item.path}
         >
-          <Presentation size={13} className="shrink-0 opacity-70" />
-          <span className="truncate">{item.path.split("/").pop()}</span>
-        </button>
+          <button
+            onClick={() => onPick(item.path)}
+            className={cn(
+              "flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left text-[12.5px]",
+              active === item.path ? "text-brand-ink" : "text-secondary group-hover:text-primary",
+            )}
+            title={item.path}
+          >
+            <Presentation size={13} className="shrink-0 opacity-70" />
+            <span className="truncate">{item.path.split("/").pop()}</span>
+          </button>
+          {onDelete && (
+            <button
+              type="button"
+              onClick={() => onDelete(item.path)}
+              title="删除这份演示文稿"
+              aria-label={`删除 ${item.path.split("/").pop()}`}
+              className="mr-1.5 hidden shrink-0 rounded p-1 text-tertiary transition-colors hover:bg-danger/10 hover:text-danger group-hover:block focus:block"
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
+        </div>
       ))}
     </div>
   );
@@ -414,9 +583,11 @@ function DeckList({
 function ProjectGrid({
   projects,
   onPick,
+  onDelete,
 }: {
   projects: ProjectInfo[];
   onPick: (id: string) => void;
+  onDelete?: (id: string, name: string) => void;
 }) {
   return (
     <div className="h-full overflow-y-auto px-6 py-6">
@@ -426,20 +597,32 @@ function ProjectGrid({
       </p>
       <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {projects.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => onPick(item.id)}
-            className="group flex flex-col items-start gap-2 rounded-xl border border-line bg-surface-1 p-4 text-left transition-colors hover:border-brand/40 hover:bg-brand-soft/40"
-          >
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-3 text-secondary group-hover:bg-brand-soft group-hover:text-brand-ink">
-              <FolderOpen size={15} strokeWidth={1.8} />
-            </span>
-            <span className="w-full truncate text-[13px] font-medium">{item.name}</span>
-            <span className="text-[12px] text-tertiary">
-              {item.artifacts} 个产物 · {item.size}
-            </span>
-            <span className="text-[12px] text-tertiary">更新于 {item.updated_at}</span>
-          </button>
+          <div key={item.id} className="group relative">
+            <button
+              onClick={() => onPick(item.id)}
+              className="flex w-full flex-col items-start gap-2 rounded-xl border border-line bg-surface-1 p-4 text-left transition-colors hover:border-brand/40 hover:bg-brand-soft/40"
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-surface-3 text-secondary group-hover:bg-brand-soft group-hover:text-brand-ink">
+                <FolderOpen size={15} strokeWidth={1.8} />
+              </span>
+              <span className="w-full truncate text-[13px] font-medium">{item.name}</span>
+              <span className="text-[12px] text-tertiary">
+                {item.artifacts} 个产物 · {item.size}
+              </span>
+              <span className="text-[12px] text-tertiary">更新于 {item.updated_at}</span>
+            </button>
+            {onDelete && (
+              <button
+                type="button"
+                onClick={() => onDelete(item.id, item.name)}
+                title="删除整个项目"
+                aria-label={`删除项目 ${item.name}`}
+                className="absolute right-2 top-2 hidden rounded-md p-1.5 text-tertiary transition-colors hover:bg-danger/10 hover:text-danger group-hover:block focus:block"
+              >
+                <Trash2 size={12} />
+              </button>
+            )}
+          </div>
         ))}
       </div>
       {projects.length === 0 && (
@@ -456,11 +639,13 @@ function ProjectOverview({
   projectInfo,
   files,
   onPick,
+  onDelete,
 }: {
   project: string;
   projectInfo?: ProjectInfo;
   files: TreeEntry[];
   onPick: (path: string) => void;
+  onDelete?: (path: string) => void;
 }) {
   const grouped = files.reduce<Record<string, TreeEntry[]>>((acc, file) => {
     const dir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : "根目录";
@@ -482,23 +667,39 @@ function ProjectOverview({
             </p>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {list.map((file) => (
-                <button
+                <div
                   key={file.path}
-                  onClick={() => onPick(file.path)}
-                  className="flex items-center gap-2 rounded-lg border border-line bg-surface-1 px-3 py-2 text-left hover:border-brand/40 hover:bg-brand-soft/30"
+                  className="group flex items-center rounded-lg border border-line bg-surface-1 hover:border-brand/40 hover:bg-brand-soft/30"
                 >
-                  {file.path.endsWith(".html") ? (
-                    <FileCode2 size={13} className="shrink-0 text-brand-ink "/>
-                  ) : file.path.endsWith(".pptx") ? (
-                    <Presentation size={13} className="shrink-0 text-warning" />
-                  ) : (
-                    <BookOpen size={13} className="shrink-0 text-tertiary" />
+                  <button
+                    onClick={() => onPick(file.path)}
+                    className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
+                    title={file.path}
+                  >
+                    {file.path.endsWith(".html") ? (
+                      <FileCode2 size={13} className="shrink-0 text-brand-ink " />
+                    ) : file.path.endsWith(".pptx") ? (
+                      <Presentation size={13} className="shrink-0 text-warning" />
+                    ) : (
+                      <BookOpen size={13} className="shrink-0 text-tertiary" />
+                    )}
+                    <span className="min-w-0 flex-1 truncate text-[12.5px]">
+                      {file.path.split("/").pop()}
+                    </span>
+                    <span className="shrink-0 text-[12px] text-tertiary">{file.size}</span>
+                  </button>
+                  {onDelete && (
+                    <button
+                      type="button"
+                      onClick={() => onDelete(file.path)}
+                      title="删除这个文件"
+                      aria-label={`删除 ${file.path.split("/").pop()}`}
+                      className="mr-1.5 hidden shrink-0 rounded p-1.5 text-tertiary transition-colors hover:bg-danger/10 hover:text-danger group-hover:block focus:block"
+                    >
+                      <Trash2 size={12} />
+                    </button>
                   )}
-                  <span className="min-w-0 flex-1 truncate text-[12.5px]">
-                    {file.path.split("/").pop()}
-                  </span>
-                  <span className="shrink-0 text-[12px] text-tertiary">{file.size}</span>
-                </button>
+                </div>
               ))}
             </div>
           </div>

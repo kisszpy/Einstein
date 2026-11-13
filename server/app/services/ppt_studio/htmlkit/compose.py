@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass, field
 
 from app.services.ppt_studio import design_renderer as dr
-from app.services.ppt_studio.htmlkit import color, stylesheet, tokens as tk
+from app.services.ppt_studio.htmlkit import color, icons, stylesheet, tokens as tk
 from app.services.ppt_studio.outline import Outline, OutlinePage
 
 # 一份文稿里图形页上限：再多就视觉疲劳（与 design_renderer 同口径）
@@ -953,6 +953,20 @@ def _title_backs(title: str, span: _Span) -> bool:
     return span.before_txt in text and span.after_txt in text
 
 
+def _metric_name(span: _Span, hue: str) -> str:
+    """指标名 + 一个线性图标。
+
+    只放在指标名前面，做成 20px 的小字形；不做「图标块 + 标题」那种套路——
+    检测器的 icon-tile-stack 就是冲它去的，而且那是最典型的模板味。
+    """
+    label = _label_of(span)
+    glyph = ""
+    name = icons.name_for(label)
+    if name:
+        glyph = icons.svg(name, size=20, color=hue)
+    return f'<div class="metric-name">{glyph}<div class="metric-label">{esc(label)}</div></div>'
+
+
 def _metric_page(page: OutlinePage, outline: Outline, tokens: dict, chapter: str,
                  variant: int, accent_index: int) -> str:
     """把「A→B」画成一条达成轨道，而不是再摆三张等权大数字卡。
@@ -982,7 +996,7 @@ def _metric_page(page: OutlinePage, outline: Outline, tokens: dict, chapter: str
     body = (
         '<div class="metric-spot grow">'
         f'<div class="metric-hero" style="--hue:{hue}">'
-        f'<div class="metric-label">{esc(_label_of(span))}</div>'
+        f'{_metric_name(span, hue)}'
         f'<div class="metric-big">{esc(span.after_txt)}'
         f'<span class="metric-unit">{esc(span.unit)}</span></div>'
         f'<div class="metric-from">原 {esc(span.before_txt)}{esc(span.unit)} · {esc(_delta_text(span))}</div>'
@@ -1015,7 +1029,7 @@ def _metric_rows(spans: list[_Span], tokens: dict, accent_index: int,
             # 仪表盘一行：名称/现值 + 一条轨道 + 变化量。五项指标一页看全。
             rows.append(
                 f'<div class="metric-row metric-row--line" style="--hue:{hue}">'
-                f'<div class="metric-head"><div class="metric-label">{esc(_label_of(span))}</div>'
+                f'<div class="metric-head">{_metric_name(span, hue)}'
                 f'<div class="metric-value">{esc(span.after_txt)}'
                 f'<span class="metric-unit">{esc(span.unit)}</span></div></div>'
                 + _track(span, hue)
@@ -1025,7 +1039,7 @@ def _metric_rows(spans: list[_Span], tokens: dict, accent_index: int,
         else:
             rows.append(
                 f'<div class="metric-row" style="--hue:{hue}">'
-                f'<div class="metric-head"><div class="metric-label">{esc(_label_of(span))}</div>'
+                f'<div class="metric-head">{_metric_name(span, hue)}'
                 f'<div class="metric-value">{esc(span.after_txt)}'
                 f'<span class="metric-unit">{esc(span.unit)}</span></div></div>'
                 '<div class="metric-bars">'

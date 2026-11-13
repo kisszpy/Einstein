@@ -485,6 +485,30 @@ def _migration_023(db: Database) -> list[str]:
     return ["ALTER TABLE ppt_theme_packs ADD COLUMN style TEXT NOT NULL DEFAULT '{}'"]
 
 
+def _migration_024(db: Database) -> list[str]:
+    if _column_exists(db, "users", "email"):
+        return []
+    return [
+        "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''",
+        "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
+    ]
+
+
+# 025：审批加「范围」——支持「本次会话都允许」。
+#
+# 原来每条记录都是单次决定，全表按 (session, tool, args_hash) 唯一。加一列
+# scope 区分「这一次」与「这个会话里都行」：后者永不消费、有效期更长，且
+# 不能进 latest_decision（续跑要消费的是单次决定，不是持续意图）。
+def _migration_025(db: Database) -> list[str]:
+    if _column_exists(db, "agent_approvals", "scope"):
+        return []
+    return [
+        "ALTER TABLE agent_approvals ADD COLUMN scope TEXT NOT NULL DEFAULT 'once'",
+        "CREATE INDEX IF NOT EXISTS idx_approvals_scope "
+        "ON agent_approvals(workspace_id, owner_id, session_id, tool, scope)",
+    ]
+
+
 MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (2, _MIGRATION_002),
     (3, _MIGRATION_003),
@@ -508,6 +532,8 @@ MIGRATIONS: list[tuple[int, Migration]] = [    (1, _MIGRATION_001),
     (21, _migration_021),
     (22, _migration_022),
     (23, _migration_023),
+    (24, _migration_024),
+    (25, _migration_025),
 ]
 
 _TYPE_TOKENS = {

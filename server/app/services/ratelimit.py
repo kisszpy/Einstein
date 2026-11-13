@@ -157,10 +157,15 @@ def quota_check(workspace_id: str, kind: str) -> tuple[bool, int]:
     return used < limit, used
 
 
-def record_tokens(amount: int) -> None:
-    """llm 层调用：把本轮消耗的 Token 记到当前工作区的日配额上。"""
+def record_tokens(amount: int, workspace_id: str = "") -> None:
+    """把本轮消耗的 Token 记到日配额上。
+
+    `workspace_id` 显式传入优先：智能体跑在独立 task 里（`asyncio.create_task`），
+    虽然 ContextVar 会随任务复制，但链路长、可能跨线程/跨任务，靠隐式上下文
+    记额度迟早漏账——漏账的后果是配额永远读到 0，防护形同虚设。
+    """
     if amount <= 0:
         return
-    ws = current_ws.get()
+    ws = workspace_id or current_ws.get()
     if ws:
         quota_incr(ws, "tokens", amount)

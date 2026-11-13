@@ -15,7 +15,10 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model
 
 import app.services.mcp as mcp_service
+from app.core.logging import get_logger
 from app.services.capabilities import CAPABILITIES, AgentContext, make_tools
+
+logger = get_logger(__name__)
 
 MCP_TOOL_PREFIX = "mcp:"
 
@@ -313,7 +316,13 @@ def build_lc_tools(
     if mcp_ids:
         wanted: dict[str, list[str]] = {}
         for tid in mcp_ids:
-            _, server_id, tool_name = tid.split(":", 2)
+            # 前端传回的 id 可能是脏的（旧版本残留、手改配置、名字里带冒号）。
+            # 一个拆不开的 id 不该炸掉整轮运行——跳过并留一条日志即可。
+            parts = tid.split(":", 2)
+            if len(parts) != 3 or not parts[1] or not parts[2]:
+                logger.warning("忽略无法解析的 MCP 工具 id：%r", tid)
+                continue
+            _, server_id, tool_name = parts
             wanted.setdefault(server_id, []).append(tool_name)
         for server_id, tool_names in wanted.items():
             if owner is not None and workspace_id:

@@ -25,6 +25,57 @@ class Settings(BaseSettings):
 
     # 智能体能力
     agent_code_exec: bool = True   # 关闭后智能体不可执行代码（code_run 工具不注册）
+    # code_run 的执行环境：
+    #   auto      —— 配了云沙箱就用云，否则有 docker 进容器，最后才看 allow_host
+    #   e2b       —— 强制云沙箱（阿里云 Agent Sandbox / 任意 E2B 兼容服务）
+    #   container —— 强制本地容器，没有 docker 就拒绝执行
+    #   host      —— 强制宿主进程，不建议
+    agent_code_exec_sandbox: str = "auto"
+    # 没有隔离可用时，是否允许把模型写的代码直接跑在宿主进程里。
+    # 默认 False：宿主执行没有文件系统隔离，一段 `open("../.env")` 就能读到
+    # 服务端密钥；配合联网抓来的网页内容就是提示注入 → 任意代码执行。
+    agent_code_exec_allow_host: bool = False
+    agent_code_exec_image: str = "python:3.12-slim"   # 容器镜像（需含 python3）
+    agent_code_exec_network: str = "none"             # 容器网络：none 断网（默认）
+    # 宿主 ~/.m2 的路径。设了就把整个 Maven 本地仓库只读挂进容器（/opt/m2），
+    # 用于补齐镜像没预热的依赖——容器断网，Maven 只能吃本地仓库。
+    # 留空则只用镜像内置的离线仓库。
+    agent_code_exec_m2_host: str = ""
+
+    # ---- 云沙箱（E2B 协议；阿里云 Agent Sandbox 极速版走这套）----
+    # 装了 Key 且 sandbox=auto 时会优先用云沙箱。三个连接参数来自控制台：
+    # 阿里云为 https://api.<region>.sandbox.aliyuncs.com 与 <region>.sandbox.aliyuncs.com
+    agent_code_exec_e2b_api_key: str = ""
+    agent_code_exec_e2b_api_url: str = ""
+    agent_code_exec_e2b_domain: str = ""
+    # 官方开箱模板：base / code-interpreter-v1（Python + Node；Java 需自定义模板）
+    agent_code_exec_e2b_template: str = "code-interpreter-v1"
+    # 沙箱最长存活（秒）。到点由服务端回收，别指望它当持久环境用
+    agent_code_exec_e2b_lifetime: int = 900
+    # 空闲多少秒后主动销毁。云沙箱按秒计费，留着不用就是白烧钱
+    agent_code_exec_e2b_idle: int = 300
+    # 沙箱内工作目录。项目文件会同步到这里
+    agent_code_exec_e2b_workdir: str = "/home/user/work"
+    # 是否允许沙箱出网。默认 True 是为了让模型能 pip/npm 装包；
+    # 敏感场景设 False，改由模板预装依赖（等价于容器的断网姿态）
+    agent_code_exec_e2b_allow_internet: bool = True
+    # 出口白名单（逗号分隔的域名/IP/CIDR）。填了就变成「默认拒绝 + 白名单」，
+    # 只放行包仓库这类必要目标，比全开安全得多，也不影响装包
+    agent_code_exec_e2b_allow_out: str = ""
+    # 官方模板只带 Python / Node / JDK，没有 Maven。第一次跑 maven 时按需装一份
+    # 官方二进制（9MB，实测 0.6s）：装在会话里，会话复用就不必重复装；会话销毁
+    # 自动消失。留空则关闭按需安装，maven 调用直接报「模板缺 mvn」。
+    agent_code_exec_e2b_maven_url: str = (
+        "https://mirrors.aliyun.com/apache/maven/maven-3/3.9.16/"
+        "binaries/apache-maven-3.9.16-bin.tar.gz"
+    )
+    # Maven 中央仓库镜像。官方 repo1 在国内实测 15s 只拉到 300KB，不换镜像
+    # 会把 300s 的构建预算全耗在下载插件上。
+    agent_code_exec_e2b_maven_mirror: str = "https://maven.aliyun.com/repository/public"
+    # 单次模型调用的读超时（秒）。以前写死 300 且重试 2 次 —— 一次卡死最长
+    # 15 分钟，用户只能看着 ping 等。180 秒够本地 27B 生成两千字，卡住就该报错；
+    # 连着更慢的端点时可以调大。
+    agent_llm_timeout: int = 180
     # 引擎：deepagents（计划/子智能体/上下文压缩）| deepagents-pro（+ 真沙箱/浏览器）| react（旧单循环，回滚用）
     agent_engine: str = "deepagents"
     # Pro 引擎的 shell 沙箱：auto（有 docker 就容器，否则宿主 shell）| container | local | off
@@ -34,6 +85,13 @@ class Settings(BaseSettings):
     agent_pro_shell_timeout: int = 60           # 单条命令默认超时（秒，上限 300）
     agent_pro_memory: str = "1g"                # 容器内存上限
     agent_pro_cpus: str = "2"                   # 容器 CPU 上限
+
+    # 启动时收尾「上一个进程遗留的未完成运行」。
+    # 进程被杀时 done 事件来不及落库，那条运行会永远停在中间：前端每次刷新
+    # 都把它当活跃任务挂上，`running` 锁死页面，历史任务一个都切不动。
+    # 单副本部署开着（默认）；多副本滚动重启时会误伤别的副本正在跑的任务，
+    # 那种部署请关掉，靠 run_events 的陈旧阈值兜底。
+    agent_run_orphan_sweep: bool = True
 
     # 检索
     retrieval_mode: str = "hybrid"  # vector | lexical | hybrid
@@ -83,11 +141,20 @@ class Settings(BaseSettings):
     # 模型降级链：主端点连不上时依次尝试。格式 `base_url::model::api_key;...`
     llm_fallbacks: str = ""
     # 人工确认：这些智能体工具在执行前需要用户批准（逗号分隔；空 = 关闭）。
-    # 出厂默认对 code_run 开启——执行任意代码是本产品最高危的动作，
-    # 默认静默执行等于把安全边界交给用户的自觉。要关掉显式设空。
+    # 出厂默认对 code_run 开启，但**只在非隔离环境里真的会问**（见下一项）。
     agent_approval_tools: str = "code_run"
-    # 批准的时效（分钟）：过期视为未批准。审批是安全边界，不做永久放行。
+    # 隔离沙箱（云沙箱 / 容器）里执行代码是否也要确认。
+    #
+    # 默认 False：这两类后端的文件系统是独立的，服务端密钥不在里面，跑任意
+    # 代码不构成越权；每跑一次就打断一次，只会训练用户闭眼点「批准」——那样
+    # 这道门在真正需要它的时候（宿主执行）反而失效了。
+    # 宿主进程执行（无隔离）永远确认，不受这一项影响。
+    agent_approval_isolated: bool = False
+    # 单次批准的时效（分钟）：过期视为未批准。审批是安全边界，不做永久放行。
     agent_approval_ttl_minutes: int = 30
+    # 「本次会话都允许」的有效期（分钟）。比单次批准长得多——它的语义是
+    # 「这个对话里别再问我」，而对话本身的寿命通常就是几小时。
+    agent_approval_session_ttl_minutes: int = 480
     # 短期记忆（LangGraph 线程状态）存哪：auto（跟主存储走）| sqlite | postgres
     # | memory（进程内，重启即丢，测试用）| off（不保存，等于关掉中断续跑）。
     # auto 在 store_backend=postgres 时用 postgres，其余用 sqlite。
@@ -124,6 +191,20 @@ class Settings(BaseSettings):
     embedding_batch_chars: int = 40000
     # 主密钥：用于 MCP 凭证等敏感配置的落盘加密。生产必须改掉默认值。
     secret_key: str = "einstein-local-secret-change-me"
+
+    # ---- 邮箱验证码登录 ----
+    # SMTP 未配置时验证码只写服务端日志（回环地址访问时额外在响应里回带，
+    # 方便本机联调；生产经网关访问拿不到，等于自动关闭）。
+    smtp_host: str = ""
+    smtp_port: int = 465
+    smtp_ssl: bool = True          # true=465 隐式 TLS；false=587 STARTTLS
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""            # 空 = 用 smtp_user
+    otp_ttl_seconds: int = 600
+    otp_resend_seconds: int = 60
+    otp_hourly_limit: int = 5
+    otp_max_attempts: int = 5
 
     # 技能市场与动态安装
     github_token: str = ""                     # 可选：提升 GitHub 接口额度（60/h → 5000/h）

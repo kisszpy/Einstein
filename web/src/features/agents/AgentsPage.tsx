@@ -117,9 +117,13 @@ export function AgentsPage() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** 敏感工具等待批准：非空时展示批准条，批准后自动续跑当前任务 */
-  const [approval, setApproval] = useState<{ tool: string; args: string; argsHash: string } | null>(
-    null,
-  );
+  const [approval, setApproval] = useState<{
+    tool: string;
+    args: string;
+    argsHash: string;
+    /** e2b / container / host：决定文案说的风险等级 */
+    env: string;
+  } | null>(null);
   /** 当前任务的会话 id：追问沿用，新任务清空（由服务端分配） */
   const [sessionId, setSessionId] = useState<string | null>(null);
   /** 同一任务里已完成的更早轮次 */
@@ -127,7 +131,51 @@ export function AgentsPage() {
   const [elapsed, setElapsed] = useState<number | null>(null);
   const startedAtRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  /** 本轮运行的 run_id：点「停止」时用它通知后端真正取消，而不只是断开 SSE */
+  const runIdRef = useRef<string | null>(null);
+  /**
+   * 后台还在跑的运行：sessionId → runId。
+   *
+   * 执行本来就在服务端的独立 task 里，前端断开 SSE 只是「我不看了」，任务
+   * 照跑。所以切走一个会话时把它记在这里，切回来再接上——用户不必等一个
+   * 任务跑完才能去看别的任务。
+   */
+  const liveRunsRef = useRef<Record<string, string>>({});
+  /** 侧栏标记用（ref 变了不会触发渲染，这里存一份快照） */
+  const [liveSessions, setLiveSessions] = useState<string[]>([]);
+  /** 上一次收到真实事件的时间：给「重连后毫无动静」的流加一道自我超时 */
+  const lastEventAtRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  const syncLive = useCallback(() => {
+    setLiveSessions(Object.keys(liveRunsRef.current));
+  }, []);
+
+  /** 登记「这个会话有一个还在后台跑的任务」 */
+  const markLive = useCallback(
+    (sid: string, runId: string) => {
+      if (!sid || !runId) return;
+      liveRunsRef.current[sid] = runId;
+      syncLive();
+    },
+    [syncLive],
+  );
+
+  /** 注销：正常结束或用户主动停止时调用 */
+  const clearLive = useCallback(
+    (runId: string | null) => {
+      if (!runId) return;
+      let dirty = false;
+      for (const [sid, rid] of Object.entries(liveRunsRef.current)) {
+        if (rid === runId) {
+          delete liveRunsRef.current[sid];
+          dirty = true;
+        }
+      }
+      if (dirty) syncLive();
+    },
+    [syncLive],
+  );
 
   // —— 右侧预览面板（内置浏览器就地打开产物）——
   const [preview, setPreview] = useState<BrowserState | null>(null);
@@ -270,11 +318,18 @@ export function AgentsPage() {
   /** 事件归一：首次连接与刷新后重连共用同一套处理，避免两条路径行为漂移 */
   const applyEvent = useCallback(
     (event: string, raw: unknown) => {
+      // 心跳（后端每 15 秒的注释行）到不了这里；能到就说明任务真的在动。
+      // 重连后长时间没有事件，靠这个时间戳让读者自己断开，而不是永远转圈。
+      lastEventAtRef.current = Date.now();
       switch (event) {
         case "meta": {
           // 服务端分配/回显会话 id，后续追问沿用它
-          const { session_id } = raw as { session_id?: string };
+          const { session_id, run_id } = raw as { session_id?: string; run_id?: string };
           if (session_id) setSessionId(session_id);
+          // run_id 是「停止」的抓手：后端按它撤销执行任务
+          if (run_id) runIdRef.current = run_id;
+          // 记下「这个会话正在后台跑」：切走再切回来时据此重新接上
+          if (session_id && run_id) markLive(session_id, run_id);
           break;
         }
         case "step": {
@@ -285,6 +340,7 @@ export function AgentsPage() {
               tool: step.tool ?? "",
               args: step.args ?? "",
               argsHash: step.args_hash ?? "",
+              env: step.env ?? "",
             });
             break;
           }
@@ -314,6 +370,8 @@ export function AgentsPage() {
         }
         case "done": {
           const d = raw as { project?: string; artifacts?: Artifact[] };
+          // 这一轮真的跑完了：不再需要在跑标记
+          clearLive(runIdRef.current);
           const pid = d.project || boundProject;
           if (d.project && d.project !== boundProject) bindProject(d.project);
           setPreviewToken((n) => n + 1);
@@ -329,11 +387,12 @@ export function AgentsPage() {
           break;
         }
         case "error":
+          clearLive(runIdRef.current);
           setError((raw as { message: string }).message);
           break;
       }
     },
-    [boundProject, bindProject, loadProjects, openFile],
+    [boundProject, bindProject, loadProjects, openFile, markLive, clearLive],
   );
 
   const run = useCallback(
@@ -360,6 +419,9 @@ export function AgentsPage() {
       startedAtRef.current = Date.now();
       const controller = new AbortController();
       abortRef.current = controller;
+      // 本轮自己的 run_id：不能等到 finally 再读 runIdRef —— 用户中途切走
+      // 又切回来时，那里已经被新一条运行覆盖了，会清错人。
+      let myRunId: string | null = null;
       try {
         const res = await fetch("/api/agent/run", {
           method: "POST",
@@ -378,15 +440,30 @@ export function AgentsPage() {
         });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
-        await readSseStream(res.body, applyEvent);
+        await readSseStream(res.body, (event, raw) => {
+          if (event === "meta") {
+            const { run_id } = raw as { run_id?: string };
+            if (run_id) myRunId = run_id;
+          }
+          applyEvent(event, raw);
+        });
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
           setError(`请求失败：${(err as Error).message}`);
         }
       } finally {
-        abortRef.current = null;
-        setRunning(false);
-        setElapsed(Date.now() - startedAtRef.current);
+        const aborted = controller.signal.aborted;
+        // 只有「这条流还是当前那条」才允许收尾状态。用户切走再切回来时，
+        // 新的 attach 已经换了 controller；旧流的 finally 要是照样把
+        // running 关掉，新流就永远显示不出「运行中」，点停止也 abort 不到它。
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+          setRunning(false);
+          setElapsed(Date.now() - startedAtRef.current);
+        }
+        // 被「切去看别的任务」打断的那条还在后台跑，保留在跑标记；
+        // 正常收尾（含服务端报错）才注销。
+        if (!aborted) clearLive(myRunId);
         void loadRuns();
       }
     },
@@ -408,12 +485,13 @@ export function AgentsPage() {
       bindProject,
       openFile,
       applyEvent,
+      clearLive,
     ],
   );
 
   /** 刷新/切回后重新挂上正在跑的那一轮：登记簿只增，从第 0 帧重放不会看到半个答案 */
   const attach = useCallback(
-    async (runId: string) => {
+    async (runId: string, sessionHint?: string) => {
       setRunning(true);
       setError(null);
       // 重连是从第 0 条重放，本地必须清干净——否则「刷新后接回」会看到两遍步骤。
@@ -423,9 +501,28 @@ export function AgentsPage() {
       setAnswer("");
       setCitations([]);
       setApproval(null);
+      // 重连时也把 run_id 记下：否则刷新后点「停止」会因为没有 id 而只断流
+      runIdRef.current = runId;
+      if (sessionHint) markLive(sessionHint, runId);
       startedAtRef.current = Date.now();
+      lastEventAtRef.current = Date.now();
       const controller = new AbortController();
       abortRef.current = controller;
+
+      // 兜底：一条「永远不收尾」的流（进程被杀后留在库里的死记录）会让 running
+      // 一直为真，整个页面又回到「切不动」的状态。这里超过一分钟没有任何真实
+      // 事件就自己断开——心跳不算事件，服务端每 15 秒会发一次，所以真活着的流
+      // 不会触发。
+      const watchdog = window.setInterval(() => {
+        if (Date.now() - lastEventAtRef.current < 60_000) return;
+        window.clearInterval(watchdog);
+        // 超时说明这条运行确实死了（服务端每 15 秒还有心跳，能等到这里就是
+        // 连事件都不再产出）。标记要一并清掉，否则侧栏永远挂着「运行中」。
+        clearLive(runId);
+        controller.abort();
+        setError("这条运行已经很久没有进展，已停止跟随。任务可能已中断，可以重新发起。");
+      }, 5_000);
+
       try {
         const res = await fetch(`/api/agent/runs/${encodeURIComponent(runId)}/stream`, {
           signal: controller.signal,
@@ -437,13 +534,19 @@ export function AgentsPage() {
           setError(`重新接回失败：${(err as Error).message}`);
         }
       } finally {
-        abortRef.current = null;
-        setRunning(false);
-        setElapsed(Date.now() - startedAtRef.current);
+        window.clearInterval(watchdog);
+        // 同 run()：只有自己还是当前那条流时才收尾状态，别把新接上的流关掉
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+          setRunning(false);
+          setElapsed(Date.now() - startedAtRef.current);
+        }
+        // 主动切走的流不注销（任务还在后台跑）；真正结束或超时才注销
+        if (!controller.signal.aborted) clearLive(runId);
         void loadRuns();
       }
     },
-    [applyEvent, loadRuns],
+    [applyEvent, loadRuns, markLive, clearLive],
   );
 
   // 只在首次挂载时探测一次：页面刷新后任务还在后台跑，这里把读者重新挂上
@@ -456,15 +559,18 @@ export function AgentsPage() {
         const res = await fetch("/api/agent/runs/active");
         if (!res.ok) return;
         const rows = (await res.json()) as { run_id: string; session_id: string }[];
+        // 刷新后侧栏该显示「运行中」的都要显示：只接第一条会让其它会话看起来
+        // 已经停了，用户点进去才发现任务其实还在跑。
+        for (const row of rows) markLive(row.session_id, row.run_id);
         const first = rows[0];
         if (!first) return;
         setSessionId(first.session_id);
-        void attach(first.run_id);
+        void attach(first.run_id, first.session_id);
       } catch {
         // 探测失败不影响手动发起任务
       }
     })();
-  }, [attach]);
+  }, [attach, markLive]);
 
   const submit = () => {
     const text = task;
@@ -473,8 +579,17 @@ export function AgentsPage() {
     void run(text);
   };
 
-  /** 对敏感工具作出决定：批准后从检查点续跑，拒绝则让模型换路线 */
-  const approveTool = async (decision: "approve" | "reject" = "approve") => {
+  /**
+   * 对敏感工具作出决定：批准后从检查点续跑，拒绝则让模型换路线。
+   *
+   * `scope="session"` 是「本次会话都允许」：除解开当前这次暂停外，还在服务端
+   * 记一条持续授权，本对话里后续同类调用不再询问（有效期 8 小时）。重复点
+   * 只刷新不叠加。注意它对宿主执行同样生效——用户明确表达过这个意图。
+   */
+  const approveTool = async (
+    decision: "approve" | "reject" = "approve",
+    scope: "once" | "session" = "once",
+  ) => {
     if (!approval) return;
     const res = await fetch("/api/agent/approve", {
       method: "POST",
@@ -484,6 +599,7 @@ export function AgentsPage() {
         tool: approval.tool,
         args_hash: approval.argsHash,
         decision,
+        scope,
       }),
     });
     if (!res.ok) {
@@ -507,8 +623,27 @@ export function AgentsPage() {
     }
   };
 
-  /** 选一个模板：把起步参数填进表单，执行仍由智能体自己规划。 */
-  const applyTemplate = async (tpl: TaskTemplate) => {
+  /**
+   * 键盘批准：Ctrl/⌘ + Enter 直接放行当前这次。
+   *
+   * 确认条原本只能点按钮，鼠标要从正文挪到底部——那一步的摩擦比确认本身更
+   * 让人烦。常见路径给快捷键，用户就不会为了少点一次去关掉整个审批。
+   */
+  useEffect(() => {
+    if (!approval) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        void approveTool("approve", "once");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // approveTool 每次渲染都会重建，用 approval 作为重新订阅的时机即可
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approval]);
+
+  /** 选一个模板：把起步参数填进表单，执行仍由智能体自己规划。 */  const applyTemplate = async (tpl: TaskTemplate) => {
     if (running) return;
     setTask(tpl.prompt);
     setTemplateTools(tpl.tool_ids);
@@ -526,14 +661,53 @@ export function AgentsPage() {
   };
 
   const stop = () => {
+    const runId = runIdRef.current;
+    runIdRef.current = null;
     abortRef.current?.abort();
     abortRef.current = null;
     setRunning(false);
     setElapsed(Date.now() - startedAtRef.current);
+    // 用户明确要停：无论后端回什么都别再标「在跑」了
+    clearLive(runId);
+    // 断开 SSE 只是「我不看了」——执行在服务端独立 task 里，模型照跑、照烧 token。
+    // 真正的停止必须显式通知后端撤销任务。
+    if (!runId) return;
+    void fetch(`/api/agent/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" })
+      .then(async (res) => {
+        if (res.ok) {
+          setSteps((prev) => [
+            ...prev,
+            { kind: "note", content: "已停止：执行已中断，已完成的步骤与产物保留在项目里。" },
+          ]);
+          return;
+        }
+        const body = (await res.json().catch(() => ({}))) as { detail?: string };
+        setError(body.detail || `停止失败：HTTP ${res.status}`);
+      })
+      .catch(() => {
+        setError("停止请求没有送达服务端，任务可能仍在后台运行——刷新页面可重新连上确认。");
+      });
+  };
+
+  /**
+   * 换一个视角：只断开发往浏览器的这条流，不动服务端任务。
+   *
+   * 以前这里直接 `if (running) return` —— 任务一开跑，整个侧栏就废了：点哪个
+   * 历史任务都没反应，用户只能干等，或者去点「停止」（而那条停止请求对已经
+   * 没有本地任务的运行还会 404）。执行本来就与「谁在看」解耦，界面没有理由
+   * 跟着锁。
+   */
+  const detachView = () => {
+    if (!running) return;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setRunning(false);
+    setElapsed(null);
   };
 
   const newTask = () => {
-    if (running) return;
+    detachView();
+    runIdRef.current = null;
     setBoundProject(""); // 新任务不继承上一个任务的绑定
     setSessionId(null);
     setTurns([]);
@@ -550,7 +724,7 @@ export function AgentsPage() {
 
   /** 打开一个任务会话：更早的轮次进历史，最后一轮作为当前轮展示 */
   const selectSession = (session: TaskSession) => {
-    if (running) return;
+    detachView();
     const list = session.runs;
     const last = list[list.length - 1];
     if (!last) return;
@@ -570,8 +744,13 @@ export function AgentsPage() {
     setArtifacts(last.artifacts ?? []);
     setError(null);
     setElapsed(null);
+    setApproval(null);
+    setCitations([]);
     const pid = last.project || session.project;
     if (pid && pid !== boundProject) bindProject(pid);
+    // 这个会话还有任务在后台跑 → 重新挂上，看它的实时进度
+    const live = liveRunsRef.current[session.id];
+    if (live) void attach(live, session.id);
   };
 
   const createProject = async () => {
@@ -682,6 +861,7 @@ export function AgentsPage() {
         <TaskSidebar
           sessions={sessions}
           activeSessionId={sessionId}
+          liveSessionIds={liveSessions}
           onSelectSession={selectSession}
           onDeleteSession={(session) => void deleteSession(session)}
           onNewTask={newTask}
@@ -828,27 +1008,50 @@ export function AgentsPage() {
             <div className="shrink-0 overflow-y-hidden pb-3 [scrollbar-gutter:stable]">
               <div className="conversation-column">
                 {approval && (
-                  <div className="mb-2 flex items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-4 py-2.5">
-                    <div className="min-w-0 text-[13px] text-primary">
-                      <p>
-                        任务已暂停：工具{" "}
-                        <code className="rounded bg-surface-3 px-1 py-0.5 text-xs">
-                          {approval.tool}
-                        </code>{" "}
-                        需要你批准后才能执行。
-                      </p>
-                      {approval.args && (
-                        <p className="mt-0.5 truncate text-xs text-tertiary" title={approval.args}>
-                          参数：{approval.args}
+                  <div className="mb-2 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="min-w-0 text-[13px] text-primary">
+                        <p>
+                          任务已暂停：工具{" "}
+                          <code className="rounded bg-surface-3 px-1 py-0.5 text-xs">
+                            {approval.tool}
+                          </code>{" "}
+                          {approval.env === "host"
+                            ? "要在宿主进程里执行，能读到本机文件与服务端环境变量。"
+                            : "需要你确认后才能执行。"}
                         </p>
-                      )}
+                        {approval.args && (
+                          <p
+                            className="mt-0.5 truncate text-xs text-tertiary"
+                            title={approval.args}
+                          >
+                            参数：{approval.args}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Button
+                          onClick={() => void approveTool("approve", "once")}
+                          title="Ctrl/⌘ + Enter"
+                        >
+                          批准并继续
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => void approveTool("approve", "session")}
+                          title="本对话内不再询问该工具，8 小时内有效"
+                        >
+                          本次会话都允许
+                        </Button>
+                        <Button variant="ghost" onClick={() => void approveTool("reject")}>
+                          拒绝
+                        </Button>
+                      </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <Button onClick={() => void approveTool("approve")}>批准并继续</Button>
-                      <Button variant="ghost" onClick={() => void approveTool("reject")}>
-                        拒绝
-                      </Button>
-                    </div>
+                    <p className="mt-1.5 text-[11px] text-tertiary">
+                      Ctrl/⌘ + Enter 直接批准；「本次会话都允许」只对当前对话有效，
+                      换新对话会重新询问。
+                    </p>
                   </div>
                 )}
                 {composer}

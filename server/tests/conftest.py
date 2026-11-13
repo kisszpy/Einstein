@@ -42,6 +42,11 @@ os.environ["APP_PPT_AUTO_DIRECTION"] = "false"
 # 逐页重排同样是模型调用；测试只验证校验/回退逻辑，不真的走网络。
 os.environ["APP_PPT_SKILL_LAYOUT"] = "false"
 
+# 测试绝不发真邮件：即使本机 .env 配了 SMTP，也按「未配置」走控制台通道。
+os.environ["APP_SMTP_HOST"] = ""
+os.environ["APP_SMTP_USER"] = ""
+os.environ["APP_SMTP_PASSWORD"] = ""
+
 import pytest  # noqa: E402
 
 

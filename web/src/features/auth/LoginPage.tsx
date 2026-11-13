@@ -9,8 +9,10 @@ import {
   Database,
   Eye,
   EyeOff,
+  KeyRound,
   Loader2,
   Lock,
+  Mail,
   Moon,
   Sun,
   User,
@@ -18,21 +20,21 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/app/layout/useTheme";
 import { BrandMark } from "@/components/BrandMark";
-import { bootstrap, lastUsername, login, useAuth } from "@/lib/auth";
+import { bootstrap, lastUsername, login, loginWithEmail, requestEmailCode, useAuth } from "@/lib/auth";
 import { usePrefersReducedMotion } from "@/lib/usePrefersReducedMotion";
 import { NeuralField } from "./NeuralField";
 
 const FEATURES: { icon: LucideIcon; label: string }[] = [
-  { icon: Database, label: "知识库 RAG" },
-  { icon: Bot, label: "智能体编排" },
-  { icon: Braces, label: "OpenAI 兼容接口" },
+  { icon: Database, label: "企业知识问答" },
+  { icon: Bot, label: "自动化智能助手" },
+  { icon: Braces, label: "无缝接入现有系统" },
 ];
 
 /** 卡片下方的打字机行：把三种能力轮播出来，替代原来左侧的说明列表 */
 const TICKER = [
-  "rag.search(query) → 混合召回",
-  "agent.run(task) → 多步推理 + 工具调用",
-  "openai.chat(model) → /v1 兼容",
+  "接入 3,000 份文档，30 秒找到答案",
+  "一句话，让助手完成整段流程",
+  "已接入企业系统，随时开始工作",
 ];
 
 const CARD_RING =
@@ -75,9 +77,9 @@ function Ticker() {
   return (
     <p
       aria-hidden
-      className="mt-4 flex h-[18px] items-center justify-center gap-1.5 font-mono text-[12px] tracking-[0.02em] text-tertiary"
+      className="mt-4 flex h-[18px] items-center justify-center gap-2 text-[12.5px] text-tertiary"
     >
-      <span className="text-brand-ink">›</span>
+      <span className="h-1 w-1 rounded-full bg-brand" aria-hidden />
       <span className="tabular-nums">{text}</span>
       {!reduce && <span className="login-caret inline-block h-3 w-[1.5px] bg-brand" />}
     </p>
@@ -99,6 +101,12 @@ export function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [online, setOnline] = useState<boolean | null>(null);
+  const [mode, setMode] = useState<"password" | "email">("password");
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+  const [hint, setHint] = useState("");
 
   const next = safeNext(location.search);
   const reduce = usePrefersReducedMotion();
@@ -112,6 +120,12 @@ export function LoginPage() {
   }, []);
 
   useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = window.setTimeout(() => setCooldown((n) => n - 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [cooldown]);
+
+  useEffect(() => {
     let alive = true;
     fetch("/api/health")
       .then((res) => alive && setOnline(res.ok))
@@ -123,9 +137,65 @@ export function LoginPage() {
 
   if (status === "authed" && !done) return <Navigate to={next} replace />;
 
+  const sendCode = async () => {
+    if (busy || done) return;
+    const target = email.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(target)) {
+      setError("请输入正确的邮箱地址");
+      setNonce((n) => n + 1);
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const result = await requestEmailCode(target);
+      setCodeSent(true);
+      setCooldown(result.resend_after ?? 60);
+      if (result.code) {
+        // 仅本机联调：后端未配 SMTP 时会在回环地址的响应里回带验证码
+        setCode(result.code);
+        setHint(`开发模式：验证码 ${result.code} 已自动填入`);
+      } else {
+        setHint(result.delivery === "console"
+          ? "邮件未发出（SMTP 未配置或投递失败），验证码已写入服务端日志"
+          : `验证码已发往 ${target}`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "发送失败，请稍后再试");
+      setNonce((n) => n + 1);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (busy || done) return;
+
+    if (mode === "email") {
+      if (!codeSent) {
+        await sendCode();
+        return;
+      }
+      if (!code.trim()) {
+        setError("请输入验证码");
+        setNonce((n) => n + 1);
+        return;
+      }
+      setBusy(true);
+      setError("");
+      try {
+        await loginWithEmail(email.trim(), code.trim());
+        setDone(true);
+        window.setTimeout(() => nav(next, { replace: true }), 400);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "验证失败，请稍后再试");
+        setNonce((n) => n + 1);
+        setBusy(false);
+      }
+      return;
+    }
+
     if (!username.trim() || !password) {
       setError("请输入用户名与密码");
       setNonce((n) => n + 1);
@@ -272,13 +342,37 @@ export function LoginPage() {
                   />
                 </div>
 
-                <h1 className="text-center text-[21px] font-semibold">进入智能工作台</h1>
+                <h1 className="text-center text-[20px] font-semibold tracking-wide">
+                  与 AI 共事的时代，从这里开始
+                </h1>
                 <p className="mt-2 text-center text-[12.5px] leading-5 text-tertiary">
-                  一套底座，三种用法——检索、执行、接入。
+                  Einstein — 企业级 AI 工作台：让每一份知识都能被提问、被信任
                 </p>
                 <Ticker />
 
                 <form onSubmit={submit} className="mt-6">
+                  <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl border border-line bg-surface-2/50 p-1">
+                    {([["password", "密码登录"], ["email", "邮箱验证码"]] as const).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => {
+                          setMode(value);
+                          setError("");
+                          setHint("");
+                        }}
+                        className={`h-8 rounded-lg text-[12.5px] transition-colors duration-200 ${
+                          mode === value
+                            ? "bg-brand-soft text-brand-ink shadow-sm"
+                            : "text-tertiary hover:text-secondary"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {mode === "password" ? (
                   <div className="space-y-4">
                     <div>
                       <label htmlFor="username" className={LABEL}>
@@ -349,6 +443,73 @@ export function LoginPage() {
                       )}
                     </div>
                   </div>
+                  ) : (
+                  <div className="space-y-4">
+                    <div>
+                      <label htmlFor="email" className={LABEL}>
+                        邮箱
+                      </label>
+                      <div className="group relative">
+                        <Mail
+                          size={15}
+                          strokeWidth={1.7}
+                          className="pointer-events-none absolute left-3.5 top-1/2 z-10 -translate-y-1/2 text-tertiary transition-all duration-300 group-focus-within:scale-110 group-focus-within:text-brand-ink"
+                        />
+                        <input
+                          id="email"
+                          type="email"
+                          autoComplete="email"
+                          autoFocus
+                          value={email}
+                          disabled={codeSent}
+                          onChange={(e) => setEmail(e.target.value)}
+                          placeholder="name@company.com"
+                          className={`${FIELD} disabled:opacity-60`}
+                        />
+                      </div>
+                    </div>
+
+                    {codeSent && (
+                      <div>
+                        <label htmlFor="code" className={LABEL}>
+                          验证码
+                        </label>
+                        <div className="group relative">
+                          <KeyRound
+                            size={15}
+                            strokeWidth={1.7}
+                            className="pointer-events-none absolute left-3.5 top-1/2 z-10 -translate-y-1/2 text-tertiary transition-all duration-300 group-focus-within:scale-110 group-focus-within:text-brand-ink"
+                          />
+                          <input
+                            id="code"
+                            inputMode="numeric"
+                            autoComplete="one-time-code"
+                            maxLength={6}
+                            autoFocus
+                            value={code}
+                            onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                            placeholder="6 位数字"
+                            className={`${FIELD} tracking-[0.35em]`}
+                          />
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-3 text-[12px] text-tertiary">
+                          <span className="min-w-0 truncate">{hint}</span>
+                          {cooldown > 0 ? (
+                            <span className="shrink-0 tabular-nums">{cooldown}s 后可重发</span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={sendCode}
+                              className="shrink-0 text-brand-ink transition-colors hover:underline"
+                            >
+                              重新发送
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  )}
 
                   {error && (
                     <div
@@ -389,11 +550,11 @@ export function LoginPage() {
                       ) : busy ? (
                         <>
                           <Loader2 size={15} className="animate-spin" />
-                          正在验证
+                          {mode === "email" && !codeSent ? "正在发送" : "正在验证"}
                         </>
                       ) : (
                         <>
-                          登录
+                          {mode === "email" ? (codeSent ? "验证并登录" : "发送验证码") : "登录"}
                           <ArrowRight
                             size={15}
                             className="transition-transform duration-300 group-hover/btn:translate-x-0.5"
@@ -404,26 +565,6 @@ export function LoginPage() {
                   </button>
                 </form>
 
-                {/* 初始账号提示只在开发构建展示：生产环境不该把默认凭据印在登录页上 */}
-                {import.meta.env.DEV && (
-                <div className="mt-6 flex items-center justify-between gap-3 rounded-xl border border-dashed border-line bg-surface-2/50 px-3 py-2.5">
-                  <p className="text-[12px] leading-5 text-tertiary">
-                    初始账号{" "}
-                    <span className="tabular-nums text-secondary">admin / admin123</span>
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setUsername("admin");
-                      setPassword("admin123");
-                      setError("");
-                    }}
-                    className="shrink-0 rounded-md px-2 py-1 text-[12px] text-brand-ink transition-colors duration-150 hover:bg-brand-soft "
-                  >
-                    一键填入
-                  </button>
-                </div>
-                )}
               </div>
             </div>
           </div>

@@ -6,7 +6,7 @@
 
 这里定义的是「设计令牌」——调色板 + 字体 + 明暗基调，交给 design_renderer 用形状与
 文本框从零绘制版式（封面/章节/内容/两栏/引用/数据/结尾/来源），生成结果仍是普通
-pptx 形状，DeckCraft 打开后每个字都能改。
+pptx 形状，用 PowerPoint 打开后每个字都能改。
 
 id 统一带 `builtin:` 前缀，与主题包 uuid 不会撞；同时兼容 outline.style.preset_theme
 （midnight/graphite/...）的旧口径，两条入口都归一到同一套 preset。

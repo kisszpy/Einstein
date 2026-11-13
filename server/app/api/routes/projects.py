@@ -190,6 +190,18 @@ def write_file_bytes(
         raise _guard(exc, 400) from exc
 
 
+@router.delete("/{project}/file")
+def delete_project_file(
+    project: str, path: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)
+) -> dict:
+    """删除项目里的一个文件（资产列表的清理入口）。"""
+    _require(ws, project, uid)
+    try:
+        return sandbox.delete_file(ws, project, path)
+    except sandbox.SandboxError as exc:
+        raise _guard(exc, 400) from exc
+
+
 @router.get("/{project}/download")
 def download_file(
     project: str, path: str, ws: str = Depends(current_workspace), uid: str = Depends(current_uid)

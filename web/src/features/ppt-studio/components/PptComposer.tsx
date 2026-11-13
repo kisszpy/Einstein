@@ -5,11 +5,17 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Briefcase, ChevronDown, Loader2, Wrench } from "lucide-react";
+import { Briefcase, ChevronDown, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { promptDialog } from "@/lib/confirm";
 import { listProjects } from "@/features/browser/api";
 import type { ProjectInfo } from "@/features/browser/types";
+import {
+  ComposerFrame,
+  ComposerInput,
+  ComposerSendButton,
+  ComposerToolbar,
+} from "@/components/ui/composer";
 import { TemplatePicker } from "./TemplatePicker";
 import type { ThemePackSummary } from "../types";
 
@@ -71,7 +77,6 @@ export function PptComposer(props: Props) {
   const [experts, setExperts] = useState<ExpertOption[]>([]);
   const [skills, setSkills] = useState<SkillOption[]>([]);
   const [skillsOpen, setSkillsOpen] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const skillsBoxRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -140,133 +145,133 @@ export function PptComposer(props: Props) {
 
   const canSubmit = !busy && prompt.trim().length > 0;
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter 发送、Shift+Enter 换行（与 ChatPage 输入框习惯一致）
-    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      if (canSubmit) onSubmit();
-    }
-  };
-
   return (
-    <div className="border-t border-line bg-surface-1 px-4 py-3">
-      <div className="rounded-xl border border-line bg-surface-2 focus-within:border-brand/40">
-        <textarea
-          ref={textareaRef}
+    <div className="w-full pb-3">
+      <div className="conversation-column">
+        <ComposerFrame data-composer-frame>
+        <ComposerInput
           value={prompt}
-          onChange={(e) => onPromptChange(e.target.value)}
-          onKeyDown={handleKeyDown}
+          onChange={onPromptChange}
+          onSubmit={() => {
+            if (canSubmit) onSubmit();
+          }}
           placeholder={placeholder}
-          rows={3}
-          className="w-full resize-none bg-transparent px-3 pt-3 text-[13px] leading-6 text-primary outline-none placeholder:text-placeholder"
+          className="min-h-[52px]"
         />
 
-        <div className="flex flex-wrap items-center gap-1.5 px-2.5 pb-2.5 pt-1">
-          {/* 专家选择 */}
-          <select
-            value={expertId}
-            aria-label="选择专家"
-            disabled={busy}
-            onChange={(e) => onExpertChange(e.target.value)}
-            className={cn(
-              "max-w-[170px] truncate rounded-lg border border-line bg-surface-1 px-2 py-1.5 text-[12px] text-secondary outline-none",
-              !expertId && "text-placeholder",
-            )}
-          >
-            <option value="">通用助手…</option>
-            {experts.map((expert) => (
-              <option key={expert.id} value={expert.id}>
-                {expert.emoji ? `${expert.emoji} ` : ""}
-                {expert.name}
-              </option>
-            ))}
-          </select>
-
-          {/* Skills 多选浮层 */}
-          <div ref={skillsBoxRef} className="relative">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setSkillsOpen((v) => !v)}
-              title="附加技能（可多选）"
-              className={cn(
-                "flex items-center gap-1 rounded-lg border border-line bg-surface-1 px-2 py-1.5 text-[12px] text-secondary transition-colors hover:border-brand/40 disabled:opacity-50",
-                skillsOpen && "border-brand/40",
-              )}
-            >
-              <Wrench size={12} strokeWidth={1.9} />
-              技能{skillIds.length > 0 && ` · ${skillIds.length}`}
-              <ChevronDown size={11} />
-            </button>
-            {skillsOpen && (
-              <div className="absolute bottom-full left-0 z-20 mb-1.5 max-h-[220px] w-[240px] overflow-y-auto rounded-xl border border-line bg-surface-1 p-1.5 shadow-lg">
-                {skills.length === 0 && (
-                  <p className="px-2 py-2 text-[12px] text-tertiary">暂无可用技能</p>
+        <ComposerToolbar
+          left={
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              {/* 专家选择 */}
+              <select
+                value={expertId}
+                aria-label="选择专家"
+                disabled={busy}
+                onChange={(e) => onExpertChange(e.target.value)}
+                className={cn(
+                  "h-7 max-w-[170px] truncate rounded-full border border-line bg-transparent px-2.5 text-[12px] text-secondary outline-none transition-colors hover:border-line-strong disabled:opacity-50",
+                  !expertId && "text-placeholder",
                 )}
-                {skills.map((skill) => (
-                  <label
-                    key={skill.id}
-                    className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-secondary transition-colors hover:bg-hover"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={skillIds.includes(skill.id)}
-                      onChange={() => toggleSkill(skill.id)}
-                      className="accent-brand"
-                    />
-                    <span className="truncate">{skill.name}</span>
-                  </label>
+              >
+                <option value="">通用助手…</option>
+                {experts.map((expert) => (
+                  <option key={expert.id} value={expert.id}>
+                    {expert.emoji ? `${expert.emoji} ` : ""}
+                    {expert.name}
+                  </option>
                 ))}
+              </select>
+
+              {/* Skills 多选浮层 */}
+              <div ref={skillsBoxRef} className="relative">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setSkillsOpen((v) => !v)}
+                  title="附加技能（可多选）"
+                  className={cn(
+                    "flex h-7 items-center gap-1 rounded-full border border-line bg-transparent px-2.5 text-[12px] text-secondary transition-colors hover:border-line-strong disabled:opacity-50",
+                    skillsOpen && "border-line-strong text-primary",
+                  )}
+                >
+                  <Wrench size={12} strokeWidth={1.9} />
+                  技能{skillIds.length > 0 && ` · ${skillIds.length}`}
+                  <ChevronDown size={11} />
+                </button>
+                {skillsOpen && (
+                  <div className="absolute bottom-full left-0 z-20 mb-1.5 max-h-[220px] w-[240px] overflow-y-auto rounded-xl border border-line bg-surface-1 p-1.5 shadow-float">
+                    {skills.length === 0 && (
+                      <p className="px-2 py-2 text-[12px] text-tertiary">暂无可用技能</p>
+                    )}
+                    {skills.map((skill) => (
+                      <label
+                        key={skill.id}
+                        className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-secondary transition-colors hover:bg-hover"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={skillIds.includes(skill.id)}
+                          onChange={() => toggleSkill(skill.id)}
+                          className="accent-brand"
+                        />
+                        <span className="truncate">{skill.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          <TemplatePicker
-            value={themePackId}
-            onChange={onThemePackChange}
-            packs={packs}
-            onPacksChange={onPacksChange}
-            disabled={busy}
-          />
+              <TemplatePicker
+                value={themePackId}
+                onChange={onThemePackChange}
+                packs={packs}
+                onPacksChange={onPacksChange}
+                disabled={busy}
+              />
 
-          {/* 落盘项目 */}
-          <select
-            value={project}
-            aria-label="选择落盘项目"
-            disabled={busy}
-            onChange={(e) => onProjectChange(e.target.value)}
-            className={cn(
-              "max-w-[170px] truncate rounded-lg border border-line bg-surface-1 px-2 py-1.5 text-[12px] text-secondary outline-none",
-              !project && "text-placeholder",
-            )}
-          >
-            <option value="">生成后选择项目…</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.name}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void createProject()}
-            title="新建项目"
-            className="flex shrink-0 items-center rounded-lg border border-line bg-surface-1 px-2 py-1.5 text-[12px] text-secondary transition-colors hover:border-brand/40 hover:text-primary disabled:opacity-50"
-          >
-            <Briefcase size={12} strokeWidth={1.9} /> 新建
-          </button>
-
-          <button
-            type="button"
-            onClick={onSubmit}
-            disabled={!canSubmit}
-            title="开始生成大纲（Enter 发送）"
-            className="ml-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-brand-fg transition-opacity hover:opacity-90 disabled:opacity-40"
-          >
-            {busy ? <Loader2 size={14} className="animate-spin" /> : <ArrowUp size={15} />}
-          </button>
-        </div>
+              {/* 落盘项目 */}
+              <select
+                value={project}
+                aria-label="选择落盘项目"
+                disabled={busy}
+                onChange={(e) => onProjectChange(e.target.value)}
+                className={cn(
+                  "h-7 max-w-[170px] truncate rounded-full border border-line bg-transparent px-2.5 text-[12px] text-secondary outline-none transition-colors hover:border-line-strong disabled:opacity-50",
+                  !project && "text-placeholder",
+                )}
+              >
+                <option value="">生成后选择项目…</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.name}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void createProject()}
+                title="新建项目"
+                className="flex h-7 shrink-0 items-center gap-1 rounded-full border border-line bg-transparent px-2.5 text-[12px] text-secondary transition-colors hover:border-line-strong hover:text-primary disabled:opacity-50"
+              >
+                <Briefcase size={12} strokeWidth={1.9} /> 新建
+              </button>
+            </div>
+          }
+          right={
+            <ComposerSendButton
+              running={false}
+              disabled={!canSubmit}
+              onSend={onSubmit}
+              onStop={() => {}}
+              labels={{ send: "生成大纲" }}
+            />
+          }
+        />
+      </ComposerFrame>
+      <p className="mt-2 text-center text-[12px] text-tertiary">
+        生成内容与大纲由 AI 产出，正式使用前请核对
+      </p>
       </div>
     </div>
   );

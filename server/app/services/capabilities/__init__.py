@@ -72,6 +72,10 @@ class AgentContext:
     # 引擎是否用框架的 interrupt 做人工确认。为真时工具本身不再抛异常——
     # 拦截发生在工具执行之前，工具代码保持"被调用就是已批准"的干净语义。
     hitl: bool = False
+    # 这次运行是「批准后的续跑」。装配期要靠它区分两件事：本会话的持续授权
+    # 可以让新运行不再挂中断，但正在续跑的那一次必须挂——否则检查点里那条
+    # 待确认会永远悬着，图再也走不下去。
+    resuming: bool = False
     # 本轮召回到的长期记忆（人设之外的工作区事实）。由引擎在装配前填好，
     # 提示词构建器负责拼进系统提示——智能体因此也带背景，而不是每次从零开始。
     memory: list[str] = field(default_factory=list)
@@ -151,7 +155,11 @@ class FsListArgs(BaseModel):
 class CodeRunArgs(BaseModel):
     code: str = Field(default="", description="要执行的代码（与 path 二选一）")
     path: str = Field(default="", description="执行项目内已有脚本")
-    language: str = Field(default="python", description="python 或 node")
+    language: str = Field(
+        default="python",
+        description="python | node | java | maven。java 跑单文件源码（java Foo.java，只含 main 类）；"
+        "maven 在含 pom.xml 的项目里跑 mvn 命令（code 里写参数，如 package）",
+    )
     timeout: int = Field(default=60, description="超时秒数，5-120")
 
 
@@ -303,15 +311,23 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
             args_schema=FsListArgs, coroutine=None))
 
     if "code_run" in wanted:
-        if get_settings().agent_code_exec:
+        # 装配期就判「有没有真沙箱」：没有容器又没显式允许宿主执行时，这个工具
+        # 不能挂——否则模型会先试一次、拿到一句「已拒绝执行」，白跑一轮还打断计划。
+        # 用户会在开跑时收到一条 note（见 agent_deep._run_deep），不是无声消失。
+        if get_settings().agent_code_exec and code_exec.available()[0]:
 
             def _code_run(code: str = "", path: str = "", language: str = "python", timeout: int = 60) -> str:
                 # 人工确认门：deep 系引擎由框架 interrupt 在「执行前」拦截，工具
                 # 被调用即代表已批准；react 引擎没有 interrupt，只能在工具里抛。
+                #
+                # needs_approval() 决定「这一步到底要不要问」——隔离沙箱里不问，
+                # 宿主进程里必问。判断依据是环境而不是工具名，所以它在这里和
+                # agent_deep._approval_plan 里得到同一个答案。
                 if (
                     not ctx.hitl
                     and "code_run" in _approval_tools()
                     and "code_run" not in ctx.approved_tools
+                    and code_exec.needs_approval()
                 ):
                     raise ApprovalRequired("code_run", {"code": code[:400], "language": language})
                 if ctx.project:
@@ -326,11 +342,23 @@ def make_tools(ctx: AgentContext, tool_ids: list[str]) -> list[StructuredTool]:
                         ws, scratch, ctx.owner_id, description="智能体临时计算沙盒（自动创建）"
                     )
                 result = code_exec.run_code(ws, project, code, path, language, timeout)
+                # 代码跑出来的文件已经同步回项目目录，但它们不是 fs_write 写的，
+                # 没人把它们当产物——前端因此不出现卡片、done 帧里也没有。
+                # 用户看到的是「跑完了但什么都没交付」。这里逐条补上。
+                for rel in result.get("files") or []:
+                    ctx.note_artifact(rel, _artifact_kind(rel))
                 return sandbox.dumps(result)
 
             tools.append(StructuredTool.from_function(
                 _safe(_code_run), name="code_run",
-                description="执行 Python/Node 代码并返回 stdout/stderr。仅用于精确计算、数据处理或验证写好的代码；普通问答和写作不要写代码。无项目时自动落在临时沙盒，不会影响用户项目",
+                description=(
+                    "执行代码并返回 stdout/stderr，支持 python / node / java / maven。"
+                    "仅用于精确计算、数据处理或验证写好的代码；普通问答和写作不要写代码。"
+                    "无项目时自动落在临时沙盒，不会影响用户项目。"
+                    "要产出交付文件（报告/图表/PPT）时，用相对路径写在当前工作目录；"
+                    "写完会自动同步回项目并列为产物。"
+                    + code_exec.capability_note()
+                ),
                 args_schema=CodeRunArgs, coroutine=None))
 
     if "slide_upsert" in wanted:

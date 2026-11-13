@@ -56,6 +56,15 @@ TERMINAL = frozenset({"done", "error"})
 # 超出后从最旧的开始丢：长任务的「最近进展」比「开头」更值得留。
 MAX_PER_RUN = 2000
 
+# 多久没有新事件就不再算「还在跑」。
+#
+# 这个值存在的唯一原因：进程被杀时 `done` 来不及落库，那条运行在库里会
+# 永远停在中间。`active()` 把它当活跃运行返回，前端刷新后被挂上一条永不
+# 结束的流，接着 `running` 锁住整个页面——任务切不动、新任务发不出，用户
+# 只能去点「停止」。10 分钟是「真的还在思考」和「其实是尸体」之间的折中：
+# 真跑着的长任务至少会周期性推 tool_result，不会连续十分钟一片空白。
+STALE_SECONDS = 600
+
 _DIR = Path(__file__).resolve().parents[2] / "data" / "run_events"
 
 _lock = threading.Lock()
@@ -226,11 +235,18 @@ def _group(rows: list[dict]) -> list[dict]:
     return [item for item in seen.values() if not item["done"]]
 
 
-def running(workspace_id: str, owner_id: str, *, limit: int = 3000) -> list[dict]:
+def running(
+    workspace_id: str, owner_id: str, *, limit: int = 3000,
+    stale_seconds: int = STALE_SECONDS,
+) -> list[dict]:
     """当前空间里「库里有、但还没写终态事件」的运行。
 
     一次最多捞最近 limit 条事件再折叠：正在跑的那几次一定在最前面，
     被截断的只可能是早就结束、只剩清理没做干净的老运行。
+
+    `created_at` 是该运行**最新一条事件**的时间，所以「太久没动」等价于
+    「它其实已经死了」。不滤掉的话，一次进程重启会给用户留下一个永远
+    「正在运行」的任务，前端每次刷新都挂上去、锁死十五分钟。
     """
     try:
         if use_table():
@@ -249,7 +265,109 @@ def running(workspace_id: str, owner_id: str, *, limit: int = 3000) -> list[dict
             rows = rows[:limit]
     except Exception:  # noqa: BLE001
         return []
-    return _group(rows)
+    items = _group(rows)
+    if stale_seconds <= 0:
+        return items
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=int(stale_seconds))
+    ).isoformat(timespec="seconds")
+    return [item for item in items if str(item.get("created_at") or "") >= cutoff]
+
+
+def _latest_seq(run_id: str) -> int:
+    """该运行已落库的最大 seq；补终态事件时要接在它后面。"""
+    try:
+        if use_table():
+            rows = _state().rows("run_id = ?", (run_id,), limit=1, order="seq DESC")
+        else:
+            rows = sorted(
+                _jsonl_rows(run_id), key=lambda r: int(r.get("seq") or 0), reverse=True,
+            )[:1]
+    except Exception:  # noqa: BLE001
+        return 0
+    if not rows:
+        return 0
+    try:
+        return int(rows[0].get("seq") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def abandon(
+    *, run_id: str, workspace_id: str, owner_id: str, session_id: str = "",
+    reason: str = "服务重启，本次运行已中断。",
+) -> bool:
+    """给一次「有始无终」的运行补一条终态事件。
+
+    进程被杀、容器被重启时，`done` 没机会落库。库里这条运行就永远停在
+    中间：`active()` 反复把它当「还在跑」，前端挂上一条永不结束的流。
+    补一条 `error` 把它收尾，此后任何进程都不会再认它作活跃运行。
+    """
+    return append(
+        run_id=run_id, seq=_latest_seq(run_id) + 1, event="error",
+        data={"message": reason, "abandoned": True},
+        workspace_id=workspace_id, owner_id=owner_id, session_id=session_id,
+    )
+
+
+def orphans(*, limit: int = 4000) -> list[dict]:
+    """全库范围内「没有终态事件」的运行，带上归属信息供补收尾用。"""
+    try:
+        if use_table():
+            rows = _state().rows("", (), limit=limit, order="created_at DESC, id DESC")
+        else:
+            rows = []
+            if _DIR.exists():
+                for path in sorted(_DIR.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
+                    rows.extend(reversed(_jsonl_rows(path.stem)))
+                    if len(rows) >= limit:
+                        break
+            rows = rows[:limit]
+    except Exception:  # noqa: BLE001
+        return []
+
+    seen: dict[str, dict] = {}
+    for row in rows:
+        rid = str(row.get("run_id") or "")
+        if not rid or rid in seen:
+            continue
+        seen[rid] = {
+            "run_id": rid,
+            "workspace_id": str(row.get("workspace_id") or ""),
+            "owner_id": str(row.get("owner_id") or ""),
+            "session_id": str(row.get("session_id") or ""),
+            "created_at": str(row.get("created_at") or ""),
+            "last_event": str(row.get("event") or ""),
+        }
+    return [item for item in seen.values() if item["last_event"] not in TERMINAL]
+
+
+def abandon_orphans(*, before: str = "", reason: str = "服务重启，本次运行已中断。") -> int:
+    """把启动前遗留的未收尾运行全部补上终态，返回处理条数。
+
+    调用方只在「本进程刚起来、内存登记簿一定是空的」这一刻调用：此时库里
+    所有未收尾的运行都不可能是本进程在跑，只能是上一个进程的尸体。
+
+    `before` 是 ISO 时间（本进程启动时刻）。多副本滚动重启时，别的副本
+    正在跑的任务也满足「未收尾」，因此只在单副本部署下信任这一步；多副本
+    请关掉 `agent_run_orphan_sweep`，靠 `running()` 的陈旧阈值兜底。
+    """
+    fixed = 0
+    for item in orphans():
+        created = str(item.get("created_at") or "")
+        if before and created >= before:
+            # 启动之后才产生的事件：可能真的是别的副本在跑
+            continue
+        ok = abandon(
+            run_id=item["run_id"],
+            workspace_id=item["workspace_id"],
+            owner_id=item["owner_id"],
+            session_id=item["session_id"],
+            reason=reason,
+        )
+        if ok:
+            fixed += 1
+    return fixed
 
 
 # ---------------------------------------------------------------- 清理

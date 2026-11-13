@@ -955,3 +955,61 @@ def test_appendix_paginates_clear_of_the_footer(tmp_path):
     for item in items:
         report = lint.inspect(item, tokens, layout="appendix")
         assert not report.errors, [issue.detail for issue in report.errors]
+
+
+def test_every_bundled_icon_converts_to_native_geometry():
+    """内置图标全部要能转成 DrawingML 路径。
+
+    Lucide 的圆弧标志位会和坐标黏在一起（`0 0018.5`），分词器一旦按数字切
+    就会把 `10.5` 误拆成两个标志位；这里逐个图标跑一遍，保证没有死路径。
+    """
+    from app.services.ppt_studio.htmlkit import icon_geom, icons
+
+    names = ["wifi", "timer", "badge-check", "trending-up", "trending-down",
+             "circle-dollar-sign", "truck", "factory", "gauge", "users",
+             "shield-check", "target", "zap", "database", "layers",
+             "calendar-days", "package"]
+    for name in names:
+        commands = icon_geom.path_commands(icons.nodes(name), icons.viewbox(name))
+        assert commands, name
+        assert "moveTo" in commands and ("lnTo" in commands or "cubicBezTo" in commands), name
+
+
+def test_icon_choice_is_semantic_and_optional():
+    from app.services.ppt_studio.htmlkit import icons
+
+    assert icons.name_for("设备联网率") == "wifi"
+    assert icons.name_for("换线时间") == "timer"
+    assert icons.name_for("一次良率") == "badge-check"
+    assert icons.name_for("交付准时率") == "truck"
+    assert icons.name_for("这段文字没有可对应的语义") is None
+
+
+def test_metric_page_paints_icons_as_shapes_not_glyphs(tmp_path):
+    """图标在 html 里是 SVG 孪生，在 pptx 里是自定义几何形状——不是字体字形。"""
+    from pptx import Presentation
+
+    from app.services.ppt_studio.htmlkit import pptx_writer
+
+    tokens = _tokens()
+    outline = _outline()
+    page = outline.sections[1].pages[2]
+    page.layout = "auto"
+    page.title = "五项指标全部达成"
+    page.bullets = ["设备联网率 62%→91%", "换线时间 48→19 分钟", "一次良率 93.4%→97.8%"]
+    slides = compose.compose_deck(outline, tokens)
+    index = next(i for i, s in enumerate(slides) if s.kind == "metric")
+    assert 'data-pptx="icon"' in slides[index].html
+
+    item = measure.measure([slides[index]], tmp_path, canvas=(tk.CANVAS_W, tk.CANVAS_H))[0]
+    report = lint.inspect(item, tokens, layout="metric")
+    assert not report.errors, [issue.detail for issue in report.errors]
+
+    deck = tmp_path / "icons.pptx"
+    pptx_writer.write_deck([item], tokens, deck)
+    shapes = [shape for shape in Presentation(str(deck)).slides[0].shapes
+              if getattr(shape, "name", "") == "icon"]
+    assert len(shapes) == 3
+    xml = shapes[0]._element.xml
+    assert "custGeom" in xml and "<a:moveTo>" in xml
+    assert shapes[0].width == pptx_writer.px(20)

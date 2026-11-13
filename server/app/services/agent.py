@@ -13,6 +13,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
@@ -47,6 +48,7 @@ def _get_model(
     """
     settings = get_settings()
     target = models.resolve(model_id, workspace_id=workspace_id)
+    read_timeout = float(getattr(settings, "agent_llm_timeout", 180) or 180)
     kwargs: dict = dict(
         base_url=target.base_url,
         api_key=target.api_key,
@@ -54,8 +56,11 @@ def _get_model(
         # 真流式的开关：astream(messages) 靠模型的 SSE 增量，streaming=False
         # 时它只在最后吐一个完整 chunk，前端就得等全文生成完（旧行为）。
         streaming=bool(getattr(settings, "agent_stream", True)),
-        timeout=300,  # 长上下文下本地 27B 生成慢，180s 会误杀
-        max_retries=2,
+        # 分开计超时：连不上要在 10 秒内报错，而不是和「模型在生成」共用同一条
+        # 长超时。读超时 180s 够生成长文；要更宽改 APP_AGENT_LLM_TIMEOUT。
+        # 重试只留 1 次：卡死一次已经是分钟级，重试两次等于把等待放大三倍。
+        timeout=httpx.Timeout(connect=10.0, read=read_timeout, write=30.0, pool=10.0),
+        max_retries=1,
     )
     resolved_temp = temperature if temperature is not None else target.temperature
     if resolved_temp is not None:
@@ -67,7 +72,7 @@ AGENT_SYSTEM_PROMPT = """你是 Einstein 的工作型智能体，能调用工具
 
 【任务路由】
 1. 问答/解释/比较/观点/规划类（用户要一个回答）→ 直接在回复里给答案。不建项目、不写代码、不产出文件。需要外部信息或时效性数据时，先查已挂载的知识库（kb_search），查不到再 web_search；关键结论用 web_fetch 打开原文核实（max_chars 2500 左右，检索类合计最多 2 次调用），核完就答。
-2. 需要精确计算/数据处理/批量文本操作（三步以上的数字运算、排序统计、大批量格式转换，心算不可靠的）→ 用 code_run 跑代码算（不需要先建项目，无项目时自动落在临时沙盒），结论以运行结果为准。算完即止，不要为算一个数建工程。
+2. 需要精确计算/数据处理/批量文本操作（三步以上的数字运算、排序统计、大批量格式转换，心算不可靠的）→ 用 code_run 跑代码算（不需要先建项目，无项目时自动落在临时沙盒），结论以运行结果为准。算完即止，不要为算一个数建工程。code_run 支持 python / node / java / maven；沙箱断网，只能用镜像预装的依赖和内置的离线 Maven 仓库，装不了新包。
 3. 用户明确要文件交付（代码工程、可下载的 PPT/报告/文档）→ project_create 建项目，fs_write 落盘；代码交付必须 code_run 跑通、报错就修，再汇报。
 
 【多轮追问】
@@ -181,7 +186,10 @@ async def _run_react_agent(
         getattr(ctx, "model_id", "") if ctx else "",
         workspace_id=getattr(ctx, "workspace_id", "") if ctx else "",
     ).model
-    with LlmTimer("agent", _timed_model) as timer:
+    with LlmTimer(
+        "agent", _timed_model,
+        workspace_id=getattr(ctx, "workspace_id", "") if ctx else "",
+    ) as timer:
         def _acc_usage(msg: Any) -> None:
             token_usage = (getattr(msg, "response_metadata", None) or {}).get("token_usage")
             if token_usage:

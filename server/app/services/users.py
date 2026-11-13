@@ -11,6 +11,7 @@
 
 import hashlib
 import hmac
+import re
 import secrets
 import threading
 import uuid
@@ -72,6 +73,8 @@ class User:
     id: str
     username: str
     display_name: str
+    # 邮箱登录用；老账号为空。同邮箱只允许一个账号（写入侧保证）
+    email: str = ""
     role: str = "member"
     password_hash: str = ""
     salt: str = ""
@@ -87,6 +90,7 @@ class User:
             "id": self.id,
             "username": self.username,
             "display_name": self.display_name,
+            "email": self.email,
             "role": self.role,
             "role_label": ROLE_LABEL.get(self.role, self.role),
             "workspaces": [m.workspace_id for m in _memberships(self.id)],
@@ -132,6 +136,15 @@ class UserStore:
                 return u
         return None
 
+    def by_email(self, email: str) -> User | None:
+        key = (email or "").strip().lower()
+        if not key:
+            return None
+        for u in self.items.values():
+            if u.email and u.email.lower() == key:
+                return u
+        return None
+
     def admins(self) -> list[User]:
         return [u for u in self.items.values() if u.is_admin and not u.disabled]
 
@@ -168,6 +181,28 @@ class UserStore:
             created_at=_now(),
         )
         self.items[user.id] = user
+        return user
+
+    def create_email_user(self, email: str, display_name: str = "") -> User:
+        """邮箱首次登录即注册：随机密码占位，密码登录对这条账号自然不可用。"""
+        email = (email or "").strip().lower()
+        if not email or "@" not in email:
+            raise ValueError("邮箱格式不正确")
+        if self.by_email(email) is not None:
+            raise ValueError("该邮箱已注册")
+        local = re.sub(r"[^a-z0-9._-]", "", email.split("@")[0].lower()) or "user"
+        username = local
+        suffix = 1
+        while self.by_username(username) is not None:
+            suffix += 1
+            username = f"{local}{suffix}"
+        user = self.create(
+            username,
+            secrets.token_urlsafe(24),
+            display_name=(display_name or "").strip() or local,
+            role="member",
+        )
+        user.email = email
         return user
 
     def set_password(self, user: User, password: str) -> None:

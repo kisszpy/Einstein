@@ -206,17 +206,35 @@ def scaffold_project(
 # ---------- 文件 ----------
 
 # .deck 存演示文稿的可编辑来源（sidecar），属于实现细节，不进文件树与打包；
-# .agent 是工作区级的运行时目录（技能同步、临时沙盒），同样不属于用户内容
+# .agent 是工作区级的运行时目录（技能同步、临时沙盒），同样不属于用户内容。
+# 后三个是**第三方解包目录**：技能/依赖被整包解开时会出现成百上千个文件，
+# 它们不是用户的产物，必须在这里挡掉（nocturne-cinema 的 libx 就是整套
+# Linux sysroot，1121 个文件里真正的产物不到 10 个）。
 SKIP_DIRS = {
     ".git", "__pycache__", "node_modules", ".venv",
     ".agent", ".agent_tmp", ".deck", ".deckpreview", ".slidep",
+    "libx", "vendor", "site-packages", "dist-packages",
+    ".idea", ".vscode", ".next", ".nuxt", ".pytest_cache",
 }
 
-# 浏览页「产物」的白名单：可预览/可编辑的成品文件。
-# 源码（.js/.css/.py…）、依赖与运行时目录（libx、node_modules…）不属于产物——
-# 之前前端直接拉全量 /tree，项目里混进解包依赖时产物被淹没（nocturne-cinema
-# 的 libx 是整套 Linux sysroot，1121 个文件里产物不到 10 个）。
-ARTIFACT_SUFFIXES = {".html", ".htm", ".md", ".pptx", ".pdf", ".docx", ".xlsx", ".png", ".svg"}
+# 浏览页「产物」的白名单：既包括可预览的成品，也包括工程源码。
+#
+# 为什么源码也要算产物：用户让智能体「搭一套 Spring Cloud 工程」时，交付物
+# 就是那几十个 .java/.xml/.yml。只白名单 .md/.pptx 会把整个项目判成「没有
+# 产物」——实测 ecommerce-cloud 43 个文件只剩 2 个 markdown 可见，用户以为
+# 文件根本没同步回来。
+#
+# 仍然靠 SKIP_DIRS 挡掉依赖目录，并刻意不收 .c/.h/.so 这类编译中间件，
+# 避免解包出来的 sysroot 再次把产物淹没。
+ARTIFACT_SUFFIXES = {
+    # 成品：能直接预览/交付
+    ".html", ".htm", ".md", ".pptx", ".pdf", ".docx", ".xlsx",
+    ".png", ".jpg", ".jpeg", ".webp", ".svg", ".csv", ".txt",
+    # 工程源码与配置：整份代码本身就是交付物
+    ".java", ".kt", ".gradle", ".xml", ".yml", ".yaml", ".properties", ".sql",
+    ".js", ".jsx", ".ts", ".tsx", ".vue", ".css", ".scss", ".json",
+    ".py", ".go", ".rs", ".cs", ".php", ".rb", ".sh", ".toml", ".ini", ".conf",
+}
 
 
 def write_file(workspace_id: str, project: str, rel: str, content: str) -> dict:
@@ -282,6 +300,29 @@ def write_bytes(workspace_id: str, project: str, rel: str, content_base64: str) 
         "bytes": len(raw),
         "previous_bytes": previous,
         "created": not existed,
+        "total_files": sum(1 for _f, _st in iter_files(root)),
+    }
+
+
+def delete_file(workspace_id: str, project: str, rel: str) -> dict:
+    """删除项目内的单个文件。
+
+    只删文件不删目录：目录删除会把「删一项」变成「删一片」，那是另一个动作，
+    要有自己的确认与范围提示，不能藏在文件的删除按钮后面。
+    """
+    root = project_dir(workspace_id, project)
+    if not (rel or "").strip():
+        raise SandboxError("必须指定要删除的文件")
+    target = resolve_in(root, rel)
+    stat = _stat_safe(target)
+    if stat is None:
+        raise SandboxError("文件不存在")
+    if target.is_dir():
+        raise SandboxError("只能删除文件，不能删除目录")
+    target.unlink()
+    return {
+        "path": rel,
+        "bytes": stat.st_size,
         "total_files": sum(1 for _f, _st in iter_files(root)),
     }
 

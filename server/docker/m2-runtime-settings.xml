@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  运行时 settings（由 code_exec 用 `mvn -s /opt/m2/settings.xml` 指定）。
+
+  三个必须显式写死的点：
+
+  1. localRepository 指向 /opt/m2 —— 容器根是只读的，默认的 ~/.m2/repository
+     写不进去（HOME 被指到 /tmp 也只是让错误换个地方出现）。
+  2. offline 打开 —— 容器断网（network=none），Maven 不知道这事，它只会傻等
+     连接超时，一次 `mvn compile` 要烧掉几十秒才报一句看不懂的 connect 错误。
+     提前声明离线，失败信息直接就是「artifact 不在本地仓库」。
+  3. 不带 mirror —— 离线用不上，写上去反而让报错带上无关的地址。
+
+  缺依赖时 Maven 会说 `Cannot access central in offline mode`，那是在说
+  「这个坐标镜像里没有」。补的办法有两个：把依赖加进 docker/m2-seed/pom.xml
+  重新构建镜像，或者用 APP_AGENT_CODE_EXEC_M2_HOST 把宿主 ~/.m2 挂进来。
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+  <offline>true</offline>
+  <localRepository>/opt/m2</localRepository>
+</settings>

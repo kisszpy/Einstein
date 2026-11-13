@@ -3,7 +3,7 @@
 跨演示文稿复制版式在 python-pptx 里不可行（关系+母版+主题是一整套），
 所以反过来：`Presentation(BytesIO(template_bytes))` → 清空示例页 →
 逐页 `add_slide(layout)` 填占位符。主题/母版/版式继承全是真的，
-DeckCraft 打开后按母版继承渲染也正常。
+用 PowerPoint 打开后按母版继承渲染也正常。
 
 三级降级（逐级记入 degradations）：
 1. layout_hint 名字模糊匹配 → 填 title/正文占位符；

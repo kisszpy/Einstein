@@ -32,19 +32,38 @@ def test_default_backend_has_no_execute(tmp_path):
     assert "read_file" in names and "write_file" in names and "grep" in names
 
 
-def test_execute_capable_backend_gets_execute(tmp_path):
+def test_execute_capable_backend_gets_execute(tmp_path, monkeypatch):
+    from app.services import agent_deep_pro
     from app.services.agent_deep_pro import ProBackend
 
-    backend = ProBackend(str(tmp_path), _ctx(), mode="off")
+    monkeypatch.setattr(agent_deep_pro, "docker_ready", lambda *a, **k: (True, "29.0"))
+    backend = ProBackend(str(tmp_path), _ctx(), mode="container")
     assert "execute" in _fs_tool_names(backend)
 
 
-def test_capability_group_id_is_not_a_tool_id():
+def test_sandbox_off_backend_gets_no_execute(tmp_path):
+    """沙箱判为 off（没有 docker 且未允许宿主执行）时不该挂 execute。
+
+    ProBackend 永远是 SandboxBackendProtocol 的实现者，只看协议就会挂上，
+    模型于是先试一次、拿到一句「命令执行不可用」，白跑一轮还打断计划。
+    """
+    from app.services.agent_deep_pro import ProBackend
+
+    backend = ProBackend(str(tmp_path), _ctx(), mode="off")
+    assert "execute" not in _fs_tool_names(backend)
+
+
+def test_capability_group_id_is_not_a_tool_id(monkeypatch):
     """`code` 是能力分组，不是工具 id —— 传它不会挂上 code_run。
 
     这个坑真实存在：前端把分组展开成工具 id 再传，手写请求时容易直接传
     `["code"]`，表现为"模型明明该用代码执行，却一次都没调"。
     """
+    from app.services.capabilities import code_exec
+
+    # 装配期本来就要判「有没有沙箱」。这里钉成可用，是为了让用例只验证
+    # 「分组 id 不展开成工具」这件事，而不是顺带考一遍本机装没装 Docker。
+    monkeypatch.setattr(code_exec, "available", lambda *a, **k: (True, "测试桩"))
     assert make_tools(_ctx(), ["code"]) == []
     names = {t.name for t in make_tools(_ctx(), ["code_run"])}
     assert "code_run" in names
@@ -54,8 +73,20 @@ def test_python_execution_requires_approval_when_hitl_on(monkeypatch):
     """开了 HITL 之后工具本身不再抛异常：拦截在框架层，工具保持"被调用即已批准"。"""
     from app.core.config import get_settings
     from app.services.capabilities import ApprovalRequired
+    from app.services.capabilities import code_exec
 
+    monkeypatch.setattr(code_exec, "available", lambda *a, **k: (True, "测试桩"))
+    # 这里验的是审批门，不是执行器：真跑一遍会把「机器上有没有沙箱」
+    # 变成用例的前置条件，CI 上一挂就是一个看不懂的 StopIteration。
+    monkeypatch.setattr(
+        code_exec, "run_code",
+        lambda *a, **k: {"language": "python", "script": "x.py", "exit_code": 0,
+                         "ok": True, "stdout": "1\n", "stderr": "", "output_truncated": False},
+    )
     monkeypatch.setenv("APP_AGENT_APPROVAL_TOOLS", "code_run")
+    # 「要不要问」现在由执行环境决定。这里验的是审批门本身，钉成「需要问」
+    # （等价于宿主执行），否则本机配了云沙箱时这个用例会因为环境不同而变红。
+    monkeypatch.setattr(code_exec, "needs_approval", lambda: True)
     get_settings.cache_clear()
     try:
         ctx = _ctx()
@@ -148,3 +179,37 @@ def test_slug_rejects_pure_punctuation():
     assert slugify("。。。！！！") == "untitled"   # 仅内部路径兜底
     assert slug_from_name("周报 Q4") != ""
     assert slugify("周报 Q4").startswith("周报")
+
+
+def test_isolated_sandbox_skips_the_approval_gate(monkeypatch):
+    """隔离沙箱里执行代码不该打断用户。
+
+    这条门的判据是「代码能不能越界」，不是「工具叫什么」。云沙箱/容器的文件
+    系统是独立的，服务端密钥根本不在里面；每跑一次就弹一次，只会把用户训练成
+    闭眼点批准，等真正需要它的时候（宿主执行）反而失效。
+    """
+    from app.core.config import get_settings
+    from app.services.capabilities import ApprovalRequired
+    from app.services.capabilities import code_exec
+
+    monkeypatch.setattr(code_exec, "available", lambda *a, **k: (True, "测试桩"))
+    monkeypatch.setattr(
+        code_exec, "run_code",
+        lambda *a, **k: {"language": "python", "script": "x.py", "exit_code": 0,
+                         "ok": True, "stdout": "ok\n", "stderr": "", "output_truncated": False},
+    )
+    monkeypatch.setenv("APP_AGENT_APPROVAL_TOOLS", "code_run")
+    monkeypatch.setattr(code_exec, "needs_approval", lambda: False)
+    get_settings.cache_clear()
+    try:
+        ctx = _ctx()
+        ctx.hitl = False          # react 引擎：没有框架 interrupt，只有工具层这道门
+        tool = next(t for t in make_tools(ctx, ["code_run"]) if t.name == "code_run")
+        # 不抛 = 直接执行。抛了说明审批门没跟着执行环境走
+        try:
+            result = tool.invoke({"code": "print(1)", "language": "python"})
+        except ApprovalRequired:  # pragma: no cover - 失败时给可读信息
+            raise AssertionError("隔离沙箱里执行代码不应当要求确认")
+        assert "ok" in str(result)
+    finally:
+        get_settings.cache_clear()

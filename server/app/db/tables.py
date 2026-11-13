@@ -106,6 +106,7 @@ USERS = Table(
         _c("id"),
         _c("username"),
         _c("display_name", default="''"),
+        _c("email", default="''"),
         _c("role", default="'member'"),
         _c("password_hash", default="''"),
         _c("salt", default="''"),
@@ -551,6 +552,8 @@ AGENT_APPROVALS = Table(
         # 参数指纹：工具相同但参数变了（比如 code 换了一段）要重新确认
         _c("args_hash", default="''"),
         _c("decision", default="'approve'"),
+        # once = 只管这一次；session = 「本次会话都允许」。见 services/approvals.py
+        _c("scope", default="'once'"),
         _c("consumed", "bool", default="0"),
         _c("created_at", default="''"),
         _c("expires_at", default="''"),

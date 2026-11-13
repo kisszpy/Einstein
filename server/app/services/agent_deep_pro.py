@@ -45,7 +45,9 @@ from app.services.agent_deep import (
     _run_deep,
 )
 from app.services.capabilities import AgentContext, _artifact_kind, browser_pro, sandbox
-from app.services.capabilities.code_exec import _clean_env
+# docker 探测与宿主的干净环境都收敛到 code_exec：单点探测、单份缓存，
+# 两个执行通道（code_run / execute）才能对「有没有容器」给出同一个答案。
+from app.services.capabilities.code_exec import _clean_env, docker_ready
 from app.services.capabilities.sandbox import slugify, workspace_root
 
 logger = get_logger(__name__)
@@ -68,33 +70,6 @@ _DANGEROUS = [
     (r"\bdocker\s+(rm|kill|stop|prune)\b", "动宿主容器"),
     (r"\bdocker\b[^\n]*--privileged", "特权容器"),
 ]
-
-_DOCKER_PROBE: dict[str, Any] = {"checked": False, "ok": False, "reason": ""}
-
-
-def docker_ready(probe_timeout: int = 6) -> tuple[bool, str]:
-    """Docker 守护进程是否可用（模块级缓存，避免每个任务都探一次）。"""
-    if _DOCKER_PROBE["checked"]:
-        return bool(_DOCKER_PROBE["ok"]), str(_DOCKER_PROBE["reason"])
-    _DOCKER_PROBE["checked"] = True
-    exe = shutil.which("docker")
-    if not exe:
-        _DOCKER_PROBE["reason"] = "未安装 docker"
-        return False, _DOCKER_PROBE["reason"]
-    try:
-        proc = subprocess.run(
-            [exe, "version", "--format", "{{.Server.Version}}"],
-            capture_output=True, text=True, timeout=probe_timeout,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        _DOCKER_PROBE["reason"] = f"docker 探测失败：{exc}"
-        return False, _DOCKER_PROBE["reason"]
-    if proc.returncode != 0:
-        _DOCKER_PROBE["reason"] = (proc.stderr or proc.stdout or "docker 未运行").strip()[:200]
-        return False, _DOCKER_PROBE["reason"]
-    _DOCKER_PROBE["ok"] = True
-    _DOCKER_PROBE["reason"] = (proc.stdout or "").strip()
-    return True, _DOCKER_PROBE["reason"]
 
 
 def _dangerous(command: str) -> str | None:
@@ -167,13 +142,21 @@ class ProBackend(WorkspaceBackend, SandboxBackendProtocol):
         return self._id
 
     def _resolve_mode(self) -> tuple[str, str]:
+        settings = get_settings()
+        allow_host = bool(getattr(settings, "agent_code_exec_allow_host", False))
         if self.requested_mode == "off":
             return "off", "沙箱已关闭"
         if self.requested_mode == "local":
+            if not allow_host:
+                # 宿主 shell 没有隔离：一条 `cat /etc/passwd` 或读 .env 就穿透了。
+                # 想用必须和 code_run 一样显式打开配置，不能靠「docker 没起来」自动降级。
+                return "off", "宿主执行未开启（APP_AGENT_CODE_EXEC_ALLOW_HOST=false）"
             return "local", "宿主 shell（无隔离）"
         ok, note = docker_ready()
         if ok:
             return "container", note
+        if not allow_host:
+            return "off", f"Docker 不可用（{note}），且宿主执行未开启"
         return "local", f"Docker 不可用（{note}），已降级宿主 shell"
 
     # ---- 工作目录 ----
@@ -208,8 +191,8 @@ class ProBackend(WorkspaceBackend, SandboxBackendProtocol):
             return _response("Error: command 不能为空。", 2)
         if self.mode == "off":
             return _response(
-                "沙箱已关闭（APP_AGENT_PRO_SANDBOX=off），无法执行 shell 命令。"
-                "请改用 read_file/write_file/code_run。",
+                f"命令执行不可用：{self.mode_note or '沙箱已关闭'}。"
+                "请改用 read_file / write_file / edit_file 完成本次任务。",
                 126,
             )
         if self.mode == "local":

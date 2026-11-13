@@ -4,7 +4,7 @@
 - DeckRenderer  —— 有公司模板时「反用模板自身」，保母版/字体/配色一致；
 - DesignRenderer —— 没模板时按 designs.py 的设计令牌绘制，保证「没模板也好看」。
 
-两套输出都是普通 pptx 形状（矩形/文本框/圆形），DeckCraft 打开后每个字、每块色都能改，
+两套输出都是普通 pptx 形状（矩形/文本框/圆形），用 PowerPoint 打开后每个字、每块色都能改，
 不存在「导出图片不可编辑」的问题。
 
 版式清单（与 outline.PAGE_LAYOUTS 对齐）：

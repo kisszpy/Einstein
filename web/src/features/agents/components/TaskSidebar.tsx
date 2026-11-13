@@ -14,6 +14,8 @@ import { dayBucket, relativeTime, type TaskSession } from "../types";
 interface Props {
   sessions: TaskSession[];
   activeSessionId: string | null;
+  /** 还有任务在后台跑的会话：切走不会停，回来能接着看 */
+  liveSessionIds?: string[];
   onSelectSession: (session: TaskSession) => void;
   onDeleteSession: (session: TaskSession) => void;
   onNewTask: () => void;
@@ -26,6 +28,7 @@ const GROUP_ORDER = ["今天", "昨天", "近 7 天", "更早"];
 export function TaskSidebar({
   sessions,
   activeSessionId,
+  liveSessionIds = [],
   onSelectSession,
   onDeleteSession,
   onNewTask,
@@ -87,6 +90,7 @@ export function TaskSidebar({
                 const calls = session.steps;
                 const active = session.id === activeSessionId;
                 const turns = session.runs.length;
+                const live = liveSessionIds.includes(session.id);
                 return (
                   <div
                     key={session.id}
@@ -117,6 +121,17 @@ export function TaskSidebar({
                         {session.title}
                       </span>
                       <span className="mt-0.5 flex items-center gap-1 text-[12px] text-tertiary">
+                        {live && (
+                          // 在跑的任务：切换走不会停，所以列表里要能看出来
+                          <span
+                            className="inline-flex items-center gap-1 text-brand"
+                            title="任务仍在后台运行"
+                          >
+                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-brand" />
+                            运行中
+                          </span>
+                        )}
+                        {live && <span>·</span>}
                         <span className="truncate">{relativeTime(session.updated_at)}</span>
                         {turns > 1 && <span>· {turns} 轮</span>}
                         {calls > 0 && <span>· {calls} 步</span>}

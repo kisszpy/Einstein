@@ -66,6 +66,10 @@ class RunRecord:
     seq: int = 0
     # 落库失败一次就关掉，避免每个事件都重试一遍 IO 超时
     persisted: bool = True
+    # 谁按下了停止："" = 没停过；"user" = 用户主动停止；"shutdown" = 服务关闭。
+    # 执行方据此决定「这轮怎么结束」——主动停止要落 stopped 状态并给一句人话，
+    # 而不是笼统写成「服务正在关闭」。
+    cancel_reason: str = ""
     # 消费者用它等待「有新事件了」；push 时 set，消费完 clear
     changed: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -215,6 +219,55 @@ def attach_task(run_id: str, task: asyncio.Task) -> None:
     """持有后台任务的强引用：事件循环只持弱引用，否则任务可能被 GC 掉。"""
     _TASKS[run_id] = task
     task.add_done_callback(lambda _t: _TASKS.pop(run_id, None))
+
+
+def cancel(run_id: str, *, workspace_id: str, owner_id: str) -> str:
+    """停下一次正在跑的运行。
+
+    返回 ``"cancelled"``（已下发取消）/ ``"done"``（已经结束）/ ``"abandoned"``
+    （库里只剩一个没收尾的记录，本进程没有对应任务）/ ``"remote"``
+    （任务在别的副本上，且还在持续产出事件）/ ``"missing"``（查无此运行）。
+
+    为什么要有 `remote` 这一档：登记簿的内存部分是进程内的，多副本部署时
+    用户点停止可能落在没有这个 task 的进程上。这时**不能假装停掉了**——
+    任务还在烧 token。调用方据此回一句「任务在另一个实例上运行，本实例停不了」，
+    而不是回 200 让用户以为停了。
+
+    为什么还要有 `abandoned`：进程重启后内存寄存器清空，库里那条没收尾的
+    记录却还在（上一个进程被杀，`done` 没落库）。用户点停止，旧实现直接
+    404，界面上就出现「一个永远在跑、又停不掉的幽灵任务」——它同时锁死了
+    任务切换。这种情况补一条终态事件当场收尾，让停止真的生效。
+    """
+    record = get(run_id, workspace_id=workspace_id, owner_id=owner_id)
+    if record is None:
+        # 内存里没有：要么是别人的/过期的，要么是上一个进程的尸体。
+        # 后者要能停——按库里最近一次事件判断它是不是还在动。
+        items = [
+            # stale_seconds=0：用户既然点了停止，再老也要能停掉，
+            # 不能因为「太久没动」就回一句查无此运行。
+            item for item in run_events.running(workspace_id, owner_id, stale_seconds=0)
+            if item.get("run_id") == run_id
+        ]
+        if not items:
+            return "missing"
+        # 库里还在持续产出事件：真的跑在别的副本上，不能假称停掉
+        if not run_events.abandon(
+            run_id=run_id, workspace_id=workspace_id, owner_id=owner_id,
+            session_id=str(items[0].get("session_id") or ""),
+            reason="已按你的要求停止：这次运行在当前实例上已不可继续。",
+        ):
+            return "remote"
+        logger.info("%s 已收尾（库里遗留的未完成运行）", run_id)
+        return "abandoned"
+    if record.done:
+        return "done"
+    task = _TASKS.get(run_id)
+    if task is None:
+        return "remote"
+    record.cancel_reason = "user"
+    task.cancel()
+    logger.info("%s 已按用户请求停止", run_id)
+    return "cancelled"
 
 
 def purge() -> int:

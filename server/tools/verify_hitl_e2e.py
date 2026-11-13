@@ -3,13 +3,20 @@
 跑法：`python tools/verify_hitl_e2e.py`（需要后端在 127.0.0.1:8000 运行，
 且 `APP_AGENT_APPROVAL_TOOLS` 含 `code_run`）
 
+**先看环境再决定断言哪一套**。要不要问人由执行环境决定（见
+`capabilities/code_exec.needs_approval`）：
+
+- 云沙箱 / 容器：不打断，脚本验证"确实没打断且代码真的执行了"；
+- 宿主进程，或显式设了 `APP_AGENT_APPROVAL_ISOLATED=true`：验证完整的
+  暂停 → 批准 → 续跑 → 拒绝 流程。
+
 为什么单独做成 HTTP 级验收：`verify_p0_fixes.py` 用脚本化模型验证的是框架
 语义，看不到「路由有没有把 approvals.request 写进去」「续跑请求有没有带上
 resume 标记」「检查点线程 id 拼得对不对」——这三处任何一处漏了，线上表现
 就是"批准后任务从头再来"。所以这里走真实 HTTP + 真实模型，只断言用户能
 观察到的事实：
 
-1. 首轮停在 `approval_required`，而不是闷头执行；
+1. 首轮停在 `approval_required`，而不是闷头执行（审批模式下）；
 2. 别人的/不存在的 session 批准是 404（不能靠猜 session 预批准）；
 3. 批准后从断点续跑：工具真的执行了，且没有重做已完成的步骤；
 4. 拒绝后工具不执行，拒绝理由回传给模型（模型据此换路线）。
@@ -90,9 +97,7 @@ def kinds(events: list[dict]) -> list[str]:
     return out
 
 
-def main() -> int:
-    token = login()
-
+def _approval_path(token: str) -> int:
     # ---- 1. 首轮必须停下来等确认 ----
     task = "用 code_run 执行 python 打印 42，把输出贴出来"
     events, session, _ = run(token, {"task": task, "tool_ids": CAPS, "kb_ids": []})
@@ -181,10 +186,88 @@ def main() -> int:
         )
         check("拒绝后工具未真正执行", "42" not in content4 or "拒绝" in content4, content4[:200])
 
+    # ---- 5. 本次会话都允许：同一对话里后续调用不再询问 ----
+    #
+    # 这是为了不再"每跑一次点一次"而加的能力。要验的不是按钮能点，而是
+    # 授权的边界：它必须对**同一会话**生效，且不能漏到别的会话去。
+    events5, session5, _ = run(token, {"task": task, "tool_ids": CAPS, "kb_ids": []})
+    appr5 = next((e for e in events5 if e["event"] == "step"
+                  and e["step"].get("kind") == "approval_required"), None)
+    check("授权前仍会暂停", appr5 is not None, str(kinds(events5)))
+    if appr5 is not None:
+        _post(token, "/agent/approve", {
+            "session_id": session5, "tool": "code_run",
+            "args_hash": appr5["step"].get("args_hash", ""),
+            "decision": "approve", "scope": "session",
+        })
+        events6, _, _ = run(token, {
+            "task": task, "tool_ids": CAPS, "kb_ids": [],
+            "session_id": session5, "resume": True,
+        })
+        check("授权后续跑完成", "done" in kinds(events6), str(kinds(events6)))
+
+        # 同一会话的新任务：不该再弹
+        events7, session7, answer7 = run(token, {
+            "task": task, "tool_ids": CAPS, "kb_ids": [], "session_id": session5,
+        })
+        check("同会话新任务不再暂停", "approval_required" not in kinds(events7),
+              str(kinds(events7)))
+        check("授权后任务仍正常完成", "done" in kinds(events7), str(kinds(events7)))
+        check("授权后结果仍然正确", "42" in answer7, answer7[:200])
+
+        # 换个新对话：授权不外溢
+        events8, _, _ = run(token, {"task": task, "tool_ids": CAPS, "kb_ids": []})
+        check("新会话重新询问（授权不外溢）",
+              any(e["event"] == "step" and e["step"].get("kind") == "approval_required"
+                  for e in events8), str(kinds(events8)))
+
     print(f"\n{len(PASS)} PASS / {len(FAIL)} FAIL")
     for name in FAIL:
         print("  FAIL:", name)
     return 0 if not FAIL else 1
+
+
+def _no_approval_path(token: str) -> int:
+    """隔离沙箱模式下的验收：**不该打断**，且代码确实跑了。
+
+    这条比「会打断」更容易被写错而无人发现：装配时把 interrupt 去掉的同时
+    顺手把 `ctx.hitl` 也置真，工具层就不再自己拦——门是没了，可只要有人以为
+    还在，就永远不会去检查。所以要断言"真的执行了"，而不是"没报错"。
+    """
+    task = "用 code_run 执行 python 打印 42，把输出贴出来"
+    events, session, answer = run(token, {"task": task, "tool_ids": CAPS, "kb_ids": []})
+    ks = kinds(events)
+    check("隔离沙箱不打断（没有 approval_required）", "approval_required" not in ks, str(ks))
+    check("任务正常收尾", "done" in ks, str(ks))
+    check("会话 id 正常分配", bool(session))
+    results = [e["step"] for e in events
+               if e["event"] == "step" and e["step"].get("kind") == "tool_result"]
+    joined = " ".join(str(r.get("content", "")) for r in results)
+    check("工具真的执行了（输出含 42）", "42" in joined, joined[:200])
+    check("答案里带上执行结果", "42" in answer, answer[:200])
+
+    print(f"\n{len(PASS)} PASS / {len(FAIL)} FAIL")
+    for name in FAIL:
+        print("  FAIL:", name)
+    return 0 if not FAIL else 1
+
+
+def main() -> int:
+    # 脚本从任意目录跑都要能读到工程包（tools/ 的上一级才是 server/）
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from app.services.capabilities import code_exec
+
+    token = login()
+    mode = code_exec.resolve_mode()
+    need = code_exec.needs_approval()
+    print(f"执行环境：{mode}    需要人工确认：{'是' if need else '否'}\n")
+    if not need:
+        print("（隔离沙箱免确认模式。要验收「暂停 → 批准 → 续跑」这套链路，"
+              "先在 server/.env 设 APP_AGENT_APPROVAL_ISOLATED=true 并重启后端。）\n")
+        return _no_approval_path(token)
+    return _approval_path(token)
 
 
 if __name__ == "__main__":

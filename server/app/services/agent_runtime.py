@@ -82,15 +82,20 @@ class LlmTimer:
     """一次引擎运行的指标埋点：耗时、token、状态，退出时写 metrics。
 
     用法：
-        with LlmTimer("agent", settings.llm_model) as timer:
+        with LlmTimer("agent", settings.llm_model, workspace_id=ws) as timer:
             ...
             timer.status = "paused"      # 需要时改状态
             timer.tokens(prompt=1, completion=2)
+
+    workspace_id 用来记 Token 日配额：智能体走 ChatOpenAI 直连，不经过
+    `llm.complete`，配额累加以前只挂在后者上——于是 `/agent/run` 的
+    `quota_check` 永远读到 0，配了额度也不拦截。用量在这里统一入账。
     """
 
-    def __init__(self, kind: str, model: str) -> None:
+    def __init__(self, kind: str, model: str, *, workspace_id: str = "") -> None:
         self.kind = kind
         self.model = model
+        self.workspace_id = workspace_id
         self.status = "ok"
         self.prompt_tokens: int | None = None
         self.completion_tokens: int | None = None
@@ -120,10 +125,16 @@ class LlmTimer:
         )
         # 同一份用量也要进运行轨迹：成本看板按 run 聚合，metrics 只有计数没有
         # 维度（谁、哪个模型、哪个空间），拼不出账。
-        from app.services import traces
+        from app.services import ratelimit, traces
 
         if self.prompt_tokens or self.completion_tokens:
             traces.note_tokens(self.prompt_tokens or 0, self.completion_tokens or 0, calls=1)
+            # 日配额入账：与对话链路（llm.record_tokens）同一本账，否则智能体
+            # 的消耗在配额里完全隐形
+            ratelimit.record_tokens(
+                (self.prompt_tokens or 0) + (self.completion_tokens or 0),
+                workspace_id=self.workspace_id,
+            )
 
 
 def recall_memory(ctx: Any, task: str, top_k: int = 3) -> list[str]:

@@ -83,8 +83,11 @@ export const DeckCraftFrame = forwardRef<DeckCraftHandle, DeckCraftFrameProps>(
         }
         const win = frameRef.current?.contentWindow;
         if (!win) throw new Error("iframe 未就绪");
+        // transfer 会把 bytes 的所有权交出去，之后 byteLength 归零；
+        // 大小必须在转移之前取，否则日志永远显示「0KB」，看着像没喂进去。
+        const kb = bytes.byteLength / 1024;
         win.postMessage({ type: "deckcraft:open", name, bytes }, location.origin, [bytes]);
-        log(`已投喂 ${name}（${(bytes.byteLength / 1024).toFixed(0)}KB）`);
+        log(`已投喂 ${name}（${kb.toFixed(0)}KB）`);
       },
       [log],
     );

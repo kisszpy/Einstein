@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  只用于**构建镜像时**预热离线仓库。
+
+  id 特意取成 `central`：Maven 3 会把产物来源写进 _remote.repositories，
+  运行时用 `-o` 离线解析时要求来源 id 与仓库 id 一致。如果这里换个名字，
+  预热下来的依赖在离线模式下会被当成「来源不匹配」而拒绝使用——表现为
+  「明明预热过，跑起来还是说找不到 artifact」。
+
+  更彻底的一层在 Dockerfile 末尾：把 _remote.repositories 全部删掉，
+  离线解析就不再做来源校验。两件事都做，是因为排障时无法区分到底是
+  「仓库名不匹配」还是「下载时记录的源是 mirror」——不如让它根本不校验。
+
+  镜像构建完不需要它参与运行：运行时走 `mvn -o`，不访问任何仓库。
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+  <mirrors>
+    <mirror>
+      <id>central</id>
+      <name>aliyun-public</name>
+      <mirrorOf>central</mirrorOf>
+      <url>https://maven.aliyun.com/repository/public</url>
+    </mirror>
+  </mirrors>
+</settings>

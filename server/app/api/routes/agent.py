@@ -101,6 +101,8 @@ class ApproveRequest(BaseModel):
     # 参数指纹：批准只对「这一组参数」有效，参数变了要重新确认
     args_hash: str = ""
     decision: str = "approve"   # approve | reject
+    # once = 只批这一次；session = 「本次会话都允许」，后续同类调用不再询问
+    scope: str = "once"
     message: str = ""           # reject 时给模型的指示
 
 
@@ -122,6 +124,7 @@ def approve_tool(
     row = approvals.decide(
         ws, uid, session_id,
         decision=payload.decision, args_hash=payload.args_hash.strip(),
+        scope=payload.scope if payload.scope in ("once", "session") else "once",
     )
     if row is None:
         raise HTTPException(status_code=404, detail="没有待确认的操作")
@@ -130,6 +133,7 @@ def approve_tool(
         "session_id": session_id,
         "tool": row["tool"],
         "decision": row["decision"],
+        "scope": payload.scope,
     }
 
 
@@ -208,6 +212,9 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
         ctx = AgentContext(
             workspace_id=ws, owner_id=uid, project=req.project,
             model_id=effective_model_id,
+            # 续跑那一次装配必须保留中断节点，否则检查点里待确认的调用永远解不开。
+            # 「本会话都允许」的豁免只对新发起的运行生效。
+            resuming=bool(req.resume),
         )
         # 兜底路径用：检查点丢了（服务重启）时按已批准的工具重跑，不再弹框
         ctx.approved_tools = approvals.granted_tools(ws, uid, session_id)
@@ -373,8 +380,10 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
                 owner_id=uid,
             )
         except asyncio.CancelledError:
-            # 服务关闭（不是客户端断开）：把已发生的部分如实落库再退出
-            status = "failed"
+            # 两种取消要分开讲：用户点了「停止」是预期行为，服务关闭才是事故。
+            # 以前统一报「服务正在关闭」，用户点了停止会以为服务挂了。
+            stopped = run.cancel_reason == "user"
+            status = "stopped" if stopped else "failed"
             try:
                 history.add_agent_run(
                     task=req.task, tool_ids=req.tool_ids, steps=steps, answer=final_text,
@@ -383,7 +392,20 @@ async def _event_stream(req: AgentRunRequest, ws: str, uid: str) -> AsyncIterato
                 )
             except Exception:  # noqa: BLE001
                 pass
-            run.push("error", {"message": "服务正在关闭，本次运行被中断。"})
+            if stopped:
+                # 已经写下的产物照旧交给前端：停止不等于丢弃成果
+                run.push("step", {"step": {
+                    "kind": "note",
+                    "content": "已按你的要求停止本次运行，已完成的步骤与产物保留在项目里。",
+                }})
+                run.push("done", {
+                    "run_id": run.run_id,
+                    "session_id": session_id,
+                    "project": ctx.project,
+                    "artifacts": artifacts,
+                })
+            else:
+                run.push("error", {"message": "服务正在关闭，本次运行被中断。"})
             raise
         except Exception as exc:  # noqa: BLE001 — 统一转 SSE error 事件
             status = "failed"
@@ -441,6 +463,31 @@ async def _forward(run: run_registry.RunRecord) -> AsyncIterator[str]:
             # 大模型思考期间流上不能长时间无数据，否则中间层会掐断连接
             yield ": ping\n\n"
 
+
+@router.post("/runs/{run_id}/cancel")
+def cancel_run(
+    run_id: str,
+    ws: str = Depends(current_workspace),
+    uid: str = Depends(current_uid),
+) -> dict:
+    """停止一次正在运行的智能体任务。
+
+    前端以前的「停止」只是 abort 掉 SSE 连接——执行在后台 task 里照跑，
+    模型继续烧 token、继续写文件。这里才是真正的取消：撤销 asyncio task，
+    运行方按 `cancel_reason` 把状态记成 stopped 并把已产出的文件交给前端。
+
+    别人的 run_id 一律 404（与资源隔离的其它接口同一语义）；任务在别的
+    副本上时回 409 —— 假称停掉了比停不掉更糟。
+    """
+    state = run_registry.cancel(run_id, workspace_id=ws, owner_id=uid)
+    if state == "missing":
+        raise HTTPException(status_code=404, detail="运行不存在或已过期")
+    if state == "remote":
+        raise HTTPException(
+            status_code=409,
+            detail="这次运行在另一个服务实例上，当前实例停不了它。已保存的进度不会丢，等它跑完或刷新页面重新连上后再试。",
+        )
+    return {"ok": True, "state": state}
 
 @router.get("/runs/active")
 def list_active_runs(

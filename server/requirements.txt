@@ -39,6 +39,13 @@ beautifulsoup4>=4.12        # html 摄取
 mcp>=2.0
 jieba>=0.42
 
+# ---- 云沙箱（可选）：阿里云 Agent Sandbox / 任意 E2B 兼容服务 ----
+# 只在 APP_AGENT_CODE_EXEC_SANDBOX=e2b（或配了 API Key 走 auto）时需要。
+# 钉版本是因为阿里云极速版按 2.31 验证过；2.25 以下的旧版是容器版接口，不通用。
+# 注意它的元数据要求 wcmatch<11，而 deepagents 要求 >=11——但 e2b 2.31 实际已不
+# import wcmatch，保留新版即可，pip 的冲突提示可以忽略。
+e2b==2.31.0
+
 # ---- 可选：Deep Agents Pro 的无头浏览器截图 ----
 # 两种任装其一即可：Python 版（pip install playwright && playwright install chromium）
 # 或直接复用仓库 web/ 的 playwright-core（npm install，后端自动发现）。

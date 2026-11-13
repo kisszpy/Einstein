@@ -103,6 +103,47 @@ export async function login(username: string, password: string): Promise<AuthUse
   return data.user as AuthUser;
 }
 
+export interface EmailCodeResult {
+  delivery: "smtp" | "console";
+  ttl: number;
+  resend_after: number;
+  /** 仅本机联调且未配置 SMTP 时返回；生产经网关访问拿不到 */
+  code?: string;
+}
+
+/** 请求邮箱验证码。不区分邮箱是否已注册，避免被用来探测账号。 */
+export async function requestEmailCode(email: string): Promise<EmailCodeResult> {
+  const res = await fetch("/api/auth/email/code", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `发送失败（${res.status}）`);
+  return data as EmailCodeResult;
+}
+
+/** 验证码校验；邮箱首次登录即注册。成功后的落态与密码登录完全一致。 */
+export async function loginWithEmail(
+  email: string,
+  code: string,
+  name = "",
+): Promise<AuthUser> {
+  const res = await fetch("/api/auth/email/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, code, name }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `验证失败（${res.status}）`);
+
+  token = data.token as string;
+  write(TOKEN_KEY, token);
+  write(LAST_USER_KEY, data.user.username);
+  emit({ status: "authed", user: data.user, workspaces: data.workspaces ?? [] });
+  return data.user as AuthUser;
+}
+
 /** 刷新页面后校验本地令牌，拿不到用户就回到未登录态。 */
 export function bootstrap(): Promise<void> {
   if (booting) return booting;

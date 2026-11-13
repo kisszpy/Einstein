@@ -12,7 +12,6 @@ import {
   MessagesSquare,
   Menu,
   Presentation,
-  Projector,
   Settings2,
   X,
   type LucideIcon,
@@ -40,7 +39,6 @@ const NAV: { title: string; items: NavEntry[] }[] = [
       { to: "/chat", label: "对话", icon: MessagesSquare },
       { to: "/ppt-studio", label: "AI PPT", icon: Presentation },
       { to: "/assets", label: "资产", icon: Archive },
-      { to: "/deckcraft", label: "放映级编辑", icon: Projector },
       { to: "/kb", label: "知识库", icon: Database },
       {
         to: "/experts",

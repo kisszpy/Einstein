@@ -5,8 +5,10 @@
 - 成员管理仅管理员可用，删除/禁用会同时吊销该用户全部会话。
 """
 
+import re
 import threading
 import time
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -17,9 +19,12 @@ from app.api.deps import (
     current_user,
     workspace_role,
 )
-from app.services import audit, members, sessions, users, workspaces
+from app.core.config import get_settings
+from app.core.logging import get_logger
+from app.services import audit, mailer, members, otp, ratelimit, sessions, users, workspaces
 
 router = APIRouter(tags=["auth"])
+logger = get_logger(__name__)
 
 
 def _workspace_roles(user: users.User) -> dict[str, str]:
@@ -74,6 +79,113 @@ def _audit(username: str, status: int, detail: str) -> None:
     )
 
 
+def _session_payload(user: users.User, req: Request) -> dict:
+    """登录成功后的统一载荷：个人空间 + 会话票据 + 角色映射。"""
+    members.ensure_personal_space(user)
+    store = users.get_user_store()
+    store.save()
+    token, session = sessions.get_session_store().issue(
+        user.id, req.headers.get("user-agent", "")
+    )
+    sessions.get_session_store().save()
+    return {
+        "token": token,
+        "expires_at": session.expires_at,
+        "user": user.to_public(),
+        "workspaces": allowed_workspaces(user),
+        "workspace_roles": _workspace_roles(user),
+    }
+
+
+_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+
+
+def _client_ip(req: Request) -> str:
+    return (req.client.host if req.client else "") or "?"
+
+
+def _is_loopback(req: Request) -> bool:
+    """本机联调判定：没有 SMTP 时只有回环地址能在响应里拿到验证码。"""
+    return _client_ip(req) in ("127.0.0.1", "::1", "localhost")
+
+
+@router.post("/auth/email/code")
+def email_code(req: Request, payload: dict) -> dict:
+    """给邮箱发一枚六位验证码。不区分邮箱是否已注册——避免被用来探测账号。"""
+    email = str(payload.get("email", "")).strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(400, "邮箱格式不正确")
+    allowed, retry = ratelimit.allow(f"otp:ip:{_client_ip(req)}", 20, 3600)
+    if not allowed:
+        _audit(f"email:{email}", 429, "同一 IP 请求验证码过多")
+        raise HTTPException(429, f"请求过于频繁，请 {max(retry, 1)} 秒后再试")
+
+    settings = get_settings()
+    try:
+        code, ttl = otp.issue(email)
+    except otp.OtpError as exc:
+        _audit(f"email:{email}", 429, exc.message)
+        raise HTTPException(429, exc.message) from exc
+    try:
+        delivery = mailer.send_code(email, code, ttl)
+    except mailer.MailError as exc:
+        # 本机联调时 SMTP 配错（比如 163 没开授权码）不该把流程彻底堵死：
+        # 回落到控制台并把验证码回带，生产（非回环）仍然明确报错。
+        if not _is_loopback(req):
+            _audit(f"email:{email}", 502, f"验证码邮件投递失败：{exc}")
+            raise HTTPException(502, "验证码邮件发送失败，请稍后再试") from None
+        logger.warning("SMTP 投递失败，本机回落到控制台：%s", exc)
+        delivery = "console"
+
+    body = {
+        "ok": True,
+        "delivery": delivery,
+        "ttl": ttl,
+        "resend_after": settings.otp_resend_seconds,
+    }
+    if delivery == "console" and _is_loopback(req):
+        # 仅本机：方便没配 SMTP 时把流程走通；经网关访问拿不到
+        body["code"] = code
+    _audit(f"email:{email}", 200, f"已发送验证码（{delivery}）")
+    return body
+
+
+@router.post("/auth/email/verify")
+def email_verify(req: Request, payload: dict) -> dict:
+    """校验验证码。邮箱首次登录即注册（随机密码占位，密码登录对这条账号不可用）。"""
+    email = str(payload.get("email", "")).strip().lower()
+    code = str(payload.get("code", "")).strip()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(400, "邮箱格式不正确")
+    if not code:
+        raise HTTPException(400, "请输入验证码")
+
+    try:
+        otp.verify(email, code)
+    except otp.OtpError as exc:
+        status = 429 if exc.code in ("otp_locked", "otp_too_frequent", "otp_hourly_limit") else 401
+        _audit(f"email:{email}", status, exc.message)
+        raise HTTPException(status, exc.message) from exc
+
+    store = users.get_user_store()
+    user = store.by_email(email)
+    created = False
+    if user is None:
+        try:
+            user = store.create_email_user(email, display_name=str(payload.get("name") or ""))
+        except ValueError as exc:
+            raise HTTPException(400, f"{exc}（email_invalid）") from exc
+        created = True
+        store.save()
+    if user.disabled:
+        _audit(f"email:{email}", 403, "账号已停用")
+        raise HTTPException(403, "该账号已停用，请联系管理员")
+
+    user.last_login_at = datetime.now(timezone.utc).isoformat()
+    _audit(f"email:{email}", 200, "邮箱验证码登录成功" + ("（新注册）" if created else ""))
+    return {**_session_payload(user, req), "created": created}
+
+
 @router.post("/auth/login")
 def login(req: Request, payload: dict) -> dict:
     username = str(payload.get("username", "")).strip()
@@ -93,22 +205,8 @@ def login(req: Request, payload: dict) -> dict:
         raise HTTPException(401, "用户名或密码错误")
 
     _clear_failures(username)
-    store = users.get_user_store()
-    # 登录即保证个人空间存在：老账号平滑升级，新账号一定有隔离的落脚点
-    members.ensure_personal_space(user)
-    store.save()
-    token, session = sessions.get_session_store().issue(
-        user.id, req.headers.get("user-agent", "")
-    )
-    sessions.get_session_store().save()
     _audit(username, 200, f"登录成功（{user.role}）")
-    return {
-        "token": token,
-        "expires_at": session.expires_at,
-        "user": user.to_public(),
-        "workspaces": allowed_workspaces(user),
-        "workspace_roles": _workspace_roles(user),
-    }
+    return _session_payload(user, req)
 
 
 @router.get("/auth/me")

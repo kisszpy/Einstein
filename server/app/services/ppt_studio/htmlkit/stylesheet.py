@@ -25,7 +25,7 @@ COMPONENT_CLASSES = (
     "stats", "stat", "stat-num", "stat-unit", "stat-label", "stat-note",
     "metric-spot", "metric-hero", "metric-label", "metric-big", "metric-unit",
     "metric-from", "metric-notes", "metrics", "metric-row", "metric-head",
-    "metric-value", "metric-delta", "metric-track", "metric-fill", "metric-mark",
+    "metric-value", "metric-delta", "metric-name", "metric-icon", "metric-track", "metric-fill", "metric-mark",
     "metric-bars", "metric-bar", "metric-bar-fill", "metric-bar-tags", "metric-foot",
     "bars", "bar-row", "bar-label", "bar-track", "bar-fill", "bar-value",
     "columns", "col-item", "col-bar", "col-value", "col-label", "col-base",
@@ -150,6 +150,9 @@ body {{ font-family: var(--font-body); -webkit-font-smoothing:antialiased; }}
   flex:0 0 auto; width:40%; min-width:0;
   display:flex; flex-direction:column; justify-content:center; gap:16px;
 }}
+/* 指标名 + 小字形：图标只做「名字前面的一个记号」，不做图标块 */
+.metric-name {{ display:flex; flex-direction:row; align-items:center; gap:8px; min-width:0; }}
+.metric-icon {{ flex:0 0 auto; width:20px; height:20px; }}
 .metric-label {{ flex:0 0 auto; font-size:var(--t-h3); font-weight:600; color:var(--c-ink); line-height:1.4; }}
 .metric-big {{
   font-family:var(--font-display); font-size:var(--t-stat); font-weight:600;

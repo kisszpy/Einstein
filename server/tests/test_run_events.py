@@ -276,6 +276,83 @@ def test_active_runs_include_other_replica(auth_header):
     assert "remote-1" in ids
 
 
+# ---------------------------------------------------------------- 僵尸运行
+#
+# 进程被杀时 done 事件来不及落库，那条运行会永远停在「未终态」。它会让
+# `/runs/active` 每次都返回一个根本不会结束的任务，前端挂上去之后 running
+# 一直为真——历史任务切换被静默吞掉，用户只能去点停止。这一组守住收尾路径。
+
+
+def test_abandon_closes_a_run_left_by_a_dead_process():
+    from app.services import run_events as ev
+
+    ev.append(run_id="dead", seq=1, event="step", data={},
+              workspace_id="ws-ev", owner_id="u-ev", session_id="conv-1")
+    assert [r["run_id"] for r in ev.running("ws-ev", "u-ev", stale_seconds=0)] == ["dead"]
+
+    assert ev.abandon(
+        run_id="dead", workspace_id="ws-ev", owner_id="u-ev", session_id="conv-1",
+    ) is True
+
+    # 收尾之后谁也不该再把它当活跃运行
+    assert ev.running("ws-ev", "u-ev", stale_seconds=0) == []
+    rows = ev.replay("dead", workspace_id="ws-ev", owner_id="u-ev")
+    assert rows[-1][1] == "error"
+    assert rows[-1][2]["abandoned"] is True
+    # seq 必须接在已有事件之后，否则重放会乱序
+    assert [seq for seq, _, _ in rows] == [1, 2]
+
+
+def test_abandon_orphans_spares_runs_created_after_boot():
+    """多副本滚动重启时，别的副本刚写的事件不能被本进程当尸体埋掉。"""
+    from app.services import run_events as ev
+
+    ev.append(run_id="fresh", seq=1, event="step", data={},
+              workspace_id="ws-ev", owner_id="u-ev", session_id="conv-2")
+
+    # 启动时刻早于这条事件 → 它不是上一个进程留下的，跳过
+    assert ev.abandon_orphans(before="2020-01-01T00:00:00+00:00") == 0
+    assert [r["run_id"] for r in ev.running("ws-ev", "u-ev", stale_seconds=0)] == ["fresh"]
+
+    # 启动时刻晚于它 → 确实是尸体，收尾
+    assert ev.abandon_orphans(before="2999-01-01T00:00:00+00:00") == 1
+    assert ev.running("ws-ev", "u-ev", stale_seconds=0) == []
+
+
+def test_running_ignores_runs_that_stopped_moving(monkeypatch):
+    """十分钟没有任何事件：它其实已经死了，不该再被当成「正在跑」。"""
+    from app.services import run_events as ev
+
+    monkeypatch.setattr(ev, "_now", lambda: "2020-01-01T00:00:00+00:00")
+    ev.append(run_id="frozen", seq=1, event="step", data={},
+              workspace_id="ws-ev", owner_id="u-ev", session_id="conv-3")
+    monkeypatch.undo()
+
+    assert ev.running("ws-ev", "u-ev") == []
+    # 关掉陈旧过滤还能看见它：这条运行在库里确实存在，只是不再活跃
+    assert [r["run_id"] for r in ev.running("ws-ev", "u-ev", stale_seconds=0)] == ["frozen"]
+
+
+def test_cancel_finishes_a_ghost_run_left_in_db(auth_header):
+    """用户点停止时，库里那条「本进程没有任务」的运行必须真的停掉。
+
+    旧实现回 404，界面上就是一个永远在跑、又停不掉的幽灵任务。
+    """
+    headers, uid = auth_header
+    from app.services import run_events as ev
+
+    ev.append(run_id="ghost-cancel", seq=1, event="step", data={},
+              workspace_id="default", owner_id=uid, session_id="conv-g")
+    assert run_registry._RUNS.get("ghost-cancel") is None
+
+    with _client() as client:
+        res = client.post("/api/agent/runs/ghost-cancel/cancel", headers=headers)
+
+    assert res.status_code == 200
+    assert res.json()["state"] == "abandoned"
+    assert ev.running("default", uid, stale_seconds=0) == []
+
+
 # ---------------------------------------------------------------- json 后端
 
 

@@ -2,7 +2,7 @@
 
 **为什么不是贴图**：贴一张 1280×720 的 PNG 最省事，但用户拿到的是不可编辑的
 图片，改一个字都要回炉。这里把 Chromium 量到的每个 DOM 矩形写成原生
-AutoShape、每个文本行写成原生 TextBox，所以在 PowerPoint / DeckCraft 里
+AutoShape、每个文本行写成原生 TextBox，所以在 PowerPoint 等兼容编辑器里
 可以直接选中标题改字、拖动卡片、换填充色。
 
 **为什么按「行」而不是按「块」建文本框**：块级文本框交给 PowerPoint 自己折行，
@@ -24,11 +24,12 @@ from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
-from pptx.oxml.ns import qn
+from pptx.oxml import parse_xml
+from pptx.oxml.ns import nsdecls, qn
 from pptx.util import Emu, Pt
 
 from app.core.logging import get_logger
-from app.services.ppt_studio.htmlkit import color
+from app.services.ppt_studio.htmlkit import color, icon_geom
 from app.services.ppt_studio.htmlkit.tokens import EMU_PER_PX, PT_PER_PX
 
 logger = get_logger(__name__)
@@ -165,7 +166,7 @@ def _gradient_fill(shape, css: str, opacity: float) -> bool:
 def _strip_theme_style(shape) -> None:
     """去掉 python-pptx 默认挂上的 <p:style>。
 
-    它引用主题里的填充/线条/效果，换个模板（DeckCraft、用户自己的母版）
+    它引用主题里的填充/线条/效果，换个模板（用户自己的母版）
     就会变样。所有视觉属性这里都显式写死，不依赖任何主题。
     """
     style = shape._element.find(qn("p:style"))
@@ -348,10 +349,56 @@ def _pie_arc(shapes, rect: dict, start: float, end: float, hexed: str, alpha: fl
     shape.line.fill.background()
 
 
+def _add_icon(shapes, node: dict) -> None:
+    """图标指令 → 自定义几何 + 描边。
+
+    用 custGeom 而不是图标字体：字体缺一个字符就是豆腐块，还挡不住用户改字号；
+    路径形状在任何机器上都一样，也能单独选中、换色、缩放。
+    """
+    data = node.get("data") or {}
+    try:
+        nodes = json.loads(data.get("nodes") or "[]")
+    except json.JSONDecodeError:
+        return
+    rect = node.get("rect") or {}
+    if not nodes or rect.get("w", 0) <= 0 or rect.get("h", 0) <= 0:
+        return
+    box = float(data.get("vb") or 24) or 24.0
+    hexed, alpha = color.parse("#" + str(data.get("color") or "4F6BF6").lstrip("#"))
+    commands = icon_geom.path_commands(nodes, box)
+    if not commands:
+        return
+
+    shape = shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, px(rect["x"]), px(rect["y"]), px(rect["w"]), px(rect["h"])
+    )
+    shape.name = "icon"
+    sp_pr = shape._element.spPr
+    prst = sp_pr.find(qn("a:prstGeom"))
+    if prst is not None:
+        sp_pr.remove(prst)
+    grid = int(icon_geom.GRID)
+    sp_pr.insert(1, parse_xml(
+        f'<a:custGeom {nsdecls("a")}><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/>'
+        f'<a:rect l="0" t="0" r="r" b="b"/><a:pathLst>'
+        f'<a:path w="{grid}" h="{grid}" fill="none">{commands}</a:path>'
+        f'</a:pathLst></a:custGeom>'
+    ))
+    shape.shadow.inherit = False
+    shape.fill.background()
+    line = shape.line
+    line.color.rgb = RGBColor.from_string(hexed)
+    line.width = Pt(float(data.get("stroke") or 2) * (rect["w"] / box) * PT_PER_PX)
+    ln = sp_pr.find(qn("a:ln"))
+    if ln is not None:
+        ln.set("cap", "rnd")
+        ln.append(parse_xml(f'<a:round {nsdecls("a")}/>'))
+
+
 def _add_spark(shapes, node: dict) -> None:
     """折线指令 → 原生直线连接符（外加数据点圆点）。
 
-    为什么不用原生 chart 对象：一张 pptx 图表在 DeckCraft 里只能整体改数据，
+    为什么不用原生 chart 对象：一张 pptx 图表在 PowerPoint 里只能整体改数据，
     而这里每个顶点都要能单独拖；用连接符画出来的线是普通形状，编辑自由度和
     柱状图一致，也不依赖 Excel 数据源。
     """
@@ -474,6 +521,9 @@ def write_slide(slide, measured: dict, tokens: dict) -> dict:
                 counts["directives"] += 1
             elif node.get("directive") == "spark":
                 _add_spark(slide.shapes, node)
+                counts["directives"] += 1
+            elif node.get("directive") == "icon":
+                _add_icon(slide.shapes, node)
                 counts["directives"] += 1
             continue
         if kind == "text":

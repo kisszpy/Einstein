@@ -11,15 +11,13 @@
  */
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Loader2, Maximize2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   DeckCraftFrame,
   type DeckCraftHandle,
   type DeckCraftSaveEvent,
 } from "@/features/deck-editor/DeckCraftFrame";
-import { deckFileName } from "@/features/deck-editor/deck-url";
-import { stageHandoff } from "@/features/deck-editor/handoff";
 import * as api from "../api";
 
 interface Props {
@@ -74,16 +72,6 @@ export function DeckCraftStage({ project, path, ticket, onSaved }: Props) {
   }, []);
   const handleSaveEvent = useCallback((event: DeckCraftSaveEvent) => void handleSave(event), [handleSave]);
 
-  /** 整页打开：走 sessionStorage 交接，地址栏只留干净的 /deckcraft。 */
-  const openFullPage = useCallback(() => {
-    if (stageHandoff({ url: deckUrl, name: deckFileName(deckUrl) })) {
-      window.open("/deckcraft", "_blank");
-      return;
-    }
-    // sessionStorage 不可用（隐私模式等）时退回 query 传参，功能优先于观感
-    window.open(`/deckcraft?deck=${encodeURIComponent(deckUrl)}`, "_blank");
-  }, [deckUrl]);
-
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#262626]">
       <DeckCraftFrame
@@ -132,14 +120,6 @@ export function DeckCraftStage({ project, path, ticket, onSaved }: Props) {
           <span className="max-w-[380px] truncate font-mono text-[11px] text-tertiary" title={log.join(" · ")}>
             {log.length ? log[log.length - 1] : ""}
           </span>
-          <button
-            type="button"
-            onClick={openFullPage}
-            className="flex shrink-0 items-center gap-1 text-tertiary transition-colors hover:text-primary"
-            title="在新窗口用整页编辑器打开（适合大屏改版式）"
-          >
-            <Maximize2 size={11} /> 整页打开
-          </button>
         </span>
       </div>
     </div>

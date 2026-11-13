@@ -4,6 +4,12 @@
 > 输入：`docs/ppt-studio/PRD.md`（v0.1 增量版，P0 共 8 项）
 > 基线：**不重写现有平台**。agents 会话、experts、skills、kb、deck-editor、项目资产、沙箱全部按现状复用，本次只在旁边长出一条 PPT 专用流水线。
 
+> **变更（v1.3.1，2026-11-13）**：独立的「放映级编辑」页（`/deckcraft`）与侧栏入口已下线，
+> `features/deck-editor/DeckCraftPage.tsx`、`tools/deckcraft` 源码一并移除。
+> **资产页与 AI PPT 抽屉仍用 DeckCraft 预览/编辑**（`DeckCraftStage` + `web/public/deckcraft/`
+> 运行时 bundle，save 仍走 `PUT /projects/{p}/file-bytes`）——它是唯一能忠实还原 pptx 的查看器，
+> 换成结构化编辑器会让已有成稿显示成空页。若要改编辑器，需从提交 `940b3ba` 恢复 `tools/deckcraft` 重新编译。
+
 ---
 
 ## 1. 实现方案与框架选型

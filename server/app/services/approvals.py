@@ -15,6 +15,10 @@ session_id 就能预批准）、批准一次对该会话的该工具永久放行
 - **粒度**：`(session_id, tool, args_hash)`。参数变了（同一工具换了代码）
   要重新确认；这是"逐次确认"的近似实现，又不至于每一步都打断用户。
 - **一次性**：批准被续跑消费后置 `consumed=1`，同一条记录不会被反复使用。
+- **范围**（`scope`）：`once` = 只管这一次；`session` = 「本次会话都允许」。
+  session 记录永不消费、有效期更长，`consumed` 对它没有意义——它代表的是
+  一个持续意图，而不是一次决定。**它不进 `latest_decision`**：续跑要消费的是
+  「这一次」的批准，把持续意图当成单次决定会让续跑拿到一条用不完的记录。
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ __all__ = [
     "latest_decision",
     "purge_expired",
     "request",
+    "session_granted",
 ]
 
 _ready = False
@@ -66,9 +71,10 @@ def _now() -> datetime:
 
 def _insert(
     workspace_id: str, owner_id: str, session_id: str, tool: str,
-    *, args_hash: str, decision: str,
+    *, args_hash: str, decision: str, scope: str = "once", ttl_minutes: int | None = None,
 ) -> dict:
-    ttl = max(1, int(get_settings().agent_approval_ttl_minutes))
+    ttl = max(1, int(ttl_minutes if ttl_minutes is not None
+                       else get_settings().agent_approval_ttl_minutes))
     created = _now()
     row = {
         "id": uuid.uuid4().hex,
@@ -78,17 +84,18 @@ def _insert(
         "tool": tool,
         "args_hash": args_hash,
         "decision": decision,
+        "scope": scope,
         "consumed": False,
         "created_at": created.isoformat(),
         "expires_at": (created + timedelta(minutes=ttl)).isoformat(),
     }
     _db().execute(
         "INSERT INTO agent_approvals "
-        "(id, workspace_id, owner_id, session_id, tool, args_hash, decision, consumed, "
-        " created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(id, workspace_id, owner_id, session_id, tool, args_hash, decision, scope, "
+        " consumed, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             row["id"], row["workspace_id"], row["owner_id"], row["session_id"],
-            row["tool"], row["args_hash"], row["decision"],
+            row["tool"], row["args_hash"], row["decision"], row["scope"],
             # Postgres 的 BOOLEAN 列不接受 1/0（sqlite 接受），统一传 bool
             bool(row["consumed"]), row["created_at"], row["expires_at"],
         ),
@@ -110,12 +117,16 @@ def request(
 
 def decide(
     workspace_id: str, owner_id: str, session_id: str, *,
-    decision: str = "approve", args_hash: str = "",
+    decision: str = "approve", args_hash: str = "", scope: str = "once",
 ) -> dict | None:
     """把最近一条待确认记录改成 approve / reject，返回该记录。
 
     `args_hash` 给了就只匹配参数一致的那条：参数变了说明不是同一个调用，
     应该重新弹确认框而不是沿用旧决定。
+
+    `scope="session"` 时额外记一条持续授权（「本次会话都允许」）：本次的
+    pause 照常被这次决定解开，同时后面同会话的同类调用不再询问。
+    这条附带记录不参与 `latest_decision`，也不会被 `consume` 影响。
     """
     if not session_id:
         return None
@@ -125,12 +136,24 @@ def decide(
     verdict = decision if decision in ("approve", "reject") else "approve"
     _db().execute("UPDATE agent_approvals SET decision = ? WHERE id = ?", (verdict, row["id"]))
     row["decision"] = verdict
+    if scope == "session" and verdict == "approve":
+        # 同一个工具再点一次刷新有效期，避免叠加出一堆等价的记录
+        _db().execute(
+            "DELETE FROM agent_approvals WHERE workspace_id = ? AND owner_id = ? "
+            "AND session_id = ? AND tool = ? AND scope = 'session'",
+            (workspace_id or "default", owner_id, session_id, row["tool"]),
+        )
+        _insert(
+            workspace_id, owner_id, session_id, row["tool"],
+            args_hash="", decision="approve", scope="session",
+            ttl_minutes=get_settings().agent_approval_session_ttl_minutes,
+        )
     return row
 
 
 def _latest(
     workspace_id: str, owner_id: str, session_id: str,
-    *, decision: str | None = None, args_hash: str = "",
+    *, decision: str | None = None, args_hash: str = "", scope: str | None = None,
 ) -> dict | None:
     sql = (
         "SELECT * FROM agent_approvals "
@@ -143,6 +166,9 @@ def _latest(
     if args_hash:
         sql += " AND args_hash = ?"
         params.append(args_hash)
+    if scope is not None:
+        sql += " AND scope = ?"
+        params.append(scope)
     sql += " ORDER BY created_at DESC"
     rows = _db().query(sql, tuple(params))
     return dict(rows[0]) if rows else None
@@ -154,13 +180,31 @@ def latest_decision(workspace_id: str, owner_id: str, session_id: str) -> dict |
     必须排除 `consumed`：一次批准只够续跑一次。否则同一会话里第二次遇到
     同一个敏感工具时，会翻出上一条已用过的批准直接放行——又变回"批一次
     永久放行"，而这正是这张表要解决的问题。
+
+    也必须排除 `scope='session'`：那是持续意图，不是"这一次的决定"。混进来
+    会让续跑反复取到同一条记录，还会让「拒绝」被一条更早的会话授权覆盖。
     """
-    row = _latest(workspace_id, owner_id, session_id)
+    row = _latest(workspace_id, owner_id, session_id, scope="once")
     if row is None or row["decision"] not in ("approve", "reject"):
         return None
     if row.get("consumed"):
         return None
     return row
+
+
+def session_granted(
+    workspace_id: str, owner_id: str, session_id: str, tool: str,
+) -> bool:
+    """本会话是否已对该工具做过「都允许」的授权（未过期）。"""
+    if not session_id:
+        return False
+    row = _db().query(
+        "SELECT id FROM agent_approvals WHERE workspace_id = ? AND owner_id = ? "
+        "AND session_id = ? AND tool = ? AND scope = 'session' "
+        "AND decision = 'approve' AND expires_at > ?",
+        (workspace_id or "default", owner_id, session_id, tool, _now().isoformat()),
+    )
+    return bool(row)
 
 
 def granted_tools(workspace_id: str, owner_id: str, session_id: str) -> set[str]:

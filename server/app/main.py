@@ -45,7 +45,13 @@ from app.services import audit, metrics, ratelimit, tickets
 logger = get_logger("app.main")
 
 # 控制台无需登录即可访问的端点：登录本身与健康探针
-PUBLIC_API_PATHS = {"/api/auth/login", "/api/health"}
+PUBLIC_API_PATHS = {
+    "/api/auth/login",
+    # 邮箱验证码的两步都在登录之前，必须公开
+    "/api/auth/email/code",
+    "/api/auth/email/verify",
+    "/api/health",
+}
 
 # viewer（只读角色）放行的写路径：对话消费类——看得了就要问得了
 VIEWER_ALLOWED_PREFIXES = ("/api/chat", "/api/agent", "/api/conversations", "/api/auth/")
@@ -85,6 +91,24 @@ async def lifespan(app: FastAPI):
         await checkpoints.purge_expired()
     except Exception as exc:  # noqa: BLE001 — 清理失败不能挡住启动
         logger.warning("检查点启动清理失败：%s: %s", type(exc).__name__, exc)
+
+    # 上一个进程被杀时，正在跑的那几次运行没机会写终态事件。库里留着它们，
+    # `/runs/active` 每次刷新都把它们当「还在跑」返回，前端挂上一条永不结束
+    # 的流，`running` 于是锁住整个页面——历史任务切不动，只能点停止，而停止
+    # 又因为内存里没有对应任务而 404。启动这一刻内存登记簿必定为空，正好把
+    # 这些尸体统一收尾。
+    if _s.agent_run_orphan_sweep:
+        from datetime import datetime, timezone
+
+        from app.services import run_events as run_events_svc
+
+        try:
+            boot = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            n = run_events_svc.abandon_orphans(before=boot)
+            if n:
+                logger.info("收尾上次进程遗留的未完成运行：%d 条", n)
+        except Exception as exc:  # noqa: BLE001 — 收尾失败不该挡住启动
+            logger.warning("遗留运行收尾失败：%s: %s", type(exc).__name__, exc)
 
     async def sweeper() -> None:
         while True:

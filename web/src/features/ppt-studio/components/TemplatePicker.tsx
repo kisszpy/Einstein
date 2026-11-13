@@ -69,8 +69,20 @@ function StyleSwatch({ swatches, className }: { swatches: string[]; className?: 
 export function TemplatePicker({ value, onChange, packs, onPacksChange, disabled }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState(false);
+  /** 弹出方向：默认向下（不遮输入框与上方内容），下方放不下才向上。 */
+  const [dir, setDir] = useState<"up" | "down">("down");
   const [upload, setUpload] = useState<UploadState>({ kind: "idle" });
+
+  // 空状态介绍区和底部工具行高度不同：点开时按按钮到视口底部的剩余空间决定方向
+  const toggle = () => {
+    if (!open && btnRef.current) {
+      const bottom = btnRef.current.getBoundingClientRect().bottom;
+      setDir(window.innerHeight - bottom > 380 ? "down" : "up");
+    }
+    setOpen((v) => !v);
+  };
 
   const builtin = packs.filter((p) => p.kind === "builtin");
   const uploaded = packs.filter((p) => p.kind !== "builtin");
@@ -124,13 +136,14 @@ export function TemplatePicker({ value, onChange, packs, onPacksChange, disabled
         }}
       />
       <button
+        ref={btnRef}
         type="button"
         disabled={disabled}
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         title="选择设计风格，或上传公司 .pptx 模板（≤32MB）"
         className={cn(
-          "flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-surface-1 px-2 py-1.5 text-[12px] text-secondary transition-colors hover:border-brand/40 disabled:opacity-50",
-          open && "border-brand/40",
+          "flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-line bg-transparent px-2.5 text-[12px] text-secondary transition-colors hover:border-line-strong disabled:opacity-50",
+          open && "border-line-strong text-primary",
         )}
       >
         <StyleSwatch swatches={selected?.swatches ?? []} className="h-4 w-6" />
@@ -144,7 +157,12 @@ export function TemplatePicker({ value, onChange, packs, onPacksChange, disabled
       </button>
 
       {open && (
-        <div className="absolute bottom-full left-0 z-20 mb-1.5 max-h-[340px] w-[356px] overflow-y-auto rounded-xl border border-line bg-surface-1 p-2 shadow-lg">
+        <div
+          className={cn(
+            "absolute left-0 z-20 max-h-[340px] w-[356px] overflow-y-auto rounded-xl border border-line bg-surface-1 p-2 shadow-float",
+            dir === "down" ? "top-full mt-1.5" : "bottom-full mb-1.5",
+          )}
+        >
           {/* 内置风格 */}
           <p className="px-1 pb-1.5 pt-0.5 text-[11px] text-tertiary">内置风格</p>
           <div className="grid grid-cols-2 gap-1.5">

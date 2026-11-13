@@ -46,6 +46,9 @@ export interface AgentStep {
   args?: string;
   /** 参数指纹：批准只对这一组参数有效，原样回传给 /agent/approve */
   args_hash?: string;
+  /** 这次调用实际落在哪个执行环境（e2b / container / host）。
+   *  文案要据此说实话：把宿主进程写成"沙箱"会误导用户点批准。 */
+  env?: string;
   content?: string;
   duration_ms?: number | null;
   /** kind=plan 时的计划清单（deepagents 的 write_todos） */

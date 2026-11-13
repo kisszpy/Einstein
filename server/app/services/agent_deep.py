@@ -33,6 +33,7 @@ from deepagents.backends import FilesystemBackend
 from deepagents.backends.protocol import (
     DeleteResult,
     EditResult,
+    FileUploadResponse,
     GlobResult,
     GrepResult,
     LsResult,
@@ -59,7 +60,7 @@ from app.services.agent_runtime import (
     thread_config,
 )
 from app.services.approvals import args_fingerprint
-from app.services.capabilities import AgentContext, ApprovalRequired, _artifact_kind
+from app.services.capabilities import AgentContext, ApprovalRequired, _artifact_kind, code_exec
 from app.services.capabilities.sandbox import slugify, workspace_root
 from app.services.tools import build_lc_tools, kb_directive
 
@@ -85,7 +86,9 @@ def _fs_tool_names(backend: Any) -> list[str]:
     「工具集 ⊆ 后端能力集」；Pro 引擎的后端支持执行，`execute` 照常挂上。
     """
     names = list(FS_TOOL_NAMES)
-    if supports_execution(backend):
+    # ProBackend 永远是 SandboxBackendProtocol 的实现者，但沙箱可能因「没有
+    # Docker 且未允许宿主执行」被判为 off。这时挂上 execute 只会让模型白试一轮。
+    if getattr(backend, "mode", "container") != "off" and supports_execution(backend):
         names.append("execute")
     return names
 
@@ -207,8 +210,8 @@ class WorkspaceBackend(FilesystemBackend):
 
     # ---- 产物登记 ----
 
-    def _note(self, virtual_path: str) -> None:
-        """把虚拟路径换算成「项目内相对路径」——前端预览/下载都按项目拼。
+    def _project_rel(self, virtual_path: str) -> str:
+        """虚拟路径 → 「项目内相对路径」——前端预览/下载都按项目拼。
 
         模型可能在 project_create 之前就写文件，此时 ctx.project 还是空的，
         于是退一步取路径首段当项目名（工作区里只有项目这一层目录）。
@@ -219,9 +222,25 @@ class WorkspaceBackend(FilesystemBackend):
             rel = rel[len(project) + 1:]
         elif "/" in rel:
             rel = rel.split("/", 1)[1]
+        return rel
+
+    def _note(self, virtual_path: str) -> None:
+        rel = self._project_rel(virtual_path)
+        if rel:
+            self.ctx.note_artifact(rel, _artifact_kind(rel))
+
+    def _forget(self, virtual_path: str) -> None:
+        """删文件后撤销产物登记。
+
+        不撤的话前端产物卡片会一直挂着一个已经不存在的文件，点开就是 404。
+        `ctx.artifacts` 是共享列表，就地改（切片赋值），别整个换掉。
+        """
+        rel = self._project_rel(virtual_path)
         if not rel:
             return
-        self.ctx.note_artifact(rel, _artifact_kind(rel))
+        keep = [a for a in self.ctx.artifacts if a.get("path") != rel]
+        if len(keep) != len(self.ctx.artifacts):
+            self.ctx.artifacts[:] = keep
 
     # ---- 覆盖写操作：先过项目边界，再登记产物 ----
 
@@ -247,18 +266,42 @@ class WorkspaceBackend(FilesystemBackend):
         blocked = self._write_blocked(file_path)
         if blocked:
             return DeleteResult(error=blocked)
-        return super().delete(file_path)
+        result = super().delete(file_path)
+        if getattr(result, "error", None) is None:
+            # 产物卡片与磁盘同步：删了就从本次运行的产物清单里撤掉
+            self._forget(getattr(result, "path", None) or file_path)
+        return result
 
     def upload_files(self, files):  # noqa: ANN001, ANN201
-        results = super().upload_files(files)
-        for item in results:
-            if getattr(item, "error", None) is not None:
-                continue
-            blocked = self._write_blocked(getattr(item, "path", ""))
-            if blocked:
-                item.error = blocked
+        """批量上传：**先过项目边界，再落盘**。
+
+        父类是「照单全收，事后报错」——被拒绝的文件其实已经写进磁盘了，
+        越界写变成了「报错但成功」。这里先按 `_write_blocked` 分流，只把允许的
+        交给父类；结果再按输入顺序合并，返回形状与父类一致。
+        """
+        blocked: dict[str, str] = {}
+        allowed: list[tuple[str, bytes]] = []
+        for path, content in files:
+            reason = self._write_blocked(path)
+            if reason:
+                blocked[path] = reason
             else:
-                self._note(getattr(item, "path", ""))
+                allowed.append((path, content))
+        written = {r.path: r for r in super().upload_files(allowed)} if allowed else {}
+        results = []
+        for path, _content in files:
+            reason = blocked.get(path)
+            if reason:
+                results.append(FileUploadResponse(path=path, error=reason))
+                continue
+            item = written.get(path)
+            if item is None:
+                results.append(FileUploadResponse(path=path, error="写入失败：没有拿到写入结果"))
+            elif getattr(item, "error", None) is None:
+                self._note(path)
+                results.append(item)
+            else:
+                results.append(item)
         return results
 
     # ---- 覆盖读操作：ls 过滤越界目录，read 直接拒绝 ----
@@ -299,7 +342,7 @@ DEEP_SYSTEM_PROMPT = """你是 Einstein 的工作型智能体。你能调用工�
 
 【任务路由】
 1. 问答/解释/比较/观点/规划（用户要一个回答）→ 直接回答。不建项目、不写文件。需要外部信息时先查已挂载的知识库（kb_search），查不到再 web_search；关键结论用 web_fetch 打开原文核实（max_chars 2500 左右，检索类最多 2 次），核完就答。
-2. 需要精确计算/数据处理（三步以上运算、排序统计、批量转换）→ code_run 跑代码，结论以运行结果为准，算完即止。
+2. 需要精确计算/数据处理（三步以上运算、排序统计、批量转换）→ code_run 跑代码，结论以运行结果为准，算完即止。支持 python / node / java / maven；沙箱断网，只能用镜像预装依赖和内置离线 Maven 仓库，装不了新包。
 3. 明确要文件交付（工程、可下载的 PPT/报告/文档）→ project_create 建项目，再用 write_file 落盘；代码交付必须 code_run 跑通、报错就修，再汇报。
 
 【计划：先拆解，再执行】
@@ -320,16 +363,35 @@ DEEP_SYSTEM_PROMPT = """你是 Einstein 的工作型智能体。你能调用工�
 
 【确需文件交付时】
 1. 边查边写：查到一批数据立刻 write_file 落盘，不要把全部原文攒在对话里。
-2. PPT 标准路线是 slidep DSL 逐页闭环（视觉效果远好于其他方式）：① 每页用 fs_write 写一个 slides/NN.slide 文件，内容是 JSX 风格 DSL——`<Slide width={1280} height={720} background="…">` 里用 `<Box style={{...}}>` 做布局容器（支持 Flexbox：display:"flex"、flexDirection、gap、padding、borderRadius、background，background 支持 linear-gradient 渐变与 rgba 玻璃卡）和 `<Text style={{fontSize,color,fontWeight,marginTop}}>` 写文字；② 调 slide_upsert(pptx_path="deck/xxx.pptx", dsl_file="slides/NN.slide") 编译插入；③ 每页 upsert 后必须 slide_lint，diagnostics 有 error 就改 DSL 后以相同 page_index 重新 upsert，直到无 error 再下一页。slidep 连续失败 3 次才降级用 ppt_create。
-2b. SVG 原生管线（svg_compile）：用户强调「母板/模板统一」「跨平台部署」或 slidep 不可用时优先用这条。① 每页 fs_write 一个 slides/NN.svg（01.svg 起，画布固定 1280×720，纯 SVG 1.1：rect/text/circle/path/linearGradient，文字用 <text> 元素并显式指定 font-family/font-size/fill）；② 可选母板 slides/master.svg——把背景、页眉装饰、页码规则画在母板里，每页 SVG 只画内容层（不要整页铺底色，否则盖住母板）；③ 调 svg_compile(pptx_path="deck/xxx.pptx") 一次编译整份。产物是原生形状 PPTX，完全可编辑。SVG 里文字不会自动换行——长句手动拆成多个 <text> 或 <tspan>，每行一个。
-3. slidep 设计规范：画布 1280×720、四周安全区 ≥60px；页面主标题 ≥32px、卡片小标题 ≥22px、正文 18-20px、图表标签 ≥16px、脚注 ≥14px；同页样式组合 ≤4 种；块间距只用 24/32 两档；卡片高度贴合内容不空撑；一页分区 ≤4 块且有唯一视觉主角；禁止等宽均分构图、禁止空容器、禁止 emoji 和感叹号；标题不用「卓越表现/行业领先」这类空话，用具体数字与动词；页数按用户要求来，没有硬性上限。
-4. 设计系统纪律：动笔前先选定一个设计家族（深色编辑风/浅色商务风/渐变科技风/暖调杂志风，详见 slidep 技能），全篇统一。用户要求重画、重新生成、换风格时，必须换一个与上一版不同的设计家族（新配色+新母题），严禁沿用旧观感微调。封面与章节页用渐变背景和玻璃卡片提升质感，内容页用纯色底。
-5. ppt_create 仅作降级备选；Word/Excel 优先用对应内置工具，不要手写 python-docx/openpyxl 脚本替代。
-6. 纪律：不要用相同参数重复调用同一工具；拿不准就明说。
+2. Word/Excel 优先用对应内置工具，不要手写 python-docx/openpyxl 脚本替代。
+3. 纪律：不要用相同参数重复调用同一工具；拿不准就明说。
 
 【最终回复格式】
 - 第 1 类任务：直接给答案。
 - 第 2/3 类任务：一句话做了什么 + 关键结论 + 产物文件清单（相对路径）。"""
+
+
+# PPT 专用路线（约 900 字）。只在挂了演示文稿工具时才拼进系统提示：
+# 写周报、查资料的任务不需要知道 slidep 的 DSL 语法和字号规范，
+# 常驻反而是负担——既占上下文，也会把模型往「什么都做成 PPT」上推。
+PPT_DELIVERY_PROMPT = """
+
+【PPT 交付路线】（本轮挂载了演示文稿工具，按此执行）
+1. 标准路线是 slidep DSL 逐页闭环（视觉效果远好于其他方式）：① 每页用 fs_write 写一个 slides/NN.slide 文件，内容是 JSX 风格 DSL——`<Slide width={1280} height={720} background="…">` 里用 `<Box style={{...}}>` 做布局容器（支持 Flexbox：display:"flex"、flexDirection、gap、padding、borderRadius、background，background 支持 linear-gradient 渐变与 rgba 玻璃卡）和 `<Text style={{fontSize,color,fontWeight,marginTop}}>` 写文字；② 调 slide_upsert(pptx_path="deck/xxx.pptx", dsl_file="slides/NN.slide") 编译插入；③ 每页 upsert 后必须 slide_lint，diagnostics 有 error 就改 DSL 后以相同 page_index 重新 upsert，直到无 error 再下一页。slidep 连续失败 3 次才降级用 ppt_create。
+2. SVG 原生管线（svg_compile）：用户强调「母板/模板统一」「跨平台部署」或 slidep 不可用时优先用这条。① 每页 fs_write 一个 slides/NN.svg（01.svg 起，画布固定 1280×720，纯 SVG 1.1：rect/text/circle/path/linearGradient，文字用 <text> 元素并显式指定 font-family/font-size/fill）；② 可选母板 slides/master.svg——把背景、页眉装饰、页码规则画在母板里，每页 SVG 只画内容层（不要整页铺底色，否则盖住母板）；③ 调 svg_compile(pptx_path="deck/xxx.pptx") 一次编译整份。产物是原生形状 PPTX，完全可编辑。SVG 里文字不会自动换行——长句手动拆成多个 <text> 或 <tspan>，每行一个。
+3. slidep 设计规范：画布 1280×720、四周安全区 ≥60px；页面主标题 ≥32px、卡片小标题 ≥22px、正文 18-20px、图表标签 ≥16px、脚注 ≥14px；同页样式组合 ≤4 种；块间距只用 24/32 两档；卡片高度贴合内容不空撑；一页分区 ≤4 块且有唯一视觉主角；禁止等宽均分构图、禁止空容器、禁止 emoji 和感叹号；标题不用「卓越表现/行业领先」这类空话，用具体数字与动词；页数按用户要求来，没有硬性上限。
+4. 设计系统纪律：动笔前先选定一个设计家族（深色编辑风/浅色商务风/渐变科技风/暖调杂志风，详见 slidep 技能），全篇统一。用户要求重画、重新生成、换风格时，必须换一个与上一版不同的设计家族（新配色+新母题），严禁沿用旧观感微调。封面与章节页用渐变背景和玻璃卡片提升质感，内容页用纯色底。
+5. ppt_create 仅作降级备选。"""
+
+# 哪些工具在就意味着「可能要做 PPT」（能力组 ppt 的全部工具）
+PPT_TOOL_IDS = {"slide_upsert", "slide_lint", "svg_compile", "ppt_create"}
+
+
+def delivery_prompt(tool_ids: list[str] | None) -> str:
+    """按本轮挂载的工具决定要不要带 PPT 路线。"""
+    if not tool_ids:
+        return ""
+    return PPT_DELIVERY_PROMPT if PPT_TOOL_IDS & set(tool_ids) else ""
 
 
 def _build_agent(
@@ -369,7 +431,7 @@ def _build_agent(
         tools=lc_tools,
         # 挂了知识库就追加"KB 优先"硬规则，否则任务路由会把模型带向 web_search
         system_prompt=(
-            DEEP_SYSTEM_PROMPT + prompt_extra + extras
+            DEEP_SYSTEM_PROMPT + delivery_prompt(tool_ids) + prompt_extra + extras
             + memory_block(list(getattr(ctx, "memory", []) or []))
             + (kb_directive(kb_ids) if kb_ids else "")
         ),
@@ -403,17 +465,46 @@ def _approval_tools() -> set[str]:
     return {t.strip() for t in raw.split(",") if t.strip()}
 
 
+def _code_approval_when(_req: Any) -> bool:
+    """code_run 的中断谓词：这次调用该不该停下来问人。
+
+    框架在**中断时与续跑时各求值一次**，两次结论必须一致——否则已作出的决定
+    会对不上号（拒绝可能被执行）。所以这里只读执行环境：它在一次运行内稳定。
+    用户点过什么、授权到没到期，都靠装配期的 `_approval_plan` 处理，不进这里。
+    """
+    return code_exec.needs_approval()
+
+
 def _approval_plan(ctx: AgentContext) -> dict[str, Any] | None:
     """需要人工确认的工具 → `interrupt_on` 配置；空表示不启用。
 
     同时把 `ctx.hitl` 置真：工具层因此不再自己抛 ApprovalRequired——拦截发生
-    在工具执行之前，工具代码保持"被调用就是已批准"的干净语义。
+    在工具执行之前，工具代码保持"被调用就是已批准"的干净语义。**只有确实挂了
+    中断时才置真**：plan 为空还把 hitl 打开，等于把门整个拆掉。
+
+    code_run 有两个免问条件，判定都在装配期（图结构必须一次定死）：
+
+    1. 执行环境是隔离沙箱（`code_exec.needs_approval()` 为假）；
+    2. 本会话已经点过「本次会话都允许」。
+
+    但**续跑那一次必须照常挂中断**：检查点里还有一条等待确认的调用，图少了
+    这个节点就再也走不下去。豁免只对新发起的运行生效。
     """
     tools = _approval_tools()
     if not tools:
         return None
-    ctx.hitl = True
-    return {name: True for name in tools}
+    plan: dict[str, Any] = {}
+    for name in tools:
+        if name == "code_run":
+            if not code_exec.needs_approval():
+                continue
+            if not ctx.resuming and name in ctx.approved_tools:
+                continue
+            plan[name] = {"allowed_decisions": ["approve", "reject"], "when": _code_approval_when}
+        else:
+            plan[name] = True
+    ctx.hitl = bool(plan)
+    return plan or None
 
 
 def _plan_event(todos: Any) -> dict | None:
@@ -473,6 +564,41 @@ def _chunk_delta(chunk: Any, meta: Any) -> str:
     return ""
 
 
+def _note_usage(message: Any, carry: dict, *, source: str) -> None:
+    """把一次模型调用的 token 用量累加进 carry。
+
+    为什么不能只靠 `response_metadata`：真流式下正文是一个个 chunk 来的，
+    usage 只在最后一个 chunk 上；非流式时它挂在完整消息上。两条路都取会
+    双计，所以先到的来源说了算（`usage_source`），并按消息 id 去重。
+
+    这份数字是**配额与成本看板的唯一来源**：deep 引擎走 ChatOpenAI 直连，
+    不经过 `llm.complete`，漏在这里就等于用户白用。
+    """
+    if carry.get("usage_source") not in (None, source):
+        return
+    prompt = completion = 0
+    usage = getattr(message, "usage_metadata", None)
+    if isinstance(usage, dict):
+        prompt = int(usage.get("input_tokens") or 0)
+        completion = int(usage.get("output_tokens") or 0)
+    if not (prompt or completion):
+        meta = getattr(message, "response_metadata", None) or {}
+        tu = meta.get("token_usage") or {}
+        prompt = int(tu.get("prompt_tokens") or 0)
+        completion = int(tu.get("completion_tokens") or 0)
+    if not (prompt or completion):
+        return
+    seen: set[str] = carry.setdefault("usage_ids", set())
+    uid = str(getattr(message, "id", "") or "")
+    if uid:
+        if uid in seen:
+            return
+        seen.add(uid)
+    carry["usage_source"] = source
+    carry["usage_prompt"] = carry.get("usage_prompt", 0) + prompt
+    carry["usage_completion"] = carry.get("usage_completion", 0) + completion
+
+
 async def _iter_events(
     agent,
     payload: Any,
@@ -496,7 +622,10 @@ async def _iter_events(
         carry = {}
     carry.setdefault("messages", [])
     carry.setdefault("todos", None)
-    seen: set[str] = set()
+    # seen 放 carry 里跨预算共享：续跑时图状态会把**全部历史消息**再吐一遍，
+    # 用局部集合会让同一批 tool_call/tool_result 在新一轮里重放一次，
+    # 前端步骤条上就变成「做了两遍」。
+    seen: set[str] = carry.setdefault("seen", set())
     emitted_artifacts = 0
     last_plan = ""
     final_text = ""
@@ -546,6 +675,8 @@ async def _iter_events(
             if text:
                 answer_buf += text
                 yield {"kind": "delta", "text": text}
+            # 子智能体的 chunk 也要计费，所以这里不按 checkpoint_ns 过滤
+            _note_usage(chunk, carry, source="stream")
             continue
 
         update = data
@@ -611,6 +742,9 @@ async def _iter_events(
 
                 if isinstance(msg, AIMessage) and msg.content:
                     final_text = str(msg.content)
+                if isinstance(msg, AIMessage):
+                    # 非流式（agent_stream=false）时 usage 只挂在这里
+                    _note_usage(msg, carry, source="updates")
 
         if interrupted is not None:
             event = _interrupt_event(interrupted)
@@ -647,6 +781,9 @@ def _interrupt_event(interrupted: Any) -> dict | None:
             "args": short(args),
             "args_hash": args_fingerprint(args),
             "count": len(actions) or 1,
+            # 实际落在哪个执行环境。多数时候这里就是 host（隔离沙箱根本不中断），
+            # 但前端要靠它把文案说准：把"宿主进程"写成"沙箱"会误导用户点批准。
+            "env": code_exec.resolve_mode(),
         }
     return None
 
@@ -662,6 +799,7 @@ async def _run_engine(
     thread_id: str = "",
     resume: dict | None = None,
     resume_count: int = 1,
+    stateful: bool = False,
 ) -> AsyncIterator[dict]:
     """deep 系引擎共用的执行循环：预算续跑、审批中断、指标、收尾帧。
 
@@ -671,6 +809,9 @@ async def _run_engine(
 
     resume：批准/拒绝决定。给了就发 `Command(resume=...)` 到同一 thread，
     图从断点继续——已执行的工具调用不会重跑（这正是旧实现最大的坑）。
+
+    stateful：是否真的带着检查点（有 checkpointer 且 thread_id 非空）。它只影响
+    **预算续跑时怎么喂输入**，见下面 `GraphRecursionError` 分支。
     """
     final_text = ""
     streamed_buf = ""          # 已经作为 delta 下发给前端的正文（可真流式时非空）
@@ -682,7 +823,9 @@ async def _run_engine(
         else {"messages": messages}
     )
 
-    with LlmTimer(metric_kind, get_settings().llm_model) as timer:
+    with LlmTimer(
+        metric_kind, get_settings().llm_model, workspace_id=ctx.workspace_id,
+    ) as timer:
         try:
             while True:
                 try:
@@ -722,13 +865,20 @@ async def _run_engine(
                             "已完成的成果与产物见上方，本轮先交付到这里。）"
                         )
                         break
-                    # 自动续跑：原始输入 + 全部已发生消息 + 计划状态重新入图
-                    messages = [
-                        *base_messages,
-                        *carry["messages"],
-                        ("user", _continuation_note(last=budgets_used == MAX_BUDGETS - 1)),
-                    ]
-                    payload = {"messages": messages}
+                    # 自动续跑：把「已发生的事 + 续接指令」重新入图。
+                    #
+                    # 两条路径的差别是这里唯一的坑：`messages` 状态用 add_messages
+                    # reducer，语义是 **append 而不是覆盖**。所以
+                    #   · 有检查点时图状态里已经有全部对话，再拼一遍历史 = 同一段
+                    #     上下文出现两份，每轮预算 prompt_tokens 就翻一倍；
+                    #   · 没有检查点时状态不跨轮存活，必须自带全部消息——而
+                    #     carry["messages"] 就是上一轮状态里的完整列表（含本轮
+                    #     任务），再拼 base_messages 同样会在开头重复。
+                    note = ("user", _continuation_note(last=budgets_used == MAX_BUDGETS - 1))
+                    if stateful and thread_id:
+                        payload = {"messages": [note]}
+                    else:
+                        payload = {"messages": [*(carry["messages"] or list(base_messages)), note]}
                     if streamed_buf:
                         # 新一轮会从头生成，前端手里那半句话已作废
                         streamed_buf = ""
@@ -745,6 +895,7 @@ async def _run_engine(
                 "tool": approval.tool,
                 "args": short(approval.args),
                 "args_hash": args_fingerprint(approval.args),
+                "env": code_exec.resolve_mode(),
             }
             final_text = (
                 f"任务已暂停：工具 `{approval.tool}` 需要你批准后才能执行。"
@@ -758,6 +909,14 @@ async def _run_engine(
                     "模型响应超时（任务上下文过长）。建议缩小任务范围，或分多次运行。"
                 ) from exc
             raise
+        finally:
+            # 一次运行可能跨多轮预算、多轮工具调用，usage 都累在 carry 里。
+            # 统一在这里入账（timer 退出时才写 metrics，所以此时还来得及）：
+            # 漏了这一步，智能体的消耗在日配额与成本看板上就是隐形的。
+            prompt_used = int(carry.get("usage_prompt", 0) or 0)
+            completion_used = int(carry.get("usage_completion", 0) or 0)
+            if prompt_used or completion_used:
+                timer.tokens(prompt_used, completion_used)
 
     yield final_frame(ctx, final_text, with_artifacts=with_artifacts, streamed=streamed_buf)
 
@@ -821,6 +980,16 @@ async def _run_deep(
     with_artifacts = ctx is not None
     ctx = ctx or AgentContext(workspace_id=ws)
 
+    # 勾了代码执行但沙箱不可用：说清楚，别让模型在「没有这个工具」的情况下
+    # 自己猜，也别让用户以为勾选生效了。
+    if "code_run" in tool_ids and get_settings().agent_code_exec:
+        ok, why = code_exec.available()
+        if not ok:
+            yield {
+                "kind": "note",
+                "content": f"代码沙箱不可用（{why}），本轮不提供 code_run；需要计算的部分会用其他方式完成。",
+            }
+
     # 热加载：每个任务开始时把 DB 技能同步到工作区 .agent/skills/ 目录，
     # 增删改回滚即时生效；被点名的技能由 pinned_skills 强制装载。
     skill_publisher.sync_skills(ws, owner_id=ctx.owner_id or None)
@@ -860,6 +1029,8 @@ async def _run_deep(
         agent, ctx, messages,
         pinned=pinned, metric_kind=metric_kind, with_artifacts=with_artifacts,
         thread_id=thread_id, resume=resume_decision, resume_count=resume_count,
+        # 有检查点 + 有 thread：图状态跨轮存活，续跑只补续接指令，不重灌历史
+        stateful=bool(saver and thread_id),
     ):
         yield event
 

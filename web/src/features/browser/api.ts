@@ -18,6 +18,13 @@ export function listProjects(): Promise<ProjectInfo[]> {
   return request<ProjectInfo[]>("/api/projects");
 }
 
+/** 删除整个项目（含目录内全部文件）。后端已有端点，这里补前端调用。 */
+export function deleteProject(project: string): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/api/projects/${encodeURIComponent(project)}`, {
+    method: "DELETE",
+  });
+}
+
 export function projectTree(project: string): Promise<{ entries: TreeEntry[] }> {
   return request<{ entries: TreeEntry[] }>(`/api/projects/${encodeURIComponent(project)}/tree`);
 }
@@ -29,6 +36,17 @@ export function projectArtifacts(
 ): Promise<{ entries: TreeEntry[]; count: number; truncated?: boolean }> {
   return request<{ entries: TreeEntry[]; count: number; truncated?: boolean }>(
     `/api/projects/${encodeURIComponent(project)}/artifacts`,
+  );
+}
+
+/** 删除项目里的一个文件（只删文件，目录要另外的动作）。 */
+export function deleteFile(
+  project: string,
+  path: string,
+): Promise<{ path: string; bytes: number; total_files: number }> {
+  return request<{ path: string; bytes: number; total_files: number }>(
+    `/api/projects/${encodeURIComponent(project)}/file?path=${encodeURIComponent(path)}`,
+    { method: "DELETE" },
   );
 }
 

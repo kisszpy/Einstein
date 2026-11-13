@@ -98,3 +98,60 @@ def test_args_fingerprint_is_stable_and_order_insensitive():
         approvals.args_fingerprint({"lang": "py", "code": "print(1)"})
     assert approvals.args_fingerprint({"code": "print(1)"}) != \
         approvals.args_fingerprint({"code": "print(2)"})
+
+
+# ---------------------------------------------------------------- 会话级授权
+#
+# 「本次会话都允许」比单次批准多两个必须守住的性质：它要能持续生效（不被
+# 消费掉），又不能污染单次决定的查询（否则续跑会拿到一条用不完的记录）。
+
+
+def test_session_grant_persists_and_survives_consume():
+    session = _session()
+    approvals.request(WS, UID, session, "code_run", args_hash="h1")
+    decided = approvals.decide(WS, UID, session, decision="approve",
+                               args_hash="h1", scope="session")
+    assert decided is not None
+    assert approvals.session_granted(WS, UID, session, "code_run") is True
+
+    # 续跑会消费单次批准；会话授权不能被一起消费掉，否则第二个调用又要问
+    approvals.consume(decided["id"])
+    assert approvals.session_granted(WS, UID, session, "code_run") is True
+
+
+def test_session_grant_is_not_a_one_shot_decision():
+    """latest_decision 只认单次决定：会话授权混进来会让拒绝被静默覆盖。"""
+    session = _session()
+    approvals.request(WS, UID, session, "code_run", args_hash="h2")
+    once = approvals.decide(WS, UID, session, decision="approve",
+                            args_hash="h2", scope="session")
+    assert once is not None
+    # 消费掉这一次的决定之后，续跑不该再取到任何东西——
+    # 如果 session 记录混进了 latest_decision，这里会返回它而不是 None
+    approvals.consume(once["id"])
+    assert approvals.latest_decision(WS, UID, session) is None
+
+
+def test_session_grant_scoped_to_tool_and_session():
+    session = _session()
+    approvals.request(WS, UID, session, "code_run", args_hash="h3")
+    approvals.decide(WS, UID, session, decision="approve", args_hash="h3", scope="session")
+    assert approvals.session_granted(WS, UID, session, "code_run") is True
+    # 别的工具、别的会话、别的用户都不沾光
+    assert approvals.session_granted(WS, UID, session, "mcp_tool") is False
+    assert approvals.session_granted(WS, UID, _session(), "code_run") is False
+    assert approvals.session_granted(WS, OTHER, session, "code_run") is False
+
+
+def test_session_grant_replaces_not_accumulates():
+    """重复授权只刷新，不叠加：否则过期判断要在一堆记录里挑最新的。"""
+    session = _session()
+    for _ in range(3):
+        approvals.request(WS, UID, session, "code_run", args_hash="h4")
+        approvals.decide(WS, UID, session, decision="approve", args_hash="h4", scope="session")
+    rows = approvals._db().query(
+        "SELECT id FROM agent_approvals WHERE workspace_id = ? AND owner_id = ? "
+        "AND session_id = ? AND scope = 'session'",
+        (WS, UID, session),
+    )
+    assert len(rows) == 1

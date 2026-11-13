@@ -22,10 +22,12 @@ import * as api from "../api";
 type Mode = "html" | "image" | "pdf" | "markdown" | "text" | "deck" | "binary";
 
 const TEXT_EXT = new Set([
-  "txt", "md", "markdown", "json", "yaml", "yml", "toml", "ini", "cfg", "csv", "tsv",
-  "py", "js", "jsx", "ts", "tsx", "c", "h", "cpp", "hpp", "java", "go", "rs", "rb",
-  "php", "sh", "bash", "bat", "ps1", "sql", "html", "htm", "css", "scss", "xml", "svg",
-  "log", "env", "gitignore", "dockerfile", "makefile",
+  "txt", "md", "markdown", "json", "yaml", "yml", "toml", "ini", "cfg", "conf",
+  "csv", "tsv", "properties", "gradle", "lock", "env",
+  "py", "js", "jsx", "ts", "tsx", "vue", "c", "h", "cpp", "hpp", "java", "kt",
+  "go", "rs", "rb", "php", "sh", "bash", "bat", "ps1", "sql", "html", "htm",
+  "css", "scss", "less", "xml", "svg",
+  "log", "gitignore", "dockerfile", "makefile",
 ]);
 
 function modeOf(path: string): Mode {

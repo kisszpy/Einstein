@@ -38,10 +38,6 @@ const ModelsPage = lazy(() =>
 const PublicPage = lazy(() =>
   import("@/features/share/PublicPage").then((m) => ({ default: m.PublicPage })),
 );
-const DeckCraftPage = lazy(() =>
-  import("@/features/deck-editor/DeckCraftPage").then((m) => ({ default: m.DeckCraftPage })),
-);
-
 /** 懒加载页共用 fallback：和首屏启动态同一套 spinner。
  *  外面套一层错误边界：单页渲染崩了只废这一页，侧栏还在、能换页；
  *  key=pathname 让换页时自动重置，不会一直卡在上一页的报错上。 */
@@ -106,16 +102,9 @@ export const router = createBrowserRouter([
       },
       // 旧入口兼容：/browser 已改名为「资产」，深链的 tab/project/path/url 要一并带过去
       { path: "browser", element: <LegacyAssetsRedirect /> },
-      // 旧入口兼容：/deck 曾是 PPTist 编辑器，已整体下线，老书签/老链接落到 DeckCraft
-      { path: "deck", element: <Navigate to="/deckcraft" replace /> },
-      {
-        path: "deckcraft",
-        element: (
-          <LazyPage>
-            <DeckCraftPage />
-          </LazyPage>
-        ),
-      },
+      // 旧入口兼容：/deck、/deckcraft 两个编辑器都已下线，老链接落到「资产」页
+      { path: "deck", element: <Navigate to="/assets" replace /> },
+      { path: "deckcraft", element: <Navigate to="/assets" replace /> },
       {
         path: "kb",
         element: (
