@@ -10,9 +10,17 @@ RUN apt-get update \
 
 WORKDIR /build
 COPY requirements.txt .
-RUN python -m venv /opt/venv \
+# e2b 2.31 的元数据（wcmatch<11）与 deepagents 的（wcmatch>=11）互相矛盾，单次
+# pip install 会被解析器判死；但 e2b 2.31 实际已不 import wcmatch（见 requirements
+# 同一段注释，开发环境也是这么绕的）。分两步：先装其余依赖（wcmatch>=11 由
+# deepagents 带入），再 --no-deps 装 e2b 并显式补上它真正引用的运行时依赖。
+RUN grep -v '^e2b==' requirements.txt > /tmp/req-noe2b.txt \
+    && python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install -r requirements.txt
+    && /opt/venv/bin/pip install -r /tmp/req-noe2b.txt \
+    && /opt/venv/bin/pip install e2b==2.31.0 --no-deps \
+       attrs dockerfile-parse h2 httpcore httpx packaging \
+       protobuf python-dateutil rich typing-extensions
 
 
 FROM python:3.12-slim AS runtime

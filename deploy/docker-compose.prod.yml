@@ -141,6 +141,10 @@ services:
       context: ../server
     restart: unless-stopped
     command: ["python", "-m", "app.workers.worker", "--concurrency", "${WORKER_CONCURRENCY:-2}", "--block"]
+    # 基础镜像的 HEALTHCHECK 是 curl 自己的 8000 端口——那是给 backend 服务用的。
+    # worker 不开 HTTP，原样继承只会永远显示 unhealthy，把真出问题淹没在误报里。
+    healthcheck:
+      disable: true
     environment:
       <<: *backend-env
     volumes:
