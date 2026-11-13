@@ -179,6 +179,10 @@ export function AgentsPage() {
 
   // —— 右侧预览面板（内置浏览器就地打开产物）——
   const [preview, setPreview] = useState<BrowserState | null>(null);
+  /** 面板铺满整页。以前这里用 navigate('/assets') 实现「展开」，
+   *  代价是整个智能体页卸载、当前会话与事件流全丢，回来是一片空白——
+   *  用户说的「回不去」就是它。现在改成就地放大，页面状态一条都不动。 */
+  const [previewFull, setPreviewFull] = useState(false);
   const [previewToken, setPreviewToken] = useState(0);
   const [narrow, setNarrow] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => {
@@ -201,6 +205,17 @@ export function AgentsPage() {
     mq.addEventListener("change", sync);
     return () => mq.removeEventListener("change", sync);
   }, []);
+
+  // 全屏预览时 Esc 退出：铺满后顶栏只剩面板自己那一行按钮，
+  // 键盘是永远可用的退路（面板里的编辑器抢 Esc 也拦不住 window 监听）。
+  useEffect(() => {
+    if (!previewFull) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPreviewFull(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [previewFull]);
 
   const loadProjects = useCallback(async () => {
     const res = await fetch("/api/projects");
@@ -1064,7 +1079,7 @@ export function AgentsPage() {
       {/* 右侧预览面板：内置浏览器就地打开产物，不用离开当前任务 */}
       {preview && (
         <>
-          {!narrow && (
+          {!narrow && !previewFull && (
             <div
               onMouseDown={startResize}
               title="拖动调整宽度"
@@ -1077,15 +1092,26 @@ export function AgentsPage() {
             aria-label="产物预览面板"
             className={cn(
               "flex min-h-0 flex-col bg-surface-1",
-              narrow ? "absolute inset-0 z-30" : "shrink-0 border-l border-line",
+              previewFull
+                ? // 铺满整个智能体页（左侧任务栏、顶栏也盖住），但不跳路由
+                  "absolute inset-0 z-40 shadow-[var(--shadow-pop)]"
+                : narrow
+                  ? "absolute inset-0 z-30"
+                  : "shrink-0 border-l border-line",
             )}
-            style={narrow ? undefined : { width: panelWidth }}
+            style={narrow || previewFull ? undefined : { width: panelWidth }}
           >
             <PreviewPanel
               value={preview}
               onChange={patchPreview}
-              onClose={() => setPreview(null)}
-              onMaximize={() => navigate(browserUrl(preview))}
+              onClose={() => {
+                setPreview(null);
+                setPreviewFull(false);
+              }}
+              maximized={previewFull}
+              canMaximize={!narrow}
+              onToggleMaximize={() => setPreviewFull((v) => !v)}
+              onOpenInAssets={() => navigate(browserUrl(preview))}
               refreshToken={previewToken}
             />
           </aside>

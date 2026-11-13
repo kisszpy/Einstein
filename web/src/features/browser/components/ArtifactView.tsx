@@ -1,6 +1,6 @@
 /**
  * 产物预览：html 直接渲染（服务端注入 base 与沙箱 CSP），图片/pdf 走原生渲染，
- * md 与代码支持就地编辑保存。
+ * md 渲染预览、代码走语法高亮只读视图，两者都能一键切到编辑器改字。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Markdown } from "@/features/chat/components/Markdown";
+import { CodeView, langOfPath } from "./CodeView";
 import * as api from "../api";
 
 type Mode = "html" | "image" | "pdf" | "markdown" | "text" | "deck" | "binary";
@@ -62,13 +63,17 @@ interface Props {
 
 export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken = 0 }: Props) {
   const mode = useMemo(() => modeOf(path), [path]);
+  /** 代码文件的语言名（txt/log 这类纯文本为 null，仍按等宽只读展示，只是不上色） */
+  const lang = useMemo(() => langOfPath(path), [path]);
   const [reloadKey, setReloadKey] = useState(0);
   const [content, setContent] = useState("");
   const [original, setOriginal] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [preview, setPreview] = useState(mode === "markdown");
+  // 文本类默认进只读预览：代码文件直接看高亮比直接甩一个 textarea 舒服，
+  // 要改再点「编辑」，避免误触改坏产物
+  const [preview, setPreview] = useState(mode !== "text" ? mode === "markdown" : true);
   const [truncated, setTruncated] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -97,7 +102,7 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
     setContent("");
     setOriginal("");
     load();
-    setPreview(mode === "markdown");
+    setPreview(mode === "markdown" || mode === "text");
   }, [load, mode, refreshToken]);
 
   const dirty = content !== original;
@@ -124,12 +129,12 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
         <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[12px] text-secondary">
-          {KIND_LABEL[mode]}
+          {mode === "text" && lang ? `代码 · ${lang}` : KIND_LABEL[mode]}
         </span>
         <span className="min-w-0 flex-1 truncate text-[12.5px] text-secondary" title={path}>
           {path}
         </span>
-        {isText && mode === "markdown" && (
+        {isText && (
           <div className="flex items-center rounded-md border border-line p-0.5 text-[12px]">
             <button
               onClick={() => setPreview(true)}
@@ -147,7 +152,7 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
                 !preview ? "bg-surface-3 text-primary" : "text-tertiary hover:text-secondary",
               )}
             >
-              源码
+              编辑
             </button>
           </div>
         )}
@@ -274,7 +279,16 @@ export function ArtifactView({ project, path, ticket, onEditDeck, refreshToken =
           </div>
         )}
 
-        {isText && !(mode === "markdown" && preview) && (
+        {mode === "text" && preview &&
+          (loading ? (
+            <div className="flex h-full items-center justify-center gap-2 text-[12px] text-tertiary">
+              <Loader2 size={13} className="animate-spin" /> 正在读取…
+            </div>
+          ) : (
+            <CodeView code={content || "（空文件）"} language={lang} />
+          ))}
+
+        {isText && !preview && (
           <textarea
             ref={editorRef}
             value={content}
