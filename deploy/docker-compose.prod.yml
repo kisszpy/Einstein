@@ -17,11 +17,10 @@ x-backend-env: &backend-env
   APP_REDIS_URL: redis://redis:6379/0
   APP_MILVUS_URI: http://milvus:19530
   APP_MILVUS_COLLECTION: einstein_chunks
-  APP_LLM_BASE_URL: ${APP_LLM_BASE_URL:-http://host.docker.internal:8080/v1}
-  APP_LLM_API_KEY: ${APP_LLM_API_KEY:-not-needed}
-  APP_LLM_MODEL: ${APP_LLM_MODEL:-qwen3.6-27b}
-  APP_EMBEDDING_BASE_URL: ${APP_EMBEDDING_BASE_URL:-http://host.docker.internal:8081/v1}
-  APP_EMBEDDING_MODEL: ${APP_EMBEDDING_MODEL:-qwen3-embedding-8b}
+  # LLM（DeepSeek 等）与模型密钥来自 env_file: ../server/.env，不在 infra 覆盖。
+  # 嵌入服务跑在宿主机上，容器里 127.0.0.1 不通，必须走 host.docker.internal
+  APP_EMBEDDING_BASE_URL: ${APP_EMBEDDING_BASE_URL:-http://host.docker.internal:8180/v1}
+  APP_EMBEDDING_MODEL: ${APP_EMBEDDING_MODEL:-qwen3-embedding}
   APP_DEBUG: "false"
 
 x-logging: &logging
@@ -121,6 +120,11 @@ services:
     build:
       context: ../server
     restart: unless-stopped
+    # 模型/沙箱/邮件等应用层配置以 server/.env 为单一来源（DeepSeek、E2B、SMTP…）。
+    # 下面 environment（x-backend-env）只保留基础设施类变量，优先级高于 env_file，
+    # 会把 server/.env 里指向 127.0.0.1 的开发用 DSN 覆盖成容器网络地址。
+    env_file:
+      - ../server/.env
     environment:
       <<: *backend-env
     volumes:
@@ -145,6 +149,8 @@ services:
     # worker 不开 HTTP，原样继承只会永远显示 unhealthy，把真出问题淹没在误报里。
     healthcheck:
       disable: true
+    env_file:
+      - ../server/.env
     environment:
       <<: *backend-env
     volumes:
