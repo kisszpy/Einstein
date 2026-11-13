@@ -93,8 +93,13 @@ class Database:
             raise
         finally:
             cur.close()
-        if self.dialect == "sqlite":
-            return [dict(r) for r in rows]
+        if self.dialect == "postgres" and not getattr(self._local, "in_tx", False):
+            # psycopg 非自动提交模式下，SELECT 也会隐式开事务。读完不收尾，
+            # 连接就停在 idle in transaction——曾把启动时的 langgraph
+            # CREATE INDEX CONCURRENTLY 卡死（它要求等所有现存事务结束），
+            # 表现为后端 lifespan 永远起不来。事务块内的读除外：提前 commit
+            # 会把同块里尚未写完的语句一起提交，破坏多语句原子写。
+            self.conn.commit()
         return [dict(r) for r in rows]
 
     def query_one(self, sql: str, params: Params = ()) -> dict[str, Any] | None:
